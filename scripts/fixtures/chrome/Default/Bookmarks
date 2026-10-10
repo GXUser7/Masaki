@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "roots": {
+    "bookmark_bar": {
+      "type": "folder",
+      "name": "Панель закладок",
+      "children": [
+        { "type": "url", "name": "Фикстура: Википедия", "url": "https://ru.wikipedia.org/" },
+        { "type": "url", "name": "Хабр", "url": "https://habr.com/ru/" },
+        { "type": "url", "name": "Букмарклет", "url": "javascript:alert(1)" },
+        {
+          "type": "folder",
+          "name": "Учёба",
+          "children": [
+            { "type": "url", "name": "MDN", "url": "https://developer.mozilla.org/ru/" },
+            { "type": "url", "name": "Stack Overflow", "url": "https://stackoverflow.com/" },
+            { "type": "folder", "name": "Пустая папка", "children": [] }
+          ]
+        },
+        { "type": "url", "name": "Twitch", "url": "https://www.twitch.tv/" },
+        { "type": "url", "name": "Reddit", "url": "https://www.reddit.com/" }
+      ]
+    },
+    "other": {
+      "type": "folder",
+      "name": "Другие закладки",
+      "children": [
+        { "type": "url", "name": "Кинопоиск", "url": "https://www.kinopoisk.ru/" },
+        { "type": "url", "name": "Хабр ещё раз", "url": "https://habr.com/ru/" },
+        { "type": "url", "name": "Steam", "url": "https://store.steampowered.com/" }
+      ]
+    },
+    "synced": {
+      "type": "folder",
+      "name": "Закладки с телефона",
+      "children": [{ "type": "url", "name": "Яндекс Карты", "url": "https://yandex.ru/maps/" }]
+    }
+  }
+}

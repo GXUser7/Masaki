@@ -1,0 +1,31 @@
+<!doctype html>
+<html dark>
+<meta charset="utf-8">
+<title>Сайт-приложение</title>
+<!-- Как YouTube и GitHub: фон у html задан правилом с !important, шапка липкая, есть карточка
+     своего цвета и всплывающее окно того же цвета, что и фон. -->
+<style>
+  html[dark] { background: #0f0f0f !important; }
+  body { margin: 0; font: 16px/1.5 sans-serif; color: #f1f1f1; }
+  #app { min-height: 100vh; background: #0f0f0f; }
+  #head { position: sticky; top: 0; height: 56px; background: #0f0f0f; display: flex; align-items: center; padding: 0 24px; }
+  #side { position: fixed; left: 0; top: 56px; bottom: 0; width: 200px; background: #0f0f0f; }
+  main { margin-left: 200px; padding: 24px; }
+  .card { background: #272727; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .player { background: #000; width: 480px; height: 270px; }
+  .player video { width: 100%; height: 100%; }
+  #modal { position: fixed; top: 30%; left: 35%; width: 30%; padding: 24px; background: #0f0f0f; border-radius: 12px; }
+</style>
+<body>
+  <div id="app">
+    <div id="head">Шапка</div>
+    <div id="side">Меню</div>
+    <main>
+      <div class="card">Карточка своего цвета — должна остаться</div>
+      <div class="player"><video src="clip.webm" muted></video></div>
+      <p style="height: 1200px">Длинная страница</p>
+    </main>
+  </div>
+  <div id="modal" role="dialog">Окно того же цвета, что фон, — должно остаться непрозрачным</div>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "roots": {
+    "bookmark_bar": {
+      "type": "folder",
+      "name": "Панель закладок",
+      "children": [{ "type": "url", "name": "Рабочая вики", "url": "https://example.com/wiki" }]
+    },
+    "other": { "type": "folder", "name": "Другие закладки", "children": [] }
+  }
+}

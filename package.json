@@ -1,0 +1,96 @@
+{
+  "name": "masaki",
+  "productName": "Masaki",
+  "version": "0.1.0",
+  "description": "Masaki — браузер для Windows на Chromium с матовым стеклом и Material 3 Expressive",
+  "main": "out/main/index.js",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "smoke": "electron-vite build && node scripts/smoke.mjs",
+    "icon": "electron scripts/make-icon.cjs",
+    "pack": "electron-vite build && electron-builder --win dir",
+    "dist": "electron-vite build && electron-builder --win nsis",
+    "test:addons": "electron-vite build && node scripts/addons-test.mjs",
+    "test:import": "electron-vite build && node scripts/import-test.mjs",
+    "perf": "electron-vite build && node scripts/perf.mjs site",
+    "test:sync": "electron-vite build && node scripts/sync-test.mjs",
+    "test:passwords": "electron-vite build && node scripts/passwords-test.mjs",
+    "test:passkeys": "electron-vite build && node scripts/passkeys-test.mjs",
+    "screens": "electron-vite build && node scripts/screens.mjs"
+  },
+  "devDependencies": {
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource-variable/google-sans-flex": "^5.3.1",
+    "@fontsource-variable/roboto-flex": "^5.3.0",
+    "@material/material-color-utilities": "^0.4.0",
+    "@types/node": "^26.6.4",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "playwright": "^1.64.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tldts": "^7.4.18",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.7",
+    "zustand": "^5.0.15"
+  },
+  "author": "Masaki",
+  "build": {
+    "appId": "app.masaki.browser",
+    "productName": "Masaki",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerLanguages": [
+        "ru_RU"
+      ],
+      "language": "1049",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Masaki",
+      "uninstallDisplayName": "Masaki",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Masaki-Setup-${version}.exe"
+    },
+    "copyright": "Masaki"
+  },
+  "dependencies": {
+    "@ghostery/adblocker-electron": "^2.20.1"
+  },
+  "homepage": "https://github.com/GXUser7/Masaki",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GXUser7/Masaki.git"
+  }
+}

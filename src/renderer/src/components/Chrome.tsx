@@ -1,0 +1,662 @@
+import { useEffect, useRef, useState } from 'react'
+import {
+  closeFind,
+  findInPage,
+  goBack,
+  goForward,
+  printPage,
+  reloadOrStop,
+  toggleDevtools,
+  toggleFavorite,
+  toggleMute,
+  zoom
+} from '../actions'
+import { shapes } from '../lib/shapes'
+import QRCode from 'qrcode'
+import { hostOf } from '../lib/url'
+import type { TabGroup } from '../../../shared/types'
+import { useStore, type Tab } from '../store'
+import { Icon } from './Icon'
+import { AddressLabel, Grain, ShapeTile, TabFav, useHoverOverPage } from './parts'
+import { CapsuleAudio, MiniPlayer, WinButtons } from './Extras'
+import { syncStatusText } from './SyncSection'
+import { openGroupMenu, openTabMenu, openTileMenu } from '../menus'
+
+function useActive(): Tab {
+  return useStore((s) => s.tabs.find((t) => t.id === s.activeId) ?? s.tabs[0])
+}
+
+/**
+ * Адресная капсула: «назад» и «вперёд» живут внутри неё и выезжают пружиной, только когда есть куда
+ * идти, — никаких бледных «призраков». Звёздочка видна при наведении или если страница в избранном.
+ */
+function AddressBar({ where }: { where: 'side' | 'cap' }): React.JSX.Element {
+  const t = useActive()
+  const fav = useStore((s) => s.settings.favorites.some((f) => f.url === t.url))
+  const s = useStore.getState
+  const web = t.kind === 'web'
+  return (
+    <div className={'abar abar-' + where + (t.canBack ? ' can-back' : '') + (t.canFwd ? ' can-fwd' : '')}>
+      <span className="abar-nav">
+        <button className="ib an-b" tabIndex={t.canBack ? 0 : -1} aria-hidden={!t.canBack} aria-label="Назад" title="Назад · Alt+←" onClick={goBack}>
+          <Icon name="back" />
+        </button>
+        <button className="ib an-f" tabIndex={t.canFwd ? 0 : -1} aria-hidden={!t.canFwd} aria-label="Вперёд" title="Вперёд · Alt+→" onClick={goForward}>
+          <Icon name="forward" />
+        </button>
+      </span>
+      <button className="addr" aria-label="Адрес и поиск" title="Адрес и поиск · Ctrl+L" onClick={() => s().openPalette(true)}>
+        {where === 'cap' && <TabFav tab={t} className="addr-fav" />}
+        <AddressLabel tab={t} />
+      </button>
+      {web && (
+        <button
+          className={'ib a-star' + (fav ? ' on' : '')}
+          aria-label={fav ? 'Убрать из избранного' : 'Добавить в избранное'}
+          title={fav ? 'Убрать из избранного' : 'В избранное'}
+          onClick={toggleFavorite}
+        >
+          <Icon name={fav ? 'starFilled' : 'star'} />
+        </button>
+      )}
+      <button className="ib a-rel" aria-label={t.loading ? 'Остановить' : 'Обновить'} title={t.loading ? 'Остановить' : 'Обновить · Ctrl+R'} disabled={!web} onClick={() => reloadOrStop()}>
+        <Icon name={t.loading ? 'close' : 'reload'} />
+      </button>
+    </div>
+  )
+}
+
+function DownloadsButton(): React.JSX.Element {
+  const downloads = useStore((s) => s.downloads)
+  const busy = downloads.filter((d) => d.state === 'progressing')
+  const progress = busy.length
+    ? busy.reduce((a, d) => a + (d.total ? d.received / d.total : 0), 0) / busy.length
+    : 0
+  return (
+    <button
+      className={'ib dl-btn' + (busy.length ? ' busy' : '')}
+      aria-label={busy.length ? `Загрузки, идёт ${busy.length}` : 'Загрузки'}
+      title="Загрузки"
+      onClick={() => useStore.getState().setPopover('downloads')}
+      style={{ '--p': progress } as React.CSSProperties}
+    >
+      <Icon name="download" />
+    </button>
+  )
+}
+
+/** Аккаунт внизу панели: аватар Google и состояние синхронизации вместо голой иконки. */
+function AccountChip(): React.JSX.Element {
+  const accounts = useStore((s) => s.accounts)
+  const sync = useStore((s) => s.sync)
+  const a = accounts[0]
+  const sub = sync?.account ? syncStatusText(sync) : a ? a.email : 'в Google'
+  return (
+    <button
+      className={'achip' + (sync?.status === 'error' || sync?.status === 'signin' ? ' warn' : '')}
+      aria-label={a ? `Аккаунт Google: ${a.email}` : 'Войти в аккаунт Google'}
+      onClick={() => {
+        useStore.getState().loadAccounts()
+        useStore.getState().setPopover('accounts')
+      }}
+    >
+      <span className="achip-ava">{a?.photo ? <img src={a.photo} alt="" referrerPolicy="no-referrer" draggable={false} /> : <Icon name="person" />}</span>
+      <span className="achip-t">
+        <b>{a ? a.name || a.email : 'Войти'}</b>
+        <small>{sub}</small>
+      </span>
+    </button>
+  )
+}
+
+// ---------- Боковая панель ----------
+
+/** Сколько плиток избранного видно в свёрнутом виде (два ряда по четыре). */
+const FAV_SHOWN = 8
+
+function GroupHeader({ group, count }: { group: TabGroup; count: number }): React.JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const s = useStore.getState
+  return (
+    <div
+      className={'grp' + (group.collapsed ? ' closed' : '')}
+      style={{ '--gc': group.color } as React.CSSProperties}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        openGroupMenu(e.clientX, e.clientY, group.id, () => setEditing(true))
+      }}
+    >
+      {editing ? (
+        <input
+          className="grp-in"
+          defaultValue={group.name}
+          autoFocus
+          aria-label="Название группы"
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={(e) => {
+            s().updateGroup(group.id, { name: e.currentTarget.value.trim() || group.name })
+            setEditing(false)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+            if (e.key === 'Escape') setEditing(false)
+          }}
+        />
+      ) : (
+        <button
+          className="grp-main"
+          aria-expanded={!group.collapsed}
+          title="Свернуть или развернуть · двойной щелчок — переименовать"
+          onClick={() => s().updateGroup(group.id, { collapsed: !group.collapsed })}
+          onDoubleClick={() => setEditing(true)}
+        >
+          <i className="grp-dot" />
+          <span className="grp-name">{group.name}</span>
+          <span className="grp-n">{count}</span>
+          <Icon name="down" className="grp-chev" />
+        </button>
+      )}
+    </div>
+  )
+}
+
+function TabList(): React.JSX.Element {
+  // Перетаскивание вкладок: куда встанет вкладка (индекс «перед кем»).
+  const [drag, setDrag] = useState<{ id: string; over: number } | null>(null)
+  const tabs = useStore((s) => s.tabs)
+  const activeId = useStore((s) => s.activeId)
+  const groups = useStore((s) => s.groups)
+  const split = useStore((s) => s.split)
+  const s = useStore.getState
+  const hover = useRef<number | undefined>(undefined)
+
+  const rows: React.JSX.Element[] = []
+  let prev: string | undefined
+  tabs.forEach((tab, idx) => {
+    const g = tab.group ? groups.find((x) => x.id === tab.group) : undefined
+    if (g && tab.group !== prev) rows.push(<GroupHeader key={'g-' + g.id + '-' + idx} group={g} count={tabs.filter((t) => t.group === g.id).length} />)
+    prev = tab.group
+    if (g?.collapsed) return
+    const inSplit = !!split && (split.a === tab.id || split.b === tab.id)
+    rows.push(
+      <div
+        key={tab.id}
+        className={
+          'tab' +
+          (tab.id === activeId ? ' on' : '') +
+          (g ? ' in-grp' : '') +
+          (inSplit ? ' in-split' : '') +
+          (drag?.id === tab.id ? ' dragging' : '') +
+          (drag && drag.over === idx && drag.id !== tab.id ? ' drop-above' : '') +
+          (drag && drag.over === tabs.length && idx === tabs.length - 1 ? ' drop-below' : '')
+        }
+        style={g ? ({ '--gc': g.color } as React.CSSProperties) : undefined}
+        draggable
+        onDragStart={(e) => {
+          window.clearTimeout(hover.current)
+          useStore.setState({ preview: null })
+          e.dataTransfer.effectAllowed = 'move'
+          e.dataTransfer.setData('text/uri-list', tab.url)
+          setDrag({ id: tab.id, over: idx })
+        }}
+        onDragOver={(e) => {
+          if (!drag) return
+          e.preventDefault()
+          const r = e.currentTarget.getBoundingClientRect()
+          const over = idx + (e.clientY > r.top + r.height / 2 ? 1 : 0)
+          if (over !== drag.over) setDrag({ ...drag, over })
+        }}
+        onDrop={(e) => {
+          e.preventDefault()
+          if (drag) s().moveTab(drag.id, drag.over)
+          setDrag(null)
+        }}
+        onDragEnd={() => setDrag(null)}
+        onMouseEnter={(e) => {
+          window.clearTimeout(hover.current)
+          if (tab.id === activeId || tab.kind !== 'web') return
+          const r = e.currentTarget.getBoundingClientRect()
+          hover.current = window.setTimeout(() => useStore.setState({ preview: { tabId: tab.id, x: r.right + 14, y: r.top } }), 650)
+        }}
+        onMouseLeave={() => {
+          window.clearTimeout(hover.current)
+          if (useStore.getState().preview) useStore.setState({ preview: null })
+        }}
+        onAuxClick={(e) => e.button === 1 && s().closeTab(tab.id)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          window.clearTimeout(hover.current)
+          openTabMenu(e.clientX, e.clientY, tab.id)
+        }}
+      >
+        <button className="tab-main" title={tab.title} onClick={() => s().activate(tab.id)}>
+          <TabFav tab={tab} />
+          <span className="tt">{tab.title || hostOf(tab.url)}</span>
+        </button>
+        {(tab.audible || tab.muted) && (
+          <button className="ib aud" aria-label={tab.muted ? 'Включить звук' : 'Выключить звук'} onClick={() => toggleMute(tab.id)}>
+            <Icon name={tab.muted ? 'volumeOff' : 'volume'} />
+          </button>
+        )}
+        <button className="ib x" aria-label={`Закрыть вкладку «${tab.title}»`} onClick={() => s().closeTab(tab.id)}>
+          <Icon name="close" />
+        </button>
+      </div>
+    )
+  })
+  return <div className="tablist">{rows}</div>
+}
+
+export function Sidebar(): React.JSX.Element {
+  const tabs = useStore((s) => s.tabs)
+  const favorites = useStore((s) => s.settings.favorites)
+  // Избранного может быть много (например, после переноса закладок): сначала видны два ряда.
+  const [allFavs, setAllFavs] = useState(false)
+  const more = favorites.length > FAV_SHOWN
+  const shownFavs = more && !allFavs ? favorites.slice(0, FAV_SHOWN - 1) : favorites
+  const s = useStore.getState
+
+  return (
+    <aside className="glass side" aria-label="Боковая панель">
+      <Grain />
+      <div className="side-top" title="Двойной щелчок — развернуть окно, тянуть — двигать">
+        <span className="brand" aria-hidden="true">
+          <svg viewBox="0 0 200 200">
+            <path d={shapes.cookie9} />
+          </svg>
+          Masaki
+        </span>
+        <div className="sp" />
+        <button className="ib wb" aria-label="Свернуть панель" title="Свернуть панель · Ctrl+B" onClick={() => s().toggleSidebar()}>
+          <Icon name="sidebar" />
+        </button>
+        <span className="wsep" />
+        <WinButtons />
+      </div>
+
+      <AddressBar where="side" />
+
+      {favorites.length > 0 && (
+        <div className={'favs' + (allFavs ? ' all' : '')}>
+          {shownFavs.map((f, i) => (
+            <button
+              key={f.url + i}
+              className="fvt"
+              title={f.title}
+              aria-label={f.title}
+              onClick={() => s().navigate(f.url, { raw: true })}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                openTileMenu(e.clientX, e.clientY, 'favorites', i)
+              }}
+            >
+              <ShapeTile item={f} index={i} />
+            </button>
+          ))}
+          {more && (
+            <button
+              className="fvt fvt-more"
+              title={allFavs ? 'Свернуть избранное' : `Ещё ${favorites.length - shownFavs.length}`}
+              aria-label={allFavs ? 'Свернуть избранное' : `Показать всё избранное, ещё ${favorites.length - shownFavs.length}`}
+              aria-expanded={allFavs}
+              onClick={() => setAllFavs(!allFavs)}
+            >
+              <span className="fvt-more-in">{allFavs ? <Icon name="up" /> : '+' + (favorites.length - shownFavs.length)}</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="lbl-row">
+        <span className="lbl">Вкладки · {tabs.length}</span>
+        <button className="lbl-add" aria-label="Новая вкладка" title="Новая вкладка · Ctrl+T" onClick={() => s().newTab()}>
+          <Icon name="add" />
+        </button>
+      </div>
+      <TabList />
+
+      <MiniPlayer />
+      <div className="side-bottom">
+        <AccountChip />
+        <DownloadsButton />
+        <button className="ib" aria-label="История" title="История и поиск по вкладкам · Ctrl+Shift+A" onClick={() => s().openPalette(false)}>
+          <Icon name="history" />
+        </button>
+        <button className="ib" aria-label="Меню" title="Меню" onClick={() => s().setPopover('menu')}>
+          <Icon name="more" />
+        </button>
+      </div>
+    </aside>
+  )
+}
+
+// ---------- Капсула (когда боковая свёрнута) ----------
+
+/**
+ * Одна капсула внизу вместо дока: панель, назад/вперёд, адрес, меню и кнопки окна. Наведение
+ * поднимает над ней вкладки с названиями; пока страницу листают вниз, капсула сжимается до домена.
+ */
+export function Dock(): React.JSX.Element {
+  const tabs = useStore((st) => st.tabs)
+  const activeId = useStore((st) => st.activeId)
+  const small = useStore((st) => st.capsuleSmall)
+  const [ref, hot, enter] = useHoverOverPage()
+  const s = useStore.getState
+  const strip = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (hot) strip.current?.querySelector('.ct.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [hot, activeId])
+
+  return (
+    <div ref={ref} className={'capz' + (hot ? ' open' : '') + (small && !hot ? ' small' : '')} onPointerEnter={enter} onPointerMove={hot ? undefined : enter}>
+      <div className="glass cap-tabs" role="tablist" aria-label="Вкладки">
+        <Grain />
+        <div
+          className="ct-strip"
+          ref={strip}
+          onWheel={(e) => {
+            // Колесо мыши листает ленту вкладок вбок.
+            if (strip.current && Math.abs(e.deltaY) > Math.abs(e.deltaX)) strip.current.scrollLeft += e.deltaY
+          }}
+        >
+          {tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={'ct' + (tab.id === activeId ? ' on' : '')}
+              role="tab"
+              aria-selected={tab.id === activeId}
+              onAuxClick={(e) => e.button === 1 && s().closeTab(tab.id)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                openTabMenu(e.clientX, e.clientY, tab.id)
+              }}
+            >
+              <button className="ct-main" title={tab.title} onClick={() => s().activate(tab.id)}>
+                <TabFav tab={tab} />
+                <span className="ct-t">{tab.title || hostOf(tab.url)}</span>
+              </button>
+              <button className="ct-x" aria-label={`Закрыть вкладку «${tab.title}»`} onClick={() => s().closeTab(tab.id)}>
+                <Icon name="close" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button className="ib ct-add" aria-label="Новая вкладка" title="Новая вкладка · Ctrl+T" onClick={() => s().newTab()}>
+          <Icon name="add" />
+        </button>
+      </div>
+      <MiniPlayer compact />
+      <div className="glass capsule">
+        <Grain />
+        <button className="ib cap-side" aria-label="Показать панель" title="Показать панель · Ctrl+B" onClick={() => s().toggleSidebar()}>
+          <Icon name="sidebar" />
+        </button>
+        <AddressBar where="cap" />
+        <CapsuleAudio />
+        <button className="ib cap-more" aria-label="Меню" title="Меню" onClick={() => s().setPopover('menu')}>
+          <Icon name="more" />
+        </button>
+        <span className="vdiv cap-div" />
+        <WinButtons className="cap-w" />
+      </div>
+    </div>
+  )
+}
+
+// ---------- Всплывающие меню ----------
+
+function formatBytes(n: number): string {
+  if (n < 1024) return n + ' Б'
+  if (n < 1024 ** 2) return (n / 1024).toFixed(0) + ' КБ'
+  if (n < 1024 ** 3) return (n / 1024 ** 2).toFixed(1) + ' МБ'
+  return (n / 1024 ** 3).toFixed(2) + ' ГБ'
+}
+
+export function Popover(): React.JSX.Element | null {
+  const popover = useStore((s) => s.popover)
+  const downloads = useStore((s) => s.downloads)
+  const accounts = useStore((s) => s.accounts)
+  const syncSt = useStore((s) => s.sync)
+  const qrUrl = useStore((s) => s.qrUrl)
+  const t = useActive()
+  const s = useStore.getState
+  if (!popover) return null
+  const close = (): void => s().setPopover(null)
+  const run = (fn: () => void) => () => {
+    close()
+    fn()
+  }
+
+  return (
+    <>
+      <button className="pop-scrim" aria-label="Закрыть меню" onClick={close} />
+      <div className={'glass pop ' + popover} role="menu">
+        <Grain />
+        {popover === 'qr' ? (
+          <QrCode url={qrUrl} />
+        ) : popover === 'accounts' ? (
+          <>
+            <div className="pop-h">Аккаунты Google</div>
+            {accounts.length === 0 && (
+              <div className="pop-empty">Вы не вошли. После входа Gmail, YouTube и AI Mode будут знать вас.</div>
+            )}
+            {accounts.map((a) => (
+              <button
+                key={a.email}
+                className="acc-row"
+                onClick={run(() => s().newTab(`https://myaccount.google.com/?authuser=${a.index}`))}
+              >
+                {a.photo ? <img src={a.photo} alt="" referrerPolicy="no-referrer" /> : <span className="acc-ph"><Icon name="person" /></span>}
+                <span className="acc-t">
+                  <b>{a.name || a.email}</b>
+                  <small>{a.email}</small>
+                </span>
+                <Icon name="openInNew" />
+              </button>
+            ))}
+            <div className="cm-sep" />
+            <button
+              className="mi"
+              onClick={run(() =>
+                s().newTab(
+                  accounts.length
+                    ? 'https://accounts.google.com/AddSession?continue=https%3A%2F%2Fwww.google.com%2F'
+                    : 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fwww.google.com%2F'
+                )
+              )}
+            >
+              <Icon name="personAdd" /> {accounts.length ? 'Добавить аккаунт' : 'Войти в аккаунт Google'}
+            </button>
+            {accounts.length > 0 && (
+              <button className="mi" onClick={run(() => s().newTab('https://accounts.google.com/Logout'))}>
+                <Icon name="logout" /> Выйти из всех аккаунтов
+              </button>
+            )}
+            <div className="cm-sep" />
+            <button
+              className={'mi sy-mi ' + (syncSt?.status ?? '')}
+              title={syncSt?.account ? 'Аккаунт синхронизации: ' + syncSt.account.email : undefined}
+              onClick={run(() => s().openSettings())}
+            >
+              <Icon name={syncSt?.status === 'error' || syncSt?.status === 'signin' ? 'warn' : 'sync'} />
+              <span className="sy-mi-t">
+                {syncSt?.account ? 'Синхронизация' : 'Включить синхронизацию'}
+                <small>{syncSt?.account ? syncStatusText(syncSt) : 'Избранное, история и вкладки на всех компьютерах'}</small>
+              </span>
+            </button>
+          </>
+        ) : popover === 'downloads' ? (
+          <>
+            <div className="pop-h">Загрузки</div>
+            {downloads.length === 0 && <div className="pop-empty">Пока ничего не скачано</div>}
+            {downloads.map((d) => (
+              <div
+                key={d.id}
+                className="dl"
+                draggable={d.state === 'completed'}
+                title={d.state === 'completed' ? 'Открыть · можно перетащить в папку или на сайт' : undefined}
+                onDragStart={(e) => {
+                  // Файл перетаскивает сама система — в проводник, мессенджер или на сайт.
+                  e.preventDefault()
+                  window.masaki.downloads.drag(d.path)
+                }}
+              >
+                <button className="dl-main" onClick={() => d.state === 'completed' && window.masaki.downloads.open(d.path)}>
+                  <span className="dl-name">{d.filename}</span>
+                  <span className="dl-sub">
+                    {d.state === 'progressing'
+                      ? `${formatBytes(d.received)}${d.total ? ' из ' + formatBytes(d.total) : ''}`
+                      : d.state === 'completed'
+                        ? formatBytes(d.total || d.received) + ' · готово'
+                        : d.state === 'cancelled'
+                          ? 'Отменено'
+                          : 'Прервано'}
+                  </span>
+                  {d.state === 'progressing' && (
+                    <span className="dl-bar">
+                      <span style={{ width: `${d.total ? (d.received / d.total) * 100 : 30}%` }} />
+                    </span>
+                  )}
+                </button>
+                <button className="ib" aria-label="Показать в папке" onClick={() => window.masaki.downloads.showInFolder(d.path)}>
+                  <Icon name="folder" />
+                </button>
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            <button className="mi" onClick={run(() => s().newTab())}>
+              <Icon name="add" /> Новая вкладка <span className="kbd">Ctrl T</span>
+            </button>
+            <button className="mi" disabled={t.kind !== 'web'} onClick={run(() => s().setFind({ open: true, focusTick: s().find.focusTick + 1 }))}>
+              <Icon name="search" /> Найти на странице <span className="kbd">Ctrl F</span>
+            </button>
+            <div className="mi zoom-row">
+              <span className="mi-l">Масштаб</span>
+              <button className="ib" aria-label="Уменьшить" disabled={t.kind !== 'web'} onClick={() => zoom(-1)}>
+                <Icon name="zoomOut" />
+              </button>
+              <span className="zoom-v">{Math.round(Math.pow(1.2, t.zoom) * 100)}%</span>
+              <button className="ib" aria-label="Увеличить" disabled={t.kind !== 'web'} onClick={() => zoom(1)}>
+                <Icon name="zoomIn" />
+              </button>
+            </div>
+            <button className="mi" onClick={run(() => s().setPopover('downloads'))}>
+              <Icon name="download" /> Загрузки
+            </button>
+            <button className="mi" disabled={t.kind !== 'web'} onClick={run(printPage)}>
+              <Icon name="print" /> Печать <span className="kbd">Ctrl P</span>
+            </button>
+            <button className="mi" disabled={t.kind !== 'web'} onClick={run(toggleDevtools)}>
+              <Icon name="code" /> Инструменты разработчика <span className="kbd">F12</span>
+            </button>
+            <button className="mi" onClick={run(() => s().openPasswords())}>
+              <Icon name="key" /> Пароли
+            </button>
+            <button className="mi" onClick={run(() => s().openTabSearch())}>
+              <Icon name="tab" /> Поиск по вкладкам <span className="kbd">Ctrl Shift A</span>
+            </button>
+            <button className="mi" onClick={run(() => s().openAddons())}>
+              <Icon name="extension" /> Аддоны
+            </button>
+            <button className="mi" onClick={run(() => s().openSettings())}>
+              <Icon name="settings" /> Настройки <span className="kbd">Ctrl ,</span>
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  )
+}
+
+/** QR-код адреса страницы — как «Создать QR-код» в Chrome. */
+function QrCode({ url }: { url: string }): React.JSX.Element {
+  const [src, setSrc] = useState('')
+  useEffect(() => {
+    void QRCode.toDataURL(url, { margin: 1, width: 560, color: { dark: '#1d1b20', light: '#ffffff' } }).then(setSrc)
+  }, [url])
+  return (
+    <>
+      <div className="pop-h">QR-код страницы</div>
+      <div className="qr-box">{src && <img src={src} alt={`QR-код для ${url}`} />}</div>
+      <div className="qr-url">{url}</div>
+      <button
+        className="mi"
+        onClick={() => {
+          const a = document.createElement('a')
+          a.href = src
+          a.download = 'qr-код.png'
+          a.click()
+        }}
+      >
+        <Icon name="download" /> Скачать картинку
+      </button>
+    </>
+  )
+}
+
+// ---------- Поиск на странице ----------
+
+export function FindBar(): React.JSX.Element {
+  const find = useStore((s) => s.find)
+  const input = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    input.current?.focus()
+    input.current?.select()
+  }, [find.focusTick])
+  return (
+    <div className="glass findbar">
+      <Grain />
+      <Icon name="search" />
+      <input
+        ref={input}
+        value={find.text}
+        placeholder="Найти на странице"
+        aria-label="Найти на странице"
+        onChange={(e) => {
+          useStore.getState().setFind({ text: e.target.value })
+          findInPage(e.target.value)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') findInPage(find.text, !e.shiftKey, true)
+          if (e.key === 'Escape') closeFind()
+        }}
+      />
+      <span className="find-n">{find.text ? `${find.active}/${find.matches}` : ''}</span>
+      <button className="ib" aria-label="Предыдущее" onClick={() => findInPage(find.text, false, true)}>
+        <Icon name="up" />
+      </button>
+      <button className="ib" aria-label="Следующее" onClick={() => findInPage(find.text, true, true)}>
+        <Icon name="down" />
+      </button>
+      <button className="ib" aria-label="Закрыть поиск" onClick={closeFind}>
+        <Icon name="close" />
+      </button>
+    </div>
+  )
+}
+
+// ---------- Ошибка загрузки ----------
+
+export function ErrorView({ tab }: { tab: Tab }): React.JSX.Element {
+  const e = tab.error!
+  const offline = e.code === -106
+  return (
+    <div className="err">
+      <div className="glass err-card">
+        <Grain />
+        <svg viewBox="0 0 200 200" className="err-shape">
+          <path d={shapes.clover4} />
+        </svg>
+        <h2>{offline ? 'Нет подключения к интернету' : 'Не удалось открыть страницу'}</h2>
+        <p>
+          <b>{hostOf(e.url)}</b> — {e.desc || 'неизвестная ошибка'}
+        </p>
+        <button className="tonal" onClick={() => reloadOrStop()}>
+          <Icon name="reload" /> Повторить
+        </button>
+      </div>
+    </div>
+  )
+}
