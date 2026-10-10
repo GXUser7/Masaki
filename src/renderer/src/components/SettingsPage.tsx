@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ChromeProfile, ClockColor, ClockSettings, GlassLevel, Scheme, Shortcut } from '../../../shared/types'
+import type { BackgroundMode, ChromeProfile, ClockColor, ClockSettings, GlassLevel, Scheme, Shortcut } from '../../../shared/types'
 import { handmadeIds, handmadeNames, hueOf, seedFromHue, seedPresets, swatchOf } from '../lib/theme'
 import { useStore } from '../store'
 import { Clock, clockStyles } from './Clock'
@@ -426,7 +426,8 @@ export function SettingsPage(): React.JSX.Element {
               }}
               options={[
                 ['shapes', 'Фигуры'],
-                ['wallpaper', 'Обои Windows'],
+                // Обои системы Masaki берёт только у Windows.
+                ...(window.masaki.platform === 'win32' ? [['wallpaper', 'Обои Windows'] as [BackgroundMode, string]] : []),
                 ['custom', 'Своя картинка']
               ]}
             />

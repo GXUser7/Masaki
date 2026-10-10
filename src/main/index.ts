@@ -549,7 +549,9 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     ...(onScreen ? { x: saved.bounds.x, y: saved.bounds.y } : {}),
     minWidth: 760,
     minHeight: 520,
-    frame: false,
+    // На Mac — родные «светофоры» в шапке боковой панели (их место там держит .mac .side-top),
+    // на Windows — окно без рамки и свои кнопки окна.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 24, y: 31 } } : { frame: false }),
     show: false,
     title: 'Masaki',
     icon: app.isPackaged ? undefined : path.join(__dirname, '../../build/icon.png'),
@@ -562,6 +564,7 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     }
   })
 
+  macTrafficLights()
   win.once('ready-to-show', () => {
     if (onScreen && saved.maximized) win?.maximize()
     // Автотесты не забирают фокус: иначе то, что пользователь печатает, уходит в тестовое окно.
@@ -656,9 +659,15 @@ app.on('web-contents-created', (_e, contents) => {
 // ---------- Настройки ----------
 
 /** Новые настройки из интерфейса или с Диска (fromSync — тогда интерфейсу нужно о них узнать). */
+/** Mac: «светофоры» живут в шапке боковой панели; свёрнута панель — их нет, кнопки окна в капсуле. */
+function macTrafficLights(): void {
+  if (process.platform === 'darwin') win?.setWindowButtonVisibility(!settings.sidebarCollapsed)
+}
+
 function applySettings(s: Settings, fromSync = false): void {
   const adblockWas = settings.addons.adblock.enabled
   settings = mergeSettings(s)
+  macTrafficLights()
   if (settings.addons.adblock.enabled !== adblockWas) void applyAdblock(settings.addons.adblock.enabled)
   nativeTheme.themeSource = settings.scheme
   settingsFile.write(settings)
@@ -1001,6 +1010,8 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('wallpaper', async () => {
+    // Обои системы Masaki умеет брать только у Windows; на Mac в настройках этого пункта нет.
+    if (process.platform !== 'win32') return null
     const file = path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Themes', 'TranscodedWallpaper')
     try {
       const buf = await fs.promises.readFile(file)
@@ -1112,7 +1123,11 @@ if (!app.requestSingleInstanceLock()) {
     decisions = (await permissionsFile.read()) ?? {}
     lastTabs = (await sessionFile.read())?.tabs ?? []
     nativeTheme.themeSource = settings.scheme
-    Menu.setApplicationMenu(null)
+    // Mac без меню «Правка» не копирует и не вставляет в полях (Cmd+C/V идут через него). Меню
+    // «Файл» не ставим: его Cmd+W закрыл бы окно, а у Masaki это «закрыть вкладку».
+    Menu.setApplicationMenu(
+      process.platform === 'darwin' ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]) : null
+    )
     setupBrowsingSession()
     registerIpc()
     registerPasswordIpc()

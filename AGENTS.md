@@ -38,6 +38,7 @@ src/main/sync.ts         синхронизация через Google Диск: 
 src/main/passwords.ts    менеджер паролей: хранение (safeStorage), импорт CSV, автозаполнение, предложения
 src/main/passkeys.ts     ключи доступа (passkey): свой аутентификатор — создание, подпись, хранение, синхронизация
 src/main/youcloud.ts     YouCloud: мост вместо его расширения (запросы к Яндексу/YouTube, входы вкладками)
+src/main/ytdlp.ts        звук YouTube для YouCloud через yt-dlp (скачивает, обновляет, запускает)
 src/preload/index.ts     мост window.masaki для интерфейса (типы — MasakiApi в shared/types.ts)
 src/preload/guest.ts     скрипт для страниц во вкладках: вход в Google, поля входа (автозаполнение, сохранение)
 src/preload/passkey-page.ts подмена navigator.credentials в мире страницы (сериализуется, без ссылок наружу)
@@ -93,7 +94,9 @@ passkeys.json (ключи доступа: закрытый ключ PKCS#8 за�
   **Google Диск, папку приложения** (`appDataFolder`, доступ `drive.appdata` — остальные файлы Диска не видны).
 - Ключ OAuth (тип «Desktop app») пользователь создаёт сам в своём проекте Google Cloud (инструкция — в
   разделе «Синхронизация» настроек). Приложение в Google Cloud должно быть **опубликовано** (Audience →
-  Publish app), иначе refresh-токен живёт 7 дней. Вход: страница Google во вкладке Masaki (или системный
+  Publish app), иначе refresh-токен живёт 7 дней. **Проверку приложения (Verification) проходить не нужно**:
+  drive.appdata неконфиденциальный, логотип не загружать (с ним Google требует проверку бренда); экран
+  «Приложение не проверено», если он появится, проходится через «Дополнительные настройки» (это есть в гайде). Вход: страница Google во вкладке Masaki (или системный
   браузер) → код возвращается на `http://127.0.0.1:<порт>` (PKCE) → вкладка закрывается.
 - Файлы на Диске — простой JSON, чтобы подключилась и будущая Android-версия:
   `prefs.json` (поля настроек `{t, v}`, кто позже изменил — тот прав), `history.json` (объединение,
@@ -167,6 +170,14 @@ passkeys.json (ключи доступа: закрытый ключ PKCS#8 за�
   metadata/playbackState/setPositionState/setActionHandler и шлёт JSON (`sendToHost('media')`);
   кнопки зовут обработчики сайта (`webview.send('media:action')`). Данные страницы проверяет `parseMedia`.
   Цвет плеера — из обложки (`media:art` → data:, `useArtColors`).
+- **Звук YouTube — через yt-dlp** (`main/ytdlp.ts`, сообщение `yt-stream`, мост версии 0.7), как в
+  Android-приложении YouCloud: в браузере YouTube многим трекам отказывает (клиентам сайта — «подтвердите,
+  что вы не бот», без PO-токена поток обрывается на 1 МБ), а yt-dlp их достаёт. yt-dlp.exe — ночная сборка
+  с GitHub, сверка с SHA2-256SUMS, проверка обновления раз в сутки и после сбоя; лежит в профиле
+  (`yt-dlp/`). JS-задачи YouTube решает Masaki сам: `--js-runtimes node:<exe>` + `ELECTRON_RUN_AS_NODE=1`.
+  Сначала без входа, при отказе — с куками youtube.com во временном файле (удаляется после запуска);
+  прокси — как у сессии вкладок (`resolveProxy`), иначе ссылка googlevideo привязана к другому IP.
+  Скачивается заранее, когда сайт говорит hello. Если yt-dlp не смог — сайт пробует своих клиентов.
 - Палитра: команда «YouCloud», пауза/следующий/предыдущий трек, строка «Найти в YouCloud» (если YouCloud
   открывали) → `#/search/<запрос>`.
 
@@ -322,6 +333,20 @@ passkeys.json (ключи доступа: закрытый ключ PKCS#8 за�
   `gh release create v<версия> dist/release/Masaki-Setup-<версия>.exe` с SHA-256 в описании.
   Установщик не подписан — SmartScreen предупреждает, это описано в README. Снимки для README — `npm run screens`.
 - Код — на GitHub (публичный репозиторий). Коммитить и пушить только по просьбе пользователя.
+
+## macOS (экспериментально)
+
+- Собирается в GitHub Actions (`.github/workflows/macos.yml`, macos-14): `npm ci`, typecheck,
+  `electron-builder --mac dmg zip --arm64 --x64`, артефакт **Masaki-mac**. Подписи Apple нет — ad hoc
+  (`mac.identity: "-"`, hardenedRuntime выключен), иначе на Apple Silicon не запустится. Локально — `npm run dist:mac`.
+- Отличия в коде — только по `process.platform === 'darwin'` (на Windows ничего не меняется): окно с
+  `titleBarStyle: 'hidden'` и «светофорами» в шапке панели (`trafficLightPosition`, место под них —
+  `.mac .side-top`; при свёрнутой панели прячутся `setWindowButtonVisibility`, кнопки окна — наши в
+  капсуле); меню приложения из ролей appMenu/editMenu/windowMenu (без меню «Правка» на Mac не работают
+  Cmd+C/V в полях; меню «Файл» нет — его Cmd+W закрыл бы окно); хоткеи уже принимают ⌘ как Ctrl
+  (`shortcuts.ts`); «Обои Windows» спрятаны; Chrome для переноса — `~/Library/Application Support/Google/Chrome`;
+  yt-dlp — `yt-dlp_macos`.
+- **Проверить мак-версию здесь нечем** (разработка на Windows): что не так, сообщает друг пользователя с Mac.
 
 ## Чего пока нет
 

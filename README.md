@@ -157,6 +157,31 @@ npm run screens         # снимки для этого README (docs/screens)
 
 Как всё устроено, принятые решения и грабли, на которые уже наступали, — в [AGENTS.md](AGENTS.md).
 
+### macOS (экспериментально)
+
+Masaki собирается и под Mac. Каждая версия в `main` собирается на macOS в GitHub Actions: готовые
+`.dmg` для Apple Silicon и Intel лежат в артефакте **Masaki-mac** последнего запуска
+[«macOS»](https://github.com/GXUser7/Masaki/actions/workflows/macos.yml) (скачивание — для вошедших
+в GitHub).
+
+Собрать самому — нужны macOS и Node.js 22+:
+
+```bash
+git clone https://github.com/GXUser7/Masaki.git && cd Masaki
+npm ci
+npm run dist:mac      # dist/Masaki-*-mac-arm64.dmg (или x64 — под этот Mac)
+npm run dev           # или запустить без сборки
+```
+
+Приложение не подписано Apple, поэтому при первом запуске macOS его не откроет: правый щелчок по
+Masaki → «Открыть» (или «Системные настройки» → «Конфиденциальность и безопасность» → «Всё равно
+открыть»). Если скачали `.dmg`/`.zip` из GitHub, а macOS пишет «повреждено», снимите карантин:
+`xattr -cr /Applications/Masaki.app`.
+
+Чем Mac отличается: кнопки окна — родные «светофоры» в шапке панели, вместо Ctrl — ⌘, пункта «Обои
+Windows» нет (своя картинка фона работает), пароли и ключи шифруются Связкой ключей — при первом
+запуске macOS спросит доступ к «Masaki Safe Storage».
+
 ## Лицензия
 
 [GNU GPL v3.0](LICENSE). Можно пользоваться, изучать, менять и распространять, но изменённые версии

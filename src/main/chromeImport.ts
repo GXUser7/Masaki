@@ -9,7 +9,11 @@ import { DatabaseSync } from 'node:sqlite'
 import type { ChromeProfile, HistoryEntry, Shortcut } from '../shared/types'
 
 // MASAKI_CHROME_DIR — тестовая папка вместо настоящего Chrome (scripts/import-test.mjs).
-const root = (): string => process.env.MASAKI_CHROME_DIR ?? path.join(process.env.LOCALAPPDATA ?? '', 'Google', 'Chrome', 'User Data')
+const root = (): string =>
+  process.env.MASAKI_CHROME_DIR ??
+  (process.platform === 'darwin'
+    ? path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome')
+    : path.join(process.env.LOCALAPPDATA ?? '', 'Google', 'Chrome', 'User Data'))
 const web = (url: unknown): url is string => typeof url === 'string' && /^https?:\/\//i.test(url)
 
 function readJson(file: string): unknown {

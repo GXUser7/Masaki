@@ -1,0 +1,31 @@
+# Сборка Masaki для macOS на машине GitHub (у публичных репозиториев она бесплатная): Windows-разработка
+# Mac не соберёт, а так каждая версия проверяется на настоящем macOS, и готовый .dmg лежит в артефактах.
+name: macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx electron-vite build
+      # Подписи Apple нет — ad hoc (identity "-" в package.json); --publish never: только файлы.
+      - run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Masaki-mac
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error

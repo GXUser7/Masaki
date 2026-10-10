@@ -231,6 +231,7 @@ export function App(): React.JSX.Element {
   const yc = active.kind === 'web' && isYouCloud(active.url)
   const cls = [
     'app',
+    window.masaki.platform === 'darwin' ? 'mac' : '',
     dark ? 'dark' : 'light',
     'blur-' + settings.glass,
     settings.sidebarCollapsed ? 'collapsed' : '',

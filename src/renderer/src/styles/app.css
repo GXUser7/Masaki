@@ -4902,3 +4902,14 @@ input {
   letter-spacing: 0;
   font-size: 12.5px;
 }
+
+/* ---------- macOS ---------- */
+/* Слева в шапке панели — родные «светофоры» окна (trafficLightPosition в main), наши кнопки окна
+   там не нужны. В капсуле (панель свёрнута, «светофоры» спрятаны) остаются наши. */
+.mac .side-top {
+  padding-left: 68px;
+}
+.mac .side-top .wbtns,
+.mac .side-top .wsep {
+  display: none;
+}

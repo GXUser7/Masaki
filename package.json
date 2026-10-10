@@ -14,6 +14,8 @@
     "icon": "electron scripts/make-icon.cjs",
     "pack": "electron-vite build && electron-builder --win dir",
     "dist": "electron-vite build && electron-builder --win nsis",
+    "pack:mac": "electron-vite build && electron-builder --mac dir",
+    "dist:mac": "electron-vite build && electron-builder --mac",
     "test:addons": "electron-vite build && node scripts/addons-test.mjs",
     "test:import": "electron-vite build && node scripts/import-test.mjs",
     "perf": "electron-vite build && node scripts/perf.mjs site",
@@ -84,6 +86,20 @@
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "artifactName": "Masaki-Setup-${version}.exe"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": "-",
+      "hardenedRuntime": false,
+      "artifactName": "Masaki-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "artifactName": "Masaki-${version}-mac-${arch}.${ext}"
     },
     "copyright": "Masaki"
   },
