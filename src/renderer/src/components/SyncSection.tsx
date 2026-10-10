@@ -59,12 +59,17 @@ function KeyHowTo(): React.JSX.Element {
           </button>{' '}
           → Enable.
         </li>
-        <li>Google Auth Platform → Get started: имя Masaki, ваша почта, Audience — External.</li>
-        <li>Data Access → Add or remove scopes → отметьте …/auth/drive.appdata.</li>
-        <li>Audience → Publish app. Иначе Google будет выходить из синхронизации раз в 7 дней.</li>
+        <li>Google Auth Platform → Get started: имя Masaki, ваша почта, Audience — External. Логотип не загружайте — с ним Google попросит проверку бренда.</li>
+        <li>Data Access → Add or remove scopes → отметьте только …/auth/drive.appdata.</li>
+        <li>Audience → Publish app → Confirm. Иначе Google будет выходить из синхронизации раз в 7 дней.</li>
         <li>Clients → Create client → тип «Desktop app» → Create → Download JSON.</li>
         <li>Здесь нажмите «Выбрать файл ключа» и укажите скачанный JSON.</li>
       </ol>
+      <p className="hint pw-note">
+        Проверку приложения (Verification) проходить не нужно: drive.appdata — неконфиденциальный доступ, а приложением
+        пользуетесь только вы. Если при входе Google всё же покажет «Приложение не проверено», нажмите «Дополнительные
+        настройки» → «Перейти на страницу Masaki» — это ваш собственный ключ.
+      </p>
     </details>
   )
 }

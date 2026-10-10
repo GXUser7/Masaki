@@ -12,12 +12,13 @@ import { ipcMain, session, webContents, type WebContents } from 'electron'
 import { createHash } from 'crypto'
 import fs from 'fs'
 import path from 'path'
+import * as ytdlp from './ytdlp'
 
 export const YOUCLOUD_URL = 'https://youcloud.inkerror67.workers.dev/'
 /** Сайт и его дев-сервер — вкладки, которым отвечает мост. */
 export const YOUCLOUD_ORIGINS = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
-/** Какой версии расширения YouCloud равен мост (сайт сверяет, умеет ли оно входы). */
-const BRIDGE_VERSION = '0.6.0'
+/** Какой версии расширения YouCloud равен мост (сайт сверяет, что он умеет): 0.7 — звук YouTube от yt-dlp. */
+const BRIDGE_VERSION = '0.7.0'
 
 type Ops = Record<string, string | null>
 
@@ -303,7 +304,22 @@ export function initYouCloud(partitionName: string, h: Host): void {
   partition = partitionName
   host = h
   watchCookies()
-  ipcMain.handle('yc:hello', (e) => (fromYouCloud(e) ? { version: BRIDGE_VERSION, tokens: waitingTokens.splice(0) } : null))
+  ipcMain.handle('yc:hello', (e) => {
+    if (!fromYouCloud(e)) return null
+    // Открыли YouCloud — yt-dlp скачивается заранее, чтобы первый трек YouTube не ждал.
+    ytdlp.prepare()
+    return { version: BRIDGE_VERSION, tokens: waitingTokens.splice(0) }
+  })
+  // Звук YouTube: ссылку находит yt-dlp, с IP и входом этого браузера. fresh — прежняя не заиграла.
+  ipcMain.handle('yc:yt-stream', async (e, videoId: string, fresh?: boolean) => {
+    if (!fromYouCloud(e)) return { error: 'not allowed' }
+    if (fresh) ytdlp.forget(String(videoId))
+    try {
+      return { value: await ytdlp.resolve(String(videoId), ses()) }
+    } catch (err) {
+      return { error: String((err as Error)?.message ?? err) }
+    }
+  })
   ipcMain.handle('yc:fetch', (e, req: FetchRequest) => (fromYouCloud(e) && req && typeof req === 'object' ? relay(req) : { error: 'not allowed' }))
   ipcMain.handle('yc:call', (e, name: string) =>
     fromYouCloud(e) ? call(String(name), e.sender).catch((err) => ({ error: String(err?.message ?? err) })) : { error: 'not allowed' }
