@@ -9,6 +9,7 @@
 [![Скачать](https://img.shields.io/github/v/release/GXUser7/Masaki?label=%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C&style=for-the-badge&color=5fd4b4&labelColor=1d2a27)](https://github.com/GXUser7/Masaki/releases/latest)
 ![Windows](https://img.shields.io/badge/Windows-10%20%C2%B7%2011-5fd4b4?style=for-the-badge&labelColor=1d2a27&logo=windows&logoColor=white)
 ![Chromium](https://img.shields.io/badge/Electron%2044-Chromium-5fd4b4?style=for-the-badge&labelColor=1d2a27&logo=electron&logoColor=white)
+[![Лицензия](https://img.shields.io/github/license/GXUser7/Masaki?label=license&style=for-the-badge&color=5fd4b4&labelColor=1d2a27)](LICENSE)
 
 <img src="docs/screens/newtab.png" alt="Новая вкладка Masaki: часы как на экране блокировки Pixel" width="100%">
 
@@ -148,6 +149,11 @@ npm run screens         # снимки для этого README (docs/screens)
 ```
 
 Как всё устроено, принятые решения и грабли, на которые уже наступали, — в [AGENTS.md](AGENTS.md).
+
+## Лицензия
+
+[GNU GPL v3.0](LICENSE). Можно пользоваться, изучать, менять и распространять, но изменённые версии
+тоже должны выходить с открытым кодом под той же лицензией.
 
 ## Дальше
 

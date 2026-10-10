@@ -45,6 +45,7 @@
     "zustand": "^5.0.15"
   },
   "author": "Masaki",
+  "license": "GPL-3.0-only",
   "build": {
     "appId": "app.masaki.browser",
     "productName": "Masaki",
