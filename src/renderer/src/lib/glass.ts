@@ -3,13 +3,14 @@
 // сайта Masaki подкладывает под страницу полупрозрачным слоем (насколько — решает ползунок).
 
 import { hostOf } from './url'
+import { isYouCloud } from './youcloud'
 import { useStore, wv } from '../store'
 // Сам скрипт для страницы — в glass-page.js: ставится один раз и даёт window.__masakiGlass.
 import INSTALL from './glass-page.js?raw'
 
 export function glassAllowed(url: string): boolean {
   const { enabled, exclude } = useStore.getState().settings.addons.glass
-  if (!enabled || !/^https?:|^file:/i.test(url)) return false
+  if (!enabled || !/^https?:|^file:/i.test(url) || isYouCloud(url)) return false
   return !exclude.includes(hostOf(url))
 }
 

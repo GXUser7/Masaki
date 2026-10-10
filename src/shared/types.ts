@@ -402,6 +402,8 @@ export type Command =
   | { type: 'close-empty-tab'; wcId: number }
   /** Поиск по вкладкам (Ctrl+Shift+A) — палитра в режиме вкладок. */
   | { type: 'tab-search' }
+  /** Закрыть вкладку входа (YouCloud) и вернуться во вкладку then, если она ещё открыта. */
+  | { type: 'close-wc'; wcId: number; then?: number }
 
 export interface WindowState {
   maximized: boolean
@@ -545,4 +547,6 @@ export interface MasakiApi {
   /** Своя картинка фона: выбрать файл (копия ляжет в профиль) и прочитать сохранённую. */
   pickWallpaper(): Promise<string | null>
   customWallpaper(): Promise<string | null>
+  /** Обложка того, что играет во вкладке, — data: (для цвета мини-плеера). */
+  mediaArt(url: string): Promise<string | null>
 }

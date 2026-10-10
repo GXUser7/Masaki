@@ -19,6 +19,7 @@ import { useStore, type Tab } from '../store'
 import { Icon } from './Icon'
 import { AddressLabel, Grain, ShapeTile, TabFav, useHoverOverPage } from './parts'
 import { CapsuleAudio, MiniPlayer, WinButtons } from './Extras'
+import { openYouCloud } from '../lib/youcloud'
 import { syncStatusText } from './SyncSection'
 import { openGroupMenu, openTabMenu, openTileMenu } from '../menus'
 
@@ -550,6 +551,9 @@ export function Popover(): React.JSX.Element | null {
             </button>
             <button className="mi" disabled={t.kind !== 'web'} onClick={run(toggleDevtools)}>
               <Icon name="code" /> Инструменты разработчика <span className="kbd">F12</span>
+            </button>
+            <button className="mi" onClick={run(() => openYouCloud())}>
+              <Icon name="music" /> YouCloud
             </button>
             <button className="mi" onClick={run(() => s().openPasswords())}>
               <Icon name="key" /> Пароли

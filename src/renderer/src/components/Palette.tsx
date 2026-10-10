@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { shapes } from '../lib/shapes'
 import { hostOf, looksLikeAddress, resolveInput } from '../lib/url'
 import { toggleGlass } from '../lib/glass'
+import { mediaAction, mediaPlaying, musicTab, openYouCloud, youcloudKnown } from '../lib/youcloud'
 import { useStore, wv } from '../store'
 import { Icon, type IconName } from './Icon'
 import { Fav, Grain } from './parts'
@@ -17,6 +18,7 @@ type Row =
   | { kind: 'remote'; title: string; sub: string; url: string; favicon?: string }
   | { kind: 'arch'; title: string; sub: string; url: string; favicon?: string }
   | { kind: 'cmd'; title: string; sub: string; icon: IconName; run: () => void }
+  | { kind: 'music'; title: string; sub: string }
 
 const icons: Record<Row['kind'], IconName> = {
   ai: 'sparkle',
@@ -28,7 +30,8 @@ const icons: Record<Row['kind'], IconName> = {
   fav: 'starFilled',
   remote: 'computer',
   arch: 'history',
-  cmd: 'tune'
+  cmd: 'tune',
+  music: 'music'
 }
 
 interface PaletteCommand {
@@ -62,8 +65,33 @@ function commands(): PaletteCommand[] {
     .filter((x) => x.kind === 'web' && x.id !== t.id)
     .sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0))[0]
   const g = s.settings.addons
+  const music = musicTab()
+  const playing = !!music && mediaPlaying(music)
+  const song = music?.media?.title ? music.media.title + (music.media.artist ? ' — ' + music.media.artist : '') : music?.title || ''
   return [
     { title: 'Новая вкладка', sub: 'Ctrl+T', icon: 'add', run: () => S().newTab() },
+    { title: 'YouCloud', sub: 'Музыка: SoundCloud, Яндекс Музыка, YouTube Music', icon: 'music', run: () => openYouCloud() },
+    {
+      title: playing ? 'Пауза' : 'Продолжить музыку',
+      sub: song,
+      icon: playing ? 'pause' : 'play',
+      run: () => music && mediaAction(music, playing ? 'pause' : 'play'),
+      hidden: !music?.media
+    },
+    {
+      title: 'Следующий трек',
+      sub: song,
+      icon: 'skipNext',
+      run: () => music && mediaAction(music, 'nexttrack'),
+      hidden: !music?.media?.actions.includes('nexttrack')
+    },
+    {
+      title: 'Предыдущий трек',
+      sub: song,
+      icon: 'skipPrev',
+      run: () => music && mediaAction(music, 'previoustrack'),
+      hidden: !music?.media?.actions.includes('previoustrack')
+    },
     { title: 'Вернуть закрытую вкладку', sub: 'Ctrl+Shift+T', icon: 'history', run: () => S().reopenTab(), hidden: !s.closed.length },
     {
       title: 'Закрыть дубли вкладок',
@@ -226,6 +254,8 @@ export function Palette(): React.JSX.Element {
     const ask: Row = { kind: 'ai', title: 'Спросить AI Mode', sub: `«${q}»` }
     if (ai) out.push(ask, search)
     else out.push(search, ask)
+    // Слушали музыку в YouCloud — запрос можно сразу искать и там (своя вкладка, свой сервис).
+    if (!looksLikeAddress(q) && youcloudKnown()) out.push({ kind: 'music', title: q, sub: 'Найти в YouCloud' })
     for (const sg of suggestions.filter((x) => x.toLowerCase() !== low).slice(0, 4)) {
       // Google подсказывает и адреса сайтов — такие строки открывают сайт, а не поиск.
       if (looksLikeAddress(sg)) out.push({ kind: 'url', title: sg.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''), sub: 'Открыть сайт', url: resolveInput(sg, false) })
@@ -288,6 +318,10 @@ export function Palette(): React.JSX.Element {
       case 'cmd':
         s.closePalette()
         row.run()
+        break
+      case 'music':
+        s.closePalette()
+        openYouCloud(row.title)
         break
       case 'tab':
         s.closePalette()

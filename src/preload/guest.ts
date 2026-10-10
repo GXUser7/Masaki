@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { installMediaHook } from './media-page'
 import { installPasskeys } from './passkey-page'
 
 // Скрипт для страниц во вкладках (изолированный мир: сама страница его не видит).
@@ -312,3 +313,70 @@ window.addEventListener(
   },
   { passive: true, capture: true }
 )
+
+// 7. Что играет: Media Session сайта — в мини-плеер Masaki (обложка, название, «следующий»).
+// Команды мини-плеера приходят сюда (webview.send) и зовут обработчики сайта, как медиаклавиши.
+let mediaRun: ((action: string, time: number) => void) | null = null
+contextBridge.executeInMainWorld({
+  func: installMediaHook,
+  args: [
+    (json: string): void => ipcRenderer.sendToHost('media', String(json).slice(0, 8000)),
+    (run: (action: string, time: number) => void): void => {
+      mediaRun = run
+    }
+  ]
+})
+const MEDIA_ACTIONS = new Set(['play', 'pause', 'previoustrack', 'nexttrack', 'seekto', 'seekbackward', 'seekforward'])
+ipcRenderer.on('media:action', (_e, action: string, time: number) => {
+  if (MEDIA_ACTIONS.has(action)) mediaRun?.(action, Number(time) || 0)
+})
+
+// 8. YouCloud: мост вместо расширения (main/youcloud.ts). Говорит с сайтом языком bridge.js
+// расширения — сообщениями window с меткой yc; сайт узнаёт, что он в Masaki, по host.
+const YOUCLOUD = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
+if (YOUCLOUD.includes(location.origin)) {
+  // Сразу, до первой отрисовки: сайт знает, что он в Masaki, и не рисует своего фона.
+  const mark = (): void => document.documentElement?.setAttribute('data-host', 'masaki')
+  if (document.documentElement) mark()
+  else
+    new MutationObserver((_, o) => {
+      if (!document.documentElement) return
+      mark()
+      o.disconnect()
+    }).observe(document, { childList: true })
+  type Theme = { seed: string; dark: boolean }
+  let theme: Theme | null = null
+  type Hello = { version: string; tokens?: { kind: string; token: string; expiresIn?: number }[] } | null
+  const reply = (data: Record<string, unknown>): void => window.postMessage({ yc: 'ext', ...data }, location.origin)
+  const hello = (): void => {
+    void ipcRenderer.invoke('yc:hello').then((h: Hello) => {
+      if (!h) return
+      reply({ kind: 'hello', version: h.version, host: 'masaki' })
+      if (theme) reply({ kind: 'event', event: 'theme', ...theme })
+      for (const t of h.tokens ?? []) reply({ kind: t.kind, token: t.token, expiresIn: t.expiresIn })
+    })
+  }
+  const answer = (id: unknown, ask: Promise<Record<string, unknown>>): void => {
+    ask.then(
+      (a) => reply({ kind: 'response', id, ...(a ?? { error: 'no answer' }) }),
+      (e) => reply({ kind: 'response', id, error: String(e?.message ?? e) })
+    )
+  }
+  window.addEventListener('message', (event) => {
+    if (event.source !== window || event.origin !== location.origin) return
+    const d = event.data
+    if (!d || typeof d !== 'object' || d.yc !== 'page') return
+    if (d.kind === 'ping') hello()
+    else if (d.kind === 'fetch') answer(d.id, ipcRenderer.invoke('yc:fetch', d.request))
+    else if (d.kind === 'call') answer(d.id, ipcRenderer.invoke('yc:call', String(d.name)))
+  })
+  ipcRenderer.on('yc:token', (_e, t: { kind: string; token: string; expiresIn?: number }) => reply({ kind: t.kind, token: t.token, expiresIn: t.expiresIn }))
+  ipcRenderer.on('yc:event', (_e, ev: Record<string, unknown>) => reply({ ...ev, event: ev.kind, kind: 'event' }))
+  // Тема браузера: сайт берёт её цвет и светлоту (шлёт интерфейс Masaki).
+  ipcRenderer.on('yc:theme', (_e, t: Theme) => {
+    if (!t || typeof t.seed !== 'string') return
+    theme = { seed: t.seed.slice(0, 32), dark: !!t.dark }
+    reply({ kind: 'event', event: 'theme', ...theme })
+  })
+  hello()
+}

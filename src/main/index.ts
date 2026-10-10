@@ -24,6 +24,7 @@ import { chromeBookmarks, chromeHistory, chromeProfiles, chromeShortcuts } from 
 import * as sync from './sync'
 import * as passwords from './passwords'
 import * as passkeys from './passkeys'
+import { initYouCloud, isYouCloudExtension, overrideHeaders, watchWebview, YOUCLOUD_HEADER_URLS } from './youcloud'
 import { commandFor } from '../shared/shortcuts'
 import {
   defaultSettings,
@@ -376,6 +377,8 @@ function extInfo(e: Electron.Extension): ExtensionInfo {
 async function loadSavedExtensions(): Promise<void> {
   const ext = session.fromPartition(PARTITION).extensions
   for (const p of settings.addons.extensions) {
+    // YouCloud встроен в Masaki: его расширение здесь не работает и мешало бы мосту.
+    if (isYouCloudExtension(p)) continue
     try {
       await ext.loadExtension(p, { allowFileAccess: true })
     } catch (e) {
@@ -443,8 +446,13 @@ function uniquePath(dir: string, name: string): string {
 function setupBrowsingSession(): void {
   const ses = session.fromPartition(PARTITION)
   ses.setUserAgent(chromeUserAgent())
-  ses.webRequest.onBeforeSendHeaders({ urls: ['https://accounts.google.com/*'] }, (details, callback) => {
+  // Слушатель у сессии один на всё: вход в Google и заголовки запросов моста YouCloud.
+  ses.webRequest.onBeforeSendHeaders({ urls: ['https://accounts.google.com/*', ...YOUCLOUD_HEADER_URLS] }, (details, callback) => {
     const headers = details.requestHeaders
+    if (!GOOGLE_LOGIN.test(details.url)) {
+      callback({ requestHeaders: overrideHeaders(details.url, headers) ?? headers })
+      return
+    }
     headers['User-Agent'] = FIREFOX_UA
     for (const name of Object.keys(headers)) if (/^sec-ch-ua/i.test(name)) delete headers[name]
     // Список аккаунтов Google отдаёт только запросу «со страницы google.com».
@@ -623,6 +631,7 @@ function runSelfTest(): void {
 app.on('web-contents-created', (_e, contents) => {
   if (contents.getType() !== 'webview') return
   attachShortcuts(contents, true)
+  watchWebview(contents)
   contents.on('context-menu', (_ev, p) => sendPageMenu(contents, p))
   // navigator.userAgent на странице входа Google должен совпадать с заголовком.
   contents.on('did-start-navigation', (e) => {
@@ -863,6 +872,8 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('google:accounts', () => googleAccounts())
+  // Обложка того, что играет: картинкой data: — интерфейс берёт из неё цвет мини-плеера.
+  ipcMain.handle('media:art', (_e, url: string) => (/^https?:\/\//i.test(String(url)) ? fetchAsDataUrl(String(url), 1_500_000) : null))
 
   ipcMain.handle('sync:state', () => sync.getState())
   ipcMain.handle('sync:pick-client', async () => {
@@ -919,6 +930,7 @@ function registerIpc(): void {
       properties: ['openDirectory']
     })
     if (canceled || !filePaths[0]) return null
+    if (isYouCloudExtension(filePaths[0])) return { ok: false, error: 'YouCloud уже встроен в Masaki — это расширение ставить не нужно.' }
     try {
       const e = await session.fromPartition(PARTITION).extensions.loadExtension(filePaths[0], { allowFileAccess: true })
       return { ok: true, ext: extInfo(e) }
@@ -1031,14 +1043,14 @@ function iconHost(url: string): string | null {
   }
 }
 
-async function fetchAsDataUrl(url: string): Promise<string | null> {
+async function fetchAsDataUrl(url: string, maxBytes = 200_000): Promise<string | null> {
   try {
     const res = await session.fromPartition(PARTITION).fetch(url)
     if (!res.ok) return null
     const type = (res.headers.get('content-type') ?? 'image/png').split(';')[0]
     if (!type.startsWith('image/')) return null
     const buf = Buffer.from(await res.arrayBuffer())
-    if (buf.length > 200_000) return null
+    if (buf.length > maxBytes) return null
     return `data:${type};base64,${buf.toString('base64')}`
   } catch {
     return null
@@ -1114,6 +1126,10 @@ if (!app.requestSingleInstanceLock()) {
       backedUp: () => sync.getState().vault === 'ready'
     })
     await startSync()
+    initYouCloud(PARTITION, {
+      openUrl: (url) => send({ type: 'open-url', url }),
+      closeTab: (wcId, then) => send({ type: 'close-wc', wcId, then })
+    })
     void loadSavedExtensions()
     if (settings.addons.adblock.enabled) void applyAdblock(true)
     createWindow(await windowFile.read())

@@ -187,6 +187,13 @@ export function handleCommand(c: Command): void {
       if (id) s.closeTab(id, false)
       break
     }
+    case 'close-wc': {
+      const id = tabIdOfWebContents(c.wcId)
+      const back = c.then != null ? tabIdOfWebContents(c.then) : null
+      if (back) s.activate(back)
+      if (id) S().closeTab(id, false)
+      break
+    }
     case 'close-tabs':
       for (const t of s.tabs.filter((t) => t.kind === 'web' && t.url.startsWith(c.prefix))) S().closeTab(t.id)
       break

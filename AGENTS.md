@@ -18,6 +18,7 @@ npm run test:import  # сборка + тест переноса из Chrome на
 npm run test:sync    # сборка + синхронизация двух профилей через подставной Google (scripts/mock-google.mjs)
 npm run test:passwords # сборка + менеджер паролей: CSV, автозаполнение, сохранение, шифрованная синхронизация
 npm run test:passkeys  # сборка + ключи доступа: создание, вход (окно и автозаполнение), подписи, синхронизация
+npm run test:youcloud  # сборка + YouCloud: мост, мини-плеер с обложкой, поиск из палитры (нужен дев-сервер YouCloud/web)
 npm run perf         # замер плавности сворачивания панели (интервалы кадров)
 npm run pack         # dist/win-unpacked/Masaki.exe — то, что запускает пользователь
 npm run icon         # перерисовать build/icon.png
@@ -36,9 +37,11 @@ src/main/chromeImport.ts перенос из Chrome: закладки, ярлы�
 src/main/sync.ts         синхронизация через Google Диск: вход OAuth, папка приложения, слияние
 src/main/passwords.ts    менеджер паролей: хранение (safeStorage), импорт CSV, автозаполнение, предложения
 src/main/passkeys.ts     ключи доступа (passkey): свой аутентификатор — создание, подпись, хранение, синхронизация
+src/main/youcloud.ts     YouCloud: мост вместо его расширения (запросы к Яндексу/YouTube, входы вкладками)
 src/preload/index.ts     мост window.masaki для интерфейса (типы — MasakiApi в shared/types.ts)
 src/preload/guest.ts     скрипт для страниц во вкладках: вход в Google, поля входа (автозаполнение, сохранение)
 src/preload/passkey-page.ts подмена navigator.credentials в мире страницы (сериализуется, без ссылок наружу)
+src/preload/media-page.ts Media Session страницы → мини-плеер (что играет, обложка, кнопки сайта)
 src/shared/types.ts      общие типы и defaultSettings
 src/shared/shortcuts.ts  таблица хоткеев, общая для main и интерфейса
 src/renderer/src/
@@ -51,6 +54,7 @@ src/renderer/src/
   lib/iconColor.ts       значок сайта → цвет плитки
   lib/glass.ts           аддон «Прозрачные сайты»: когда и в какую вкладку ставить скрипт
   lib/glass-page.js      сам скрипт для страницы (импортируется как ?raw)
+  lib/youcloud.ts        YouCloud со стороны интерфейса: открыть/искать, тема для сайта, кнопки Media Session
   components/            App, Chrome (боковая панель, капсула, меню, загрузки, аккаунты),
                          Extras (кнопки окна и раскладки, превью, мини-плеер, волна загрузки,
                          «взгляд», две вкладки рядом, жест «назад»),
@@ -139,6 +143,32 @@ passkeys.json (ключи доступа: закрытый ключ PKCS#8 за�
   WebAuthn как есть (USB-ключи). В тестах эту кнопку не нажимать — откроется системное окно Windows.
 - Синхронизация — тот же `vault.json`, записи с `kind: 'passkey'` (закрытый ключ PKCS#8 base64url).
 - Тест — `scripts/passkeys-test.mjs` на http://localhost: подписи и форматы проверяет сам тест, как сервер.
+
+### YouCloud (src/main/youcloud.ts, preload/guest.ts, lib/youcloud.ts)
+
+- YouCloud — музыкальный сайт пользователя (репозиторий YouCloud, папка `web/`, живой адрес
+  https://youcloud.inkerror67.workers.dev, дев-сервер http://localhost:5190). В Chrome ему нужно
+  расширение (`web/extension`), которое ходит в Яндекс и YouTube с IP пользователя. **В Electron это
+  расширение не работает** (нет `declarativeNetRequest` и `cookies`), поэтому Masaki сам говорит с сайтом
+  его протоколом: `guest.ts` — половина «страницы» (сообщения window `{yc: 'page'|'ext'}`, hello с
+  `host: 'masaki'`), `main/youcloud.ts` — половина «фона». Расширение YouCloud Masaki не загружает
+  (`isYouCloudExtension`): вдвоём они отвечали бы сайту дважды.
+- Мост отвечает только главному фрейму вкладки YouCloud (по `senderFrame.origin`) и ходит только к хостам
+  Яндекса и YouTube. Заголовки, которые fetch не даёт (Origin, Referer, Cookie), ставит единственный
+  `onBeforeSendHeaders` сессии по метке `ycr=<id>` в адресе — как правила DNR у расширения. Вход в YouTube —
+  куки сессии вкладок и SAPISIDHASH, на страницу они не попадают.
+- Входы: `sc-login`/`ya-login`/`yt-login` открывают вкладку Masaki; токен SoundCloud ловится по cookie
+  `oauth_token`, Яндекса — по `#access_token` в адресе music.yandex.ru, вход Google — по cookie SAPISID.
+  Вкладка входа закрывается командой `close-wc`, Masaki возвращается во вкладку YouCloud.
+- В Masaki сайт без своего фона: preload ставит `data-host="masaki"` до первой отрисовки, карточка
+  страницы — стекло «как у панели», тему (цвет `--primary` и светлоту) интерфейс шлёт сайту (`yc:theme`).
+  Аддон «Прозрачные сайты» YouCloud не трогает.
+- Мини-плеер — для любого сайта с Media Session: `media-page.ts` в мире страницы перехватывает
+  metadata/playbackState/setPositionState/setActionHandler и шлёт JSON (`sendToHost('media')`);
+  кнопки зовут обработчики сайта (`webview.send('media:action')`). Данные страницы проверяет `parseMedia`.
+  Цвет плеера — из обложки (`media:art` → data:, `useArtColors`).
+- Палитра: команда «YouCloud», пауза/следующий/предыдущий трек, строка «Найти в YouCloud» (если YouCloud
+  открывали) → `#/search/<запрос>`.
 
 ## Решения, утверждённые пользователем (не менять без просьбы)
 
@@ -305,4 +335,5 @@ passkeys.json (ключи доступа: закрытый ключ PKCS#8 за�
 - Отдельной страницы истории и загрузок (история — в палитре, загрузки — во всплывающем окне).
 - Папок избранного: закладки Chrome при переносе раскладываются в один плоский список.
 - Установщика с автообновлением (`npm run dist` собирает NSIS, но обновлений нет).
+- Кнопок плеера на панели задач Windows (thumbar) и своей реакции на медиаклавиши — их обслуживает Chromium.
 - Дизайн-макеты — в артефакте-холсте «Masaki — варианты дизайна» на claude.ai (5 артбордов).

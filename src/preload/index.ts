@@ -141,7 +141,8 @@ const api: MasakiApi = {
   suggest: (q) => ipcRenderer.invoke('suggest', q),
   wallpaper: () => ipcRenderer.invoke('wallpaper'),
   pickWallpaper: () => ipcRenderer.invoke('wallpaper:pick'),
-  customWallpaper: () => ipcRenderer.invoke('wallpaper:custom')
+  customWallpaper: () => ipcRenderer.invoke('wallpaper:custom'),
+  mediaArt: (url) => ipcRenderer.invoke('media:art', url)
 }
 
 contextBridge.exposeInMainWorld('masaki', api)

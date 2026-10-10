@@ -2,7 +2,9 @@ import { createElement, useEffect, useRef, useState } from 'react'
 import { goBack, goForward } from '../actions'
 import { shapes, wavePath } from '../lib/shapes'
 import { hostOf } from '../lib/url'
-import { useStore, wv } from '../store'
+import { useStore, wv, type Tab } from '../store'
+import { useArtColors } from '../lib/iconColor'
+import { mediaAction } from '../lib/youcloud'
 import { Icon } from './Icon'
 import { Grain, TabFav } from './parts'
 
@@ -164,6 +166,12 @@ function useBackgroundAudio() {
   const playing = !!tab && tab.audible && !tab.pausedByUs
   const toggle = (): void => {
     if (!tab) return
+    // У сайта свой плеер (Media Session) — пауза через него, как медиаклавишей: он сам
+    // запомнит место, обновит кнопки и не сочтёт паузу ошибкой.
+    if (tab.media) {
+      mediaAction(tab, playing ? 'pause' : 'play')
+      return
+    }
     const el = wv(tab.id)
     if (!el) return
     void el.executeJavaScript(playing ? PAUSE_JS : PLAY_JS, true).catch(() => undefined)
@@ -174,29 +182,93 @@ function useBackgroundAudio() {
 
 const placeOf = (url: string): string => (url.startsWith('file:') ? 'файл на компьютере' : hostOf(url))
 
-/** Звук в фоновой вкладке: название и пауза прямо в панели, не надо искать, где играет. */
+/** Где трек: тонкая полоса внизу плеера, щелчок — перемотка (если сайт её умеет). */
+function MediaProgress({ tab, playing }: { tab: Tab; playing: boolean }): React.JSX.Element | null {
+  const position = tab.media?.position
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (!playing) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [playing])
+  if (!position) return null
+  const at = position.position + (playing ? (Math.max(0, now - position.at) / 1000) * position.rate : 0)
+  const p = Math.min(1, Math.max(0, at / position.duration))
+  const seekable = !!tab.media?.actions.includes('seekto')
+  return (
+    <div
+      className={'mp-prog' + (seekable ? ' seek' : '')}
+      aria-hidden="true"
+      onClick={(e) => {
+        if (!seekable) return
+        const r = e.currentTarget.getBoundingClientRect()
+        mediaAction(tab, 'seekto', ((e.clientX - r.left) / r.width) * position.duration)
+      }}
+    >
+      <i style={{ transform: `scaleX(${p})` }} />
+    </div>
+  )
+}
+
+/** Звук в фоновой вкладке: что играет и кнопки прямо в панели, не надо искать, где играет.
+ *  Сайт с Media Session (YouCloud, YouTube, SoundCloud…) даёт обложку, название и «следующий». */
 export function MiniPlayer({ compact = false }: { compact?: boolean }): React.JSX.Element | null {
   const { tab, playing, toggle } = useBackgroundAudio()
+  const m = tab?.media
+  const art = useArtColors(m?.artwork || undefined)
   if (!tab) return null
+  if (!m?.title) {
+    return (
+      <div className={'mplayer' + (compact ? ' compact' : '') + (playing ? ' playing' : '')}>
+        <button className="mp-main" title="Перейти на вкладку" onClick={() => S().activate(tab.id)}>
+          <TabFav tab={tab} />
+          <span className="mp-t">
+            <b>{tab.title || hostOf(tab.url)}</b>
+            <small>
+              <span className="eq" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+              {playing ? 'играет' : 'пауза'} · {placeOf(tab.url)}
+            </small>
+          </span>
+        </button>
+        <button className="mp-btn" aria-label={playing ? 'Пауза' : 'Продолжить'} onClick={toggle}>
+          <Icon name={playing ? 'pause' : 'play'} />
+        </button>
+      </div>
+    )
+  }
+  const c = art?.colors
+  const tint = c ? ({ '--mp-l': c.light.fill, '--mp-d': c.dark.fill } as React.CSSProperties) : undefined
   return (
-    <div className={'mplayer' + (compact ? ' compact' : '') + (playing ? ' playing' : '')}>
-      <button className="mp-main" title="Перейти на вкладку" onClick={() => S().activate(tab.id)}>
-        <TabFav tab={tab} />
+    <div className={'mplayer rich' + (compact ? ' compact' : '') + (playing ? ' playing' : '') + (c ? ' tinted' : '')} style={tint}>
+      <button className="mp-art" title="Перейти на вкладку" onClick={() => S().activate(tab.id)}>
+        {m.artwork ? <img src={art?.src ?? m.artwork} alt="" draggable={false} /> : <TabFav tab={tab} />}
+      </button>
+      <button className="mp-main" title={m.title + (m.artist ? ' — ' + m.artist : '') + ' · перейти на вкладку'} onClick={() => S().activate(tab.id)}>
         <span className="mp-t">
-          <b>{tab.title || hostOf(tab.url)}</b>
-          <small>
-            <span className="eq" aria-hidden="true">
-              <i />
-              <i />
-              <i />
-            </span>
-            {playing ? 'играет' : 'пауза'} · {placeOf(tab.url)}
-          </small>
+          <b>{m.title}</b>
+          <small>{m.artist || placeOf(tab.url)}</small>
         </span>
       </button>
-      <button className="mp-btn" aria-label={playing ? 'Пауза' : 'Продолжить'} onClick={toggle}>
-        <Icon name={playing ? 'pause' : 'play'} />
-      </button>
+      <div className="mp-ctl">
+        {m.actions.includes('previoustrack') && (
+          <button className="mp-ib" aria-label="Предыдущий трек" title="Предыдущий трек" onClick={() => mediaAction(tab, 'previoustrack')}>
+            <Icon name="skipPrev" />
+          </button>
+        )}
+        <button className="mp-btn" aria-label={playing ? 'Пауза' : 'Продолжить'} onClick={toggle}>
+          <Icon name={playing ? 'pause' : 'play'} />
+        </button>
+        {m.actions.includes('nexttrack') && (
+          <button className="mp-ib" aria-label="Следующий трек" title="Следующий трек" onClick={() => mediaAction(tab, 'nexttrack')}>
+            <Icon name="skipNext" />
+          </button>
+        )}
+      </div>
+      <MediaProgress tab={tab} playing={playing} />
     </div>
   )
 }
@@ -205,11 +277,12 @@ export function MiniPlayer({ compact = false }: { compact?: boolean }): React.JS
 export function CapsuleAudio(): React.JSX.Element | null {
   const { tab, playing, toggle } = useBackgroundAudio()
   if (!tab) return null
+  const name = tab.media?.title ? tab.media.title + (tab.media.artist ? ' — ' + tab.media.artist : '') : tab.title || hostOf(tab.url)
   return (
     <button
       className={'ib cap-aud' + (playing ? ' playing' : '')}
-      aria-label={(playing ? 'Пауза: ' : 'Продолжить: ') + (tab.title || hostOf(tab.url))}
-      title={(tab.title || hostOf(tab.url)) + (playing ? ' · пауза' : ' · продолжить')}
+      aria-label={(playing ? 'Пауза: ' : 'Продолжить: ') + name}
+      title={name + (playing ? ' · пауза' : ' · продолжить')}
       onClick={toggle}
     >
       <span className="eq" aria-hidden="true">

@@ -20,7 +20,8 @@
     "test:sync": "electron-vite build && node scripts/sync-test.mjs",
     "test:passwords": "electron-vite build && node scripts/passwords-test.mjs",
     "test:passkeys": "electron-vite build && node scripts/passkeys-test.mjs",
-    "screens": "electron-vite build && node scripts/screens.mjs"
+    "screens": "electron-vite build && node scripts/screens.mjs",
+    "test:youcloud": "electron-vite build && node scripts/youcloud-test.mjs"
   },
   "devDependencies": {
     "@fontsource-variable/fraunces": "^5.3.0",

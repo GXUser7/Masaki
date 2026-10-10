@@ -53,6 +53,21 @@ export interface Tab {
   lastActive?: number
   /** Звук поставлен на паузу из мини-плеера — плеер остаётся, чтобы можно было продолжить. */
   pausedByUs?: boolean
+  /** Что играет, по Media Session сайта (preload/media-page.ts): для мини-плеера с обложкой. */
+  media?: TabMedia
+}
+
+export interface TabMedia {
+  title: string
+  artist: string
+  album: string
+  /** Обложка: https: или data:image — остальное отброшено. */
+  artwork: string
+  /** Кнопки, которые сайт умеет сам: nexttrack, previoustrack, seekto… */
+  actions: string[]
+  playing: boolean
+  /** Где трек на момент at (мс), с какой скоростью идёт; null — длина неизвестна. */
+  position: { duration: number; position: number; rate: number; at: number } | null
 }
 
 /** Цвета групп вкладок: светлые тона, читаются и в тёмной, и в светлой теме. */

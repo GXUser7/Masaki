@@ -4,6 +4,7 @@ import { finishSwipe } from './Extras'
 import { hostOf } from '../lib/url'
 import { captureThumb, markReady, registerWebview, unregisterWebview, useStore, type Tab } from '../store'
 import { syncGlass } from '../lib/glass'
+import { isYouCloud, parseMedia, sendYouCloudTheme } from '../lib/youcloud'
 
 /** Одна вкладка = один <webview>. Неактивные просто скрыты и продолжают жить, как в Chrome. */
 export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: boolean; pane?: 'a' | 'b'; ratio?: number }): React.JSX.Element {
@@ -36,6 +37,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
           // Новая страница — новый документ: прозрачность ставим заново.
           up({ glassBg: undefined })
           void syncGlass(id)
+          if (isYouCloud(el.getURL())) sendYouCloudTheme(id)
         }
       ],
       [
@@ -76,6 +78,10 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
             case 'swipe-end':
               finishSwipe(id, Number(e.args[0]) || 0)
               break
+            case 'media':
+              // Что играет на странице (Media Session) — для мини-плеера с обложкой и кнопками.
+              up({ media: parseMedia(e.args[0]) })
+              break
           }
         }
       ],
@@ -100,7 +106,8 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
         (e: Electron.DidNavigateEvent) => {
           const prev = store().tabs.find((x) => x.id === id)
           const sameHost = prev && hostOf(prev.url) === hostOf(e.url)
-          up({ url: e.url, favicon: sameHost ? prev?.favicon : undefined })
+          // Новый документ — прежний плеер страницы ушёл вместе с ним.
+          up({ url: e.url, favicon: sameHost ? prev?.favicon : undefined, media: undefined })
           syncNav()
           store().addHistory(e.url, el.getTitle())
           // После входа или выхода из Google обновляем аватар в панели.

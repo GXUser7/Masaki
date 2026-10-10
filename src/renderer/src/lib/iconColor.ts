@@ -90,3 +90,35 @@ export function useSiteIcon(url: string): { src: string | null; colors: TileColo
   })
   return { src: iconCache.get(key) ?? null, colors: colorCache.get(key) ?? null }
 }
+
+// ---------- Цвет обложки ----------
+// Мини-плеер окрашивается в цвет обложки того, что играет, — как плеер YouCloud и Android.
+
+const artCache = new Map<string, { src: string | null; colors: TileColors | null } | null>()
+const artListeners = new Set<() => void>()
+
+async function loadArt(url: string): Promise<void> {
+  const src = await window.masaki.mediaArt(url).catch(() => null)
+  artCache.set(url, { src, colors: src ? await colorsFromIcon(src) : null })
+  artListeners.forEach((fn) => fn())
+}
+
+/** Обложка картинкой data: и цвета из неё; пока грузится — null. */
+export function useArtColors(url: string | undefined): { src: string | null; colors: TileColors | null } | null {
+  const [, force] = useState(0)
+  useEffect(() => {
+    const fn = (): void => force((n) => n + 1)
+    artListeners.add(fn)
+    return () => {
+      artListeners.delete(fn)
+    }
+  }, [])
+  useEffect(() => {
+    if (!url || artCache.has(url)) return
+    // Кэш не растёт без конца: обложек за вечер набирается много.
+    if (artCache.size > 60) artCache.delete(artCache.keys().next().value!)
+    artCache.set(url, null)
+    void loadArt(url)
+  }, [url])
+  return url ? (artCache.get(url) ?? null) : null
+}

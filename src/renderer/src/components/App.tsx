@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { isYouCloud, sendYouCloudTheme } from '../lib/youcloud'
 import { handleCommand } from '../actions'
 import { commandFor } from '../../../shared/shortcuts'
 import { shapes } from '../lib/shapes'
@@ -161,6 +162,8 @@ export function App(): React.JSX.Element {
 
   useLayoutEffect(() => {
     applyTokens(document.documentElement, tokensFor(settings.palette, dark, dynamic, settings.customColor))
+    // YouCloud во вкладках берёт тему браузера: сменилась палитра или светлота — и у него тоже.
+    sendYouCloudTheme()
   }, [settings.palette, settings.customColor, dark, dynamic])
 
   // Сворачивание панели: страница сразу встаёт на новое место (один пересчёт вёрстки сайта),
@@ -224,6 +227,8 @@ export function App(): React.JSX.Element {
 
   if (!booted || !active) return <div className={'app ' + (dark ? 'dark' : 'light')} />
 
+  // YouCloud прозрачен сам (в Masaki у него нет своего фона): под ним то же стекло, что у панели.
+  const yc = active.kind === 'web' && isYouCloud(active.url)
   const cls = [
     'app',
     dark ? 'dark' : 'light',
@@ -256,8 +261,8 @@ export function App(): React.JSX.Element {
             className={
               'card' +
               (active.kind === 'web' ? ' page' : ' glass') +
-              (active.kind === 'web' && active.glassBg ? ' glassy' : '') +
-              (active.kind === 'web' && matchesPanel(active.glassBg, dark) ? ' match' : '') +
+              (active.kind === 'web' && (active.glassBg || yc) ? ' glassy' : '') +
+              (active.kind === 'web' && (yc || matchesPanel(active.glassBg, dark)) ? ' match' : '') +
               (photo ? ' photo' : '') +
               (sp ? ' split' : '')
             }
@@ -267,7 +272,7 @@ export function App(): React.JSX.Element {
                 : undefined
             }
           >
-            {active.kind === 'web' && matchesPanel(active.glassBg, dark) && <Grain />}
+            {active.kind === 'web' && (yc || matchesPanel(active.glassBg, dark)) && <Grain />}
             {webTabs.map((t) => (
               <WebView key={t.id} tab={t} active={t.id === active.id} pane={pane(t.id)} ratio={sp?.ratio ?? 0.5} />
             ))}

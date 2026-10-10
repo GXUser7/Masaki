@@ -3892,6 +3892,123 @@ input {
   }
 }
 
+/* ---------- Мини-плеер с обложкой (Media Session сайта: YouCloud, YouTube, SoundCloud…) ---------- */
+.mplayer.rich {
+  position: relative;
+  gap: 8px;
+  padding: 6px 6px 10px;
+  overflow: hidden;
+  transition: background-color 0.6s ease;
+}
+/* Цвет обложки: в тёмной теме — тёмный тон её палитры, в светлой — светлый, поверх стекла. */
+.mplayer.rich.tinted {
+  background: color-mix(in oklab, var(--mp-l) 72%, var(--glass-hi));
+}
+.dark .mplayer.rich.tinted {
+  background: color-mix(in oklab, var(--mp-d) 66%, var(--glass-hi));
+}
+.mplayer.rich .mp-main {
+  padding: 0;
+}
+.mp-art {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border: 0;
+  padding: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--glass-hi);
+  cursor: pointer;
+  transition:
+    border-radius 0.5s var(--spring),
+    transform 0.35s var(--snap);
+}
+/* Играет — обложка скругляется в круг, пауза — снова мягкий квадрат (язык M3 Expressive). */
+.mplayer.rich.playing .mp-art {
+  border-radius: 22px;
+}
+.mp-art:active {
+  transform: scale(0.92);
+}
+.mp-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.mp-ctl {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.mplayer.rich .mp-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+}
+.mp-ib {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border: 0;
+  padding: 0;
+  border-radius: 15px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--on-surface);
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    border-radius 0.45s var(--spring),
+    transform 0.35s var(--snap);
+}
+.mp-ib:hover {
+  background: var(--hov);
+  border-radius: 10px;
+}
+.mp-ib:active {
+  transform: scale(0.86);
+}
+.mp-ib svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+.mp-prog {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 0;
+  height: 9px;
+  display: flex;
+  align-items: center;
+}
+.mp-prog.seek {
+  cursor: pointer;
+}
+.mp-prog::before {
+  content: '';
+  position: absolute;
+  inset: 3px 0;
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--on-surface) 14%, transparent);
+}
+.mp-prog i {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--primary);
+  transform-origin: left center;
+  transition: transform 1s linear;
+}
+
 /* ---------- Низ панели: аккаунт, загрузки, история, меню ---------- */
 .side-bottom {
   flex: none;
