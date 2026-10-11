@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Masaki test action",
+  "version": "1.0",
+  "description": "Кнопка, окно, бейдж и пункт меню для автотеста Masaki",
+  "icons": { "32": "icon.png" },
+  "action": { "default_title": "Тест Masaki", "default_popup": "popup.html", "default_icon": "icon.png" },
+  "background": { "service_worker": "bg.js" },
+  "permissions": ["contextMenus"],
+  "options_page": "options.html"
+}

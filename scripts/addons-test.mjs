@@ -12,7 +12,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'masaki-addons-'))
 // Тестовое расширение подключаем через настройки профиля — окно выбора папки автотест не откроет.
 fs.writeFileSync(
   path.join(profile, 'settings.json'),
-  JSON.stringify({ addons: { extensions: [path.join(fixtures, 'ext-banner')] } })
+  JSON.stringify({ addons: { extensions: [path.join(fixtures, 'ext-banner'), path.join(fixtures, 'ext-action')] } })
 )
 
 const app = await electron.launch({ args: [root], cwd: root, env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile }, timeout: 60000 })
@@ -215,6 +215,66 @@ try {
   await open('https://example.com/')
   await page.waitForTimeout(4000)
   await shot('26-extension-banner')
+
+  // Кнопка расширения (chrome.action): «пазл» у адреса, список, закрепление, бейдж, всплывающее окно.
+  console.log('шаг кнопка расширения')
+  if (!exts.some((n) => n.includes('Masaki test action'))) throw new Error('тестовое расширение с кнопкой не загрузилось: ' + exts.join(', '))
+  await page.waitForSelector('.abar-side .a-ext-menu', { timeout: 10000 })
+  await page.click('.abar-side .a-ext-menu')
+  await page.waitForSelector('.pop.extensions .ext-row')
+  const rows = await page.$$eval('.pop.extensions .ext-row-t', (els) => els.map((e) => e.textContent))
+  if (!rows.some((t) => t.includes('Masaki test action'))) throw new Error('в списке расширений нет тестового: ' + rows.join(', '))
+  await page.waitForTimeout(400)
+  await shot('27-ext-menu')
+  await page.click('.pop.extensions .ext-row:has-text("Masaki test action") .ext-pin')
+  await page.waitForSelector('.abar-side .ext-act')
+  await page.click('.pop-scrim', { position: { x: 900, y: 500 } })
+  // Бейдж ставит фон расширения (service worker) — ждём, пока дойдёт.
+  await page.waitForFunction(() => document.querySelector('.abar-side .ext-act .ext-badge')?.textContent === '3', null, { timeout: 8000 })
+  const iconOk = await page.$eval('.abar-side .ext-act img', (img) => img.complete && img.naturalWidth > 0)
+  if (!iconOk) throw new Error('значок кнопки расширения не загрузился (crx://)')
+  await shot('27b-ext-pinned')
+
+  const popupUrl = () =>
+    app.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.webContents.getURL().includes('popup.html'))
+      return w ? { url: w.webContents.getURL(), bounds: w.getBounds(), visible: w.isVisible() } : null
+    })
+  await page.click('.abar-side .ext-act')
+  let pop = null
+  for (let i = 0; i < 20 && !(pop?.visible); i++) {
+    await page.waitForTimeout(250)
+    pop = await popupUrl()
+  }
+  console.log('окно расширения:', JSON.stringify(pop))
+  if (!pop?.visible || pop.bounds.width < 100) throw new Error('всплывающее окно расширения не показалось: ' + JSON.stringify(pop))
+  const popPng = await app.evaluate(async ({ BrowserWindow }) => {
+    const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('popup.html'))
+    return (await w.capturePage()).toPNG().toString('base64')
+  })
+  fs.writeFileSync(path.join(out, '27c-ext-popup.png'), Buffer.from(popPng, 'base64'))
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('popup.html'))?.destroy())
+
+  // Пункт расширения в контекстном меню страницы: щелчок доходит до фона расширения.
+  console.log('шаг меню расширения')
+  const wvBox = await page.locator('webview.wv.on').boundingBox()
+  await page.mouse.click(wvBox.x + wvBox.width / 2, wvBox.y + 200, { button: 'right' })
+  await page.waitForSelector('.cmenu.shown .cm-item:has-text("Проверить в Masaki")', { timeout: 5000 })
+  await page.waitForTimeout(300)
+  await shot('27d-ext-context-menu')
+  await page.click('.cmenu .cm-item:has-text("Проверить в Masaki")')
+  await page.waitForFunction(() => document.querySelector('.abar-side .ext-act .ext-badge')?.textContent === 'ok', null, { timeout: 5000 })
+
+  // Отключить и включить на странице «Аддоны»: кнопка пропадает и возвращается.
+  console.log('шаг отключение расширения')
+  await openAddons()
+  await page.waitForSelector('.addons-page .sc-item:has-text("Masaki test action")')
+  await shot('27e-ext-addons')
+  await page.click('.addons-page .sc-item:has-text("Masaki test action") .switch')
+  await page.waitForFunction(() => !document.querySelector('.abar-side .ext-act'), null, { timeout: 5000 })
+  if (!(await page.$('.addons-page .sc-item.ext-off:has-text("Masaki test action")'))) throw new Error('отключённое расширение пропало из списка')
+  await page.click('.addons-page .sc-item:has-text("Masaki test action") .switch')
+  await page.waitForSelector('.abar-side .ext-act', { timeout: 8000 })
 } catch (e) {
   failed = true
   console.error('ОШИБКА:', e.message)

@@ -9,6 +9,7 @@ import {
   nativeTheme,
   nativeImage,
   net,
+  protocol,
   screen,
   session,
   shell,
@@ -25,6 +26,7 @@ import * as sync from './sync'
 import * as passwords from './passwords'
 import * as passkeys from './passkeys'
 import { initYouCloud, isYouCloudExtension, overrideHeaders, watchWebview, YOUCLOUD_HEADER_URLS } from './youcloud'
+import * as extensions from './extensions'
 import { commandFor } from '../shared/shortcuts'
 import {
   defaultSettings,
@@ -145,7 +147,9 @@ function mergeSettings(saved: Partial<Settings> | null): Settings {
     addons: {
       glass: { ...defaultSettings.addons.glass, ...(a?.glass ?? {}) },
       adblock: { ...defaultSettings.addons.adblock, ...(a?.adblock ?? {}) },
-      extensions: a?.extensions ?? []
+      extensions: a?.extensions ?? [],
+      pinnedExtensions: a?.pinnedExtensions ?? [],
+      disabledExtensions: a?.disabledExtensions ?? []
     }
   }
 }
@@ -227,7 +231,8 @@ function sendPageMenu(contents: WebContents, p: ContextMenuParams): void {
       hasAudio: p.mediaFlags.hasAudio
     },
     canGoBack: nav.canGoBack(),
-    canGoForward: nav.canGoForward()
+    canGoForward: nav.canGoForward(),
+    extItems: extensions.contextMenuItems(contents, p)
   }
   win?.webContents.send('page-menu', params)
 }
@@ -390,14 +395,54 @@ async function applyAdblockNow(on: boolean): Promise<{ ok: boolean; error?: stri
 }
 
 function extInfo(e: Electron.Extension): ExtensionInfo {
-  return { id: e.id, name: e.name, version: e.version, path: e.path }
+  return extensions.infoOf(e)
+}
+
+/** Установленные расширения: загруженные и отключённые пользователем. */
+function extList(): ExtensionInfo[] {
+  const loaded = session.fromPartition(PARTITION).extensions.getAllExtensions().map(extInfo)
+  const ids = new Set(loaded.map((e) => e.id))
+  const off = settings.addons.disabledExtensions.filter((d) => !ids.has(d.id)).map(extensions.infoOfDisabled)
+  return [...loaded, ...off].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** Поменять настройки расширений из главного процесса — интерфейс узнает о них, как о пришедших с Диска. */
+function setAddons(patch: Partial<Settings['addons']>): void {
+  applySettings({ ...settings, addons: { ...settings.addons, ...patch } }, true)
+}
+
+/** Ответы на «добавить расширение?» из магазина. */
+const installPrompts = new Map<string, (allow: boolean) => void>()
+let extChangedTimer: NodeJS.Timeout | undefined
+function extChanged(): void {
+  clearTimeout(extChangedTimer)
+  extChangedTimer = setTimeout(() => win?.webContents.send('ext:changed'), 150)
+}
+
+function startExtensions(): Promise<void> {
+  return extensions.initExtensions({
+    session: session.fromPartition(PARTITION),
+    win: () => win,
+    send,
+    disabled: () => settings.addons.disabledExtensions.map((d) => d.id),
+    changed: extChanged,
+    confirmInstall: (p) =>
+      new Promise((resolve) => {
+        if (!win) return resolve(false)
+        installPrompts.get(p.id)?.(false)
+        installPrompts.set(p.id, resolve)
+        if (win.isMinimized()) win.restore()
+        win.webContents.send('ext:install-prompt', p)
+      })
+  })
 }
 
 async function loadSavedExtensions(): Promise<void> {
   const ext = session.fromPartition(PARTITION).extensions
+  const off = new Set(settings.addons.disabledExtensions.map((d) => d.path))
   for (const p of settings.addons.extensions) {
     // YouCloud встроен в Masaki: его расширение здесь не работает и мешало бы мосту.
-    if (isYouCloudExtension(p)) continue
+    if (isYouCloudExtension(p) || off.has(p)) continue
     try {
       await ext.loadExtension(p, { allowFileAccess: true })
     } catch (e) {
@@ -674,6 +719,14 @@ function runSelfTest(): void {
   const wait = Number(process.env.MASAKI_SELFTEST_WAIT ?? 8000)
   win?.webContents.once('did-finish-load', () => {
     setTimeout(() => send({ type: 'open-url', url }), 1500)
+    // Необязательное действие до снимка (например, нажать кнопку на странице) — MASAKI_SELFTEST_PRE.
+    const pre = process.env.MASAKI_SELFTEST_PRE
+    if (pre) {
+      setTimeout(async () => {
+        const guest = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && !c.isDestroyed())
+        if (guest) console.log('SELFTEST-PRE', JSON.stringify(await guest.executeJavaScript(pre, true).catch((err) => String(err))))
+      }, 1500 + wait * 0.6)
+    }
     setTimeout(async () => {
       const img = await win?.capturePage()
       if (img) fs.writeFileSync(shot, img.toPNG())
@@ -690,6 +743,7 @@ app.on('web-contents-created', (_e, contents) => {
   if (contents.getType() !== 'webview') return
   attachShortcuts(contents, true)
   watchWebview(contents)
+  extensions.trackTab(contents)
   // Ctrl+колесо над страницей: Electron масштаб сам не меняет, а только сообщает направление.
   // Применяет интерфейс (как Ctrl+=, с запоминанием в tab.zoom) в той вкладке, над которой крутили.
   contents.on('zoom-changed', (_ev, dir) => send({ type: 'zoom', delta: dir === 'in' ? 1 : -1, wcId: contents.id }))
@@ -997,7 +1051,7 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('adblock:set', (_e, on: boolean) => applyAdblock(on))
-  ipcMain.handle('ext:list', () => session.fromPartition(PARTITION).extensions.getAllExtensions().map(extInfo))
+  ipcMain.handle('ext:list', () => extList())
   ipcMain.handle('ext:add', async () => {
     if (!win) return null
     const { canceled, filePaths } = await dialog.showOpenDialog(win, {
@@ -1013,7 +1067,41 @@ function registerIpc(): void {
       return { ok: false, error: String(err) }
     }
   })
-  ipcMain.handle('ext:remove', (_e, id: string) => session.fromPartition(PARTITION).extensions.removeExtension(id))
+  ipcMain.handle('ext:remove', async (_e, id: string) => {
+    const ext = session.fromPartition(PARTITION).extensions
+    const off = settings.addons.disabledExtensions.find((d) => d.id === id)
+    const dir = ext.getExtension(id)?.path ?? off?.path ?? extensions.storeExtensionPath(id)
+    if (dir && extensions.infoOfDisabled({ id, name: '', path: dir }).store) await extensions.removeStoreExtension(id)
+    else if (ext.getExtension(id)) ext.removeExtension(id)
+    setAddons({
+      extensions: settings.addons.extensions.filter((p) => p !== dir),
+      pinnedExtensions: settings.addons.pinnedExtensions.filter((x) => x !== id),
+      disabledExtensions: settings.addons.disabledExtensions.filter((d) => d.id !== id)
+    })
+    extChanged()
+  })
+  // Отключить — выгрузить и запомнить, где лежит; включить — загрузить оттуда же. Удалять не нужно.
+  ipcMain.handle('ext:enable', async (_e, id: string, on: boolean) => {
+    const ext = session.fromPartition(PARTITION).extensions
+    if (!on) {
+      const e = ext.getExtension(id)
+      if (!e) return
+      ext.removeExtension(id)
+      setAddons({ disabledExtensions: [...settings.addons.disabledExtensions.filter((d) => d.id !== id), { id, name: e.name, path: e.path }] })
+    } else {
+      const d = settings.addons.disabledExtensions.find((x) => x.id === id)
+      if (!d) return
+      setAddons({ disabledExtensions: settings.addons.disabledExtensions.filter((x) => x.id !== id) })
+      await ext.loadExtension(d.path, { allowFileAccess: !extensions.infoOfDisabled(d).store }).catch((err) => console.error('Не удалось включить расширение', err))
+    }
+    extChanged()
+  })
+  ipcMain.on('ext:install-answer', (_e, id: string, allow: boolean) => {
+    installPrompts.get(id)?.(!!allow)
+    installPrompts.delete(id)
+  })
+  ipcMain.on('ext:active-tab', (_e, wcId: number) => extensions.selectTab(Number(wcId)))
+  ipcMain.on('ext:menu-click', (_e, index: number) => extensions.clickMenuItem(Number(index)))
 
   ipcMain.on('permission:answer', (_e, id: string, allow: boolean, remember: boolean) => {
     const done = pendingPermissions.get(id)
@@ -1171,6 +1259,9 @@ async function googleAccounts(): Promise<GoogleAccount[]> {
 
 // ---------- Запуск ----------
 
+// Значки кнопок расширений интерфейс берёт по адресу crx://extension-icon/… (обслуживает electron-chrome-extensions).
+protocol.registerSchemesAsPrivileged([{ scheme: 'crx', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
+
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
@@ -1211,6 +1302,8 @@ if (!app.requestSingleInstanceLock()) {
       openUrl: (url) => send({ type: 'open-url', url }),
       closeTab: (wcId, then) => send({ type: 'close-wc', wcId, then })
     })
+    // До окна: вкладки должны сразу попадать к расширениям, а установленные из магазина — быть загружены.
+    await startExtensions().catch((e) => console.error('Расширения не запустились', e))
     void loadSavedExtensions()
     if (settings.addons.adblock.enabled) void applyAdblock(true)
     createWindow(await windowFile.read())

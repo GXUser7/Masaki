@@ -31,6 +31,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
         () => {
           markReady(id)
           syncNav()
+          if (store().activeId === id) window.masaki.extensions.activeTab(el.getWebContentsId())
           const t = store().tabs.find((x) => x.id === id)
           if (t?.zoom) el.setZoomLevel(t.zoom)
           if (t?.muted) el.setAudioMuted(true)

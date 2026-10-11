@@ -182,6 +182,15 @@ export function AddressLabel({ tab }: { tab: Tab }): React.JSX.Element {
       </>
     )
   }
+  // Страница расширения (параметры, окно мастера): вместо длинного chrome-extension://<id> — её название.
+  if (tab.url.startsWith('chrome-extension://')) {
+    return (
+      <>
+        <Icon name="extension" />
+        <span className="addr-t">{tab.title || 'Страница расширения'}</span>
+      </>
+    )
+  }
   const query = searchQueryOf(tab.url)
   if (query) {
     return (

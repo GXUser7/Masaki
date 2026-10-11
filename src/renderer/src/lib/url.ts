@@ -14,7 +14,7 @@ export function aiModeUrl(q: string): string {
   return q.trim() ? 'https://www.google.com/search?udm=50&q=' + encodeURIComponent(q) : 'https://www.google.com/ai'
 }
 
-const SCHEME = /^(https?|file|view-source|about|data|chrome|masaki):/i
+const SCHEME = /^(https?|file|view-source|about|data|chrome|chrome-extension|masaki):/i
 
 export function looksLikeAddress(text: string): boolean {
   const t = text.trim()

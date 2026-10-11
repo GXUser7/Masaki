@@ -14,14 +14,15 @@ import {
 import { shapes } from '../lib/shapes'
 import QRCode from 'qrcode'
 import { hostOf } from '../lib/url'
-import type { TabGroup } from '../../../shared/types'
+import type { ExtAction, ExtensionInfo, TabGroup } from '../../../shared/types'
+import { actionFor, actionIcon, badgeColor, pressAction, STORE_URL, togglePin, useExtensions } from '../lib/extensions'
 import { useStore, type Tab } from '../store'
 import { Icon } from './Icon'
 import { AddressLabel, Grain, ShapeTile, TabFav, useHoverOverPage } from './parts'
 import { LoadFill, MiniPlayer, WinButtons } from './Extras'
 import { openYouCloud } from '../lib/youcloud'
 import { syncStatusText } from './SyncSection'
-import { openGroupMenu, openTabMenu, openTileMenu } from '../menus'
+import { openExtMenu, openGroupMenu, openTabMenu, openTileMenu } from '../menus'
 
 function useActive(): Tab {
   return useStore((s) => s.tabs.find((t) => t.id === s.activeId) ?? s.tabs[0])
@@ -61,11 +62,139 @@ function AddressBar({ where }: { where: 'side' | 'cap' }): React.JSX.Element {
           <Icon name={fav ? 'starFilled' : 'star'} />
         </button>
       )}
+      <ExtButtons />
       <button className="ib a-rel" aria-label={t.loading ? 'Остановить' : 'Обновить'} title={t.loading ? 'Остановить' : 'Обновить · Ctrl+R'} disabled={!web} onClick={() => reloadOrStop()}>
         <Icon name={t.loading ? 'close' : 'reload'} />
       </button>
     </div>
   )
+}
+
+// ---------- Кнопки расширений ----------
+
+/** Где стояла кнопка «Расширения», когда открыли список: у неё же откроется окно расширения. */
+let extAnchor: DOMRect | null = null
+
+function ExtActionButton({ action, tabId, info }: { action: ExtAction; tabId: number; info?: ExtensionInfo }): React.JSX.Element {
+  const a = actionFor(action, tabId)
+  const name = a.title || info?.name || 'Расширение'
+  return (
+    <button
+      className="ib ext-act"
+      aria-label={name}
+      title={name}
+      onClick={(e) => pressAction(action.id, tabId, e.currentTarget.getBoundingClientRect())}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        openExtMenu(e.clientX, e.clientY, action.id, info)
+      }}
+    >
+      <img src={actionIcon(action.id, tabId, a.iconModified)} alt="" draggable={false} />
+      {a.text && (
+        <b className="ext-badge" style={{ background: badgeColor(a.color) }}>
+          {a.text}
+        </b>
+      )}
+    </button>
+  )
+}
+
+/** Закреплённые кнопки расширений и «Расширения» со всеми остальными — как справа от адреса в Chrome. */
+function ExtButtons(): React.JSX.Element | null {
+  const { actions, list, tabId } = useExtensions()
+  const pinned = useStore((s) => s.settings.addons.pinnedExtensions)
+  const open = useStore((s) => s.popover === 'extensions')
+  if (!actions.length) return null
+  const shown = pinned.map((id) => actions.find((a) => a.id === id)).filter((a): a is ExtAction => !!a)
+  return (
+    <span className="a-ext">
+      {shown.map((a) => (
+        <ExtActionButton key={a.id} action={a} tabId={tabId} info={list.find((x) => x.id === a.id)} />
+      ))}
+      <button
+        className={'ib a-ext-menu' + (open ? ' on' : '')}
+        aria-label="Расширения"
+        aria-expanded={open}
+        title="Расширения"
+        onClick={(e) => {
+          extAnchor = e.currentTarget.getBoundingClientRect()
+          useStore.getState().setPopover(open ? null : 'extensions')
+        }}
+      >
+        <Icon name="extension" />
+      </button>
+    </span>
+  )
+}
+
+/** Список расширений у кнопки «Расширения»: открыть, закрепить, перейти к управлению или в магазин. */
+function ExtensionsMenu({ close }: { close: () => void }): React.JSX.Element {
+  const { actions, list, tabId } = useExtensions()
+  const pinned = useStore((s) => s.settings.addons.pinnedExtensions)
+  const s = useStore.getState
+  return (
+    <>
+      <div className="pop-h">Расширения</div>
+      {actions.map((action) => {
+        const info = list.find((x) => x.id === action.id)
+        const a = actionFor(action, tabId)
+        const on = pinned.includes(action.id)
+        const name = info?.name || a.title || action.id
+        return (
+          <div key={action.id} className="ext-row">
+            <button
+              className="ext-row-main"
+              title={a.title || name}
+              onClick={() => {
+                close()
+                if (extAnchor) pressAction(action.id, tabId, extAnchor)
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                openExtMenu(e.clientX, e.clientY, action.id, info)
+              }}
+            >
+              <span className="ext-row-ic">
+                <img src={actionIcon(action.id, tabId, a.iconModified)} alt="" draggable={false} />
+                {a.text && (
+                  <b className="ext-badge" style={{ background: badgeColor(a.color) }}>
+                    {a.text}
+                  </b>
+                )}
+              </span>
+              <span className="ext-row-t">{name}</span>
+            </button>
+            <button
+              className={'ib ext-pin' + (on ? ' on' : '')}
+              aria-label={on ? `Открепить «${name}»` : `Закрепить «${name}» у адреса`}
+              aria-pressed={on}
+              title={on ? 'Открепить' : 'Закрепить у адреса'}
+              onClick={() => togglePin(action.id)}
+            >
+              <Icon name="pin" />
+            </button>
+          </div>
+        )
+      })}
+      <div className="cm-sep" />
+      <button className="mi" onClick={() => (close(), s().openAddons())}>
+        <Icon name="extension" /> Управление расширениями
+      </button>
+      <button className="mi" onClick={() => (close(), s().newTab(STORE_URL))}>
+        <Icon name="openInNew" /> Chrome Web Store
+      </button>
+    </>
+  )
+}
+
+/** Место списка расширений: под кнопкой в панели, над ней в доке; не выходит за окно. */
+function extPopStyle(): React.CSSProperties | undefined {
+  if (!extAnchor) return undefined
+  const w = 320
+  const left = Math.max(8, Math.min(extAnchor.right - w, window.innerWidth - w - 8))
+  return useStore.getState().settings.sidebarCollapsed
+    ? { left, right: 'auto', top: 'auto', bottom: window.innerHeight - extAnchor.top + 8, width: w }
+    : { left: Math.max(8, Math.min(extAnchor.left - 8, window.innerWidth - w - 8)), right: 'auto', top: extAnchor.bottom + 8, bottom: 'auto', width: w }
 }
 
 function DownloadsButton(): React.JSX.Element {
@@ -579,12 +708,14 @@ export function Popover(): React.JSX.Element | null {
   return (
     <>
       <button className="pop-scrim" aria-label="Закрыть меню" onClick={close} />
-      <div className={'glass pop ' + popover} role="menu">
+      <div className={'glass pop ' + popover} role="menu" style={popover === 'extensions' ? extPopStyle() : undefined}>
         <Grain />
         {popover === 'qr' ? (
           <QrCode url={qrUrl} />
         ) : popover === 'tabs' ? (
           <TabsList close={close} />
+        ) : popover === 'extensions' ? (
+          <ExtensionsMenu close={close} />
         ) : popover === 'accounts' ? (
           <>
             <div className="pop-h">Аккаунты Google</div>

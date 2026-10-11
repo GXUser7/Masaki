@@ -87,6 +87,8 @@ export interface PageMenuParams {
   pageURL: string
   canGoBack: boolean
   canGoForward: boolean
+  /** Пункты расширений (chrome.contextMenus). */
+  extItems?: ExtMenuItem[]
 }
 
 export type PageAction =
@@ -122,6 +124,10 @@ export interface AddonSettings {
   adblock: { enabled: boolean }
   /** Пути к распакованным расширениям Chrome. */
   extensions: string[]
+  /** Закреплённые кнопки расширений (id) — видны в адресной капсуле. Своё у каждого компьютера. */
+  pinnedExtensions: string[]
+  /** Отключённые расширения: не загружаются, но остаются установленными. */
+  disabledExtensions: { id: string; name: string; path: string }[]
 }
 
 export interface ExtensionInfo {
@@ -129,6 +135,55 @@ export interface ExtensionInfo {
   name: string
   version: string
   path: string
+  /** Установлено из Chrome Web Store (обновляется само); иначе — распакованное из папки. */
+  store: boolean
+  enabled: boolean
+  description?: string
+  /** Значок картинкой data:. */
+  icon?: string
+  /** Страница параметров расширения (chrome-extension://…). */
+  options?: string
+}
+
+/** Запрос «добавить расширение?» — из Chrome Web Store, перед установкой. */
+export interface ExtInstallPrompt {
+  id: string
+  name: string
+  icon?: string
+  /** Что расширение сможет делать — человеческими словами. */
+  permissions: string[]
+}
+
+/** Пункт расширения в контекстном меню страницы (chrome.contextMenus); щелчок — по index. */
+export interface ExtMenuItem {
+  index: number
+  label: string
+  type: 'normal' | 'checkbox' | 'radio' | 'separator'
+  checked: boolean
+  enabled: boolean
+  children?: ExtMenuItem[]
+}
+
+/** Свойства кнопки расширения (chrome.action): общие и свои для отдельных вкладок. */
+export interface ExtActionInfo {
+  title?: string
+  popup?: string
+  /** Текст значка-бейджа и его цвет. */
+  text?: string
+  color?: string
+  /** Меняется, когда расширение сменило картинку кнопки. */
+  iconModified?: number
+}
+
+export interface ExtAction extends ExtActionInfo {
+  id: string
+  tabs: Record<string, ExtActionInfo>
+}
+
+export interface ExtActionsState {
+  /** id webContents активной вкладки. */
+  activeTabId?: number
+  actions: ExtAction[]
 }
 
 export interface Settings {
@@ -171,7 +226,9 @@ export const defaultSettings: Settings = {
   addons: {
     glass: { enabled: false, strength: 'strong', opacity: 55, match: true, exclude: [] },
     adblock: { enabled: false },
-    extensions: []
+    extensions: [],
+    pinnedExtensions: [],
+    disabledExtensions: []
   },
   favorites: [
     { title: 'Google', url: 'https://www.google.com/' },
@@ -408,6 +465,8 @@ export type Command =
   | { type: 'tab-search' }
   /** Закрыть вкладку входа (YouCloud) и вернуться во вкладку then, если она ещё открыта. */
   | { type: 'close-wc'; wcId: number; then?: number }
+  /** Сделать активной вкладку с этим webContents (просьба расширения, chrome.tabs.update). */
+  | { type: 'activate-wc'; wcId: number }
   /** Остановить загрузку страницы (клавиша «Стоп» на клавиатуре). */
   | { type: 'stop' }
   /** Звёздочка: добавить страницу в избранное или убрать (Ctrl+D). */
@@ -479,7 +538,23 @@ export interface MasakiApi {
     list(): Promise<ExtensionInfo[]>
     /** Выбрать папку распакованного расширения и загрузить его. */
     add(): Promise<{ ok: boolean; ext?: ExtensionInfo; error?: string } | null>
+    /** Удалить: из магазина — вместе с файлами, распакованное — только из Masaki. */
     remove(id: string): Promise<void>
+    setEnabled(id: string, on: boolean): Promise<void>
+    /** Список расширений поменялся (установили из магазина, обновилось, удалили). */
+    onChanged(cb: () => void): () => void
+    /** Магазин спрашивает, ставить ли расширение; ответ — answerInstall. */
+    onInstallPrompt(cb: (p: ExtInstallPrompt) => void): () => void
+    answerInstall(id: string, allow: boolean): void
+    /** Активная вкладка поменялась (id её webContents) — для chrome.tabs и состояния кнопок. */
+    activeTab(wcId: number): void
+    /** Кнопки расширений (chrome.action) и их обновления. */
+    actions(): Promise<ExtActionsState>
+    onActionsChanged(cb: () => void): () => void
+    /** Нажатие на кнопку расширения: всплывающее окно у anchor или chrome.action.onClicked. */
+    activate(id: string, tabId: number, anchor: { x: number; y: number; width: number; height: number }, alignment: string): void
+    /** Щелчок по пункту расширения в контекстном меню страницы. */
+    menuClick(index: number): void
   }
   /** Снимок страницы вкладки для превью при наведении (data URL, ширина 480). */
   captureTab(wcId: number): Promise<string | null>

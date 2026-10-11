@@ -205,8 +205,8 @@ interface Store {
   htmlFullscreen: boolean
   history: HistoryEntry[]
   downloads: DownloadInfo[]
-  /** tabs — список всех вкладок дока («ещё N»). */
-  popover: null | 'downloads' | 'menu' | 'accounts' | 'qr' | 'tabs'
+  /** tabs — список всех вкладок дока («ещё N»), extensions — кнопки расширений. */
+  popover: null | 'downloads' | 'menu' | 'accounts' | 'qr' | 'tabs' | 'extensions'
   /** Адрес для QR-кода страницы. */
   qrUrl: string
   winMaximized: boolean

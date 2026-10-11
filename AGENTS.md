@@ -38,7 +38,9 @@ src/main/sync.ts         синхронизация через Google Диск: 
 src/main/passwords.ts    менеджер паролей: хранение (safeStorage), импорт CSV, автозаполнение, предложения
 src/main/passkeys.ts     ключи доступа (passkey): свой аутентификатор — создание, подпись, хранение, синхронизация
 src/main/youcloud.ts     YouCloud: мост вместо его расширения (запросы к Яндексу/YouTube, входы вкладками)
-src/main/ytdlp.ts        звук YouTube для YouCloud через yt-dlp (скачивает, обновляет, запускает)
+src/main/ytdlp.ts        звук YouTube для YouCloud через yt-dlp (скачивает, обновляет, запускает, ретранслятор)
+src/main/extensions.ts   расширения Chrome: вкладки для chrome.tabs, кнопки и окна, меню
+                         (electron-chrome-extensions), установка из Chrome Web Store (electron-chrome-web-store)
 src/preload/index.ts     мост window.masaki для интерфейса (типы — MasakiApi в shared/types.ts)
 src/preload/guest.ts     скрипт для страниц во вкладках: вход в Google, поля входа (автозаполнение, сохранение)
 src/preload/passkey-page.ts подмена navigator.credentials в мире страницы (сериализуется, без ссылок наружу)
@@ -56,11 +58,13 @@ src/renderer/src/
   lib/glass.ts           аддон «Прозрачные сайты»: когда и в какую вкладку ставить скрипт
   lib/glass-page.js      сам скрипт для страницы (импортируется как ?raw)
   lib/youcloud.ts        YouCloud со стороны интерфейса: открыть/искать, тема для сайта, кнопки Media Session
+  lib/extensions.ts      кнопки расширений со стороны интерфейса: состояние, значки crx://, нажатие, закрепление
   components/            App, Chrome (боковая панель, капсула, меню, загрузки, аккаунты),
                          Extras (кнопки окна и раскладки, превью, мини-плеер, волна загрузки,
                          «взгляд», две вкладки рядом, жест «назад»),
                          Palette, NewTab, Clock, SettingsPage, SyncSection, PasswordsPage,
                          PasswordUi (плашка «сохранить пароль», список у поля входа), AddonsPage,
+                         ExtInstall (окно «Добавить расширение?» из Chrome Web Store),
                          Menu, Permissions, WebView, parts, Icon
   styles/app.css         все стили; цвета — CSS-переменные, их ставит theme.ts
 scripts/                 smoke, addons-test, import-test, sync-test (+ mock-google), passwords-test, perf,
@@ -73,7 +77,8 @@ scripts/fixtures/        тестовые страницы, ролик, расп
 permissions.json, window.json, custom-wallpaper.*, adblock-engine.bin, sync.json (состояние синхронизации),
 sync-auth.bin (ключ Google, токен входа и ключ паролей, зашифрованы safeStorage — на другом компьютере
 не расшифруются), passwords.json (пароли, каждый зашифрован safeStorage; логины и сайты — открыто, как у Chrome),
-passkeys.json (ключи доступа: закрытый ключ PKCS#8 зашифрован safeStorage, сайт и имя — открыто). Вкладки живут в сессии
+passkeys.json (ключи доступа: закрытый ключ PKCS#8 зашифрован safeStorage, сайт и имя — открыто),
+Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`). Вкладки живут в сессии
 `persist:frost` — имя осталось от старого названия, в ней куки и входы пользователя: **не переименовывать**.
 
 ### Как устроены вкладки
@@ -178,8 +183,45 @@ passkeys.json (ключи доступа: закрытый ключ PKCS#8 за�
   Сначала без входа, при отказе — с куками youtube.com во временном файле (удаляется после запуска);
   прокси — как у сессии вкладок (`resolveProxy`), иначе ссылка googlevideo привязана к другому IP.
   Скачивается заранее, когда сайт говорит hello. Если yt-dlp не смог — сайт пробует своих клиентов.
+- **yt-dlp ходит в сеть через Masaki** — ретранслятор в `ytdlp.ts`: CONNECT-прокси на 127.0.0.1 с паролем
+  этого запуска, только к YouTube/Google и порту 443; соединения открывает главный процесс тем же путём,
+  что и вкладки (их прокси HTTP/SOCKS или напрямую). Иначе VPN «только для Masaki» (правило по программе
+  в Clash, раздельное туннелирование) не видит yt-dlp.exe, ссылка выдаётся одному IP, а играет её <audio>
+  с другого — часть треков молчит (так было у пользователя 2026-10-11). Проверка — `test:youcloud`
+  (ссылка yt-dlp должна сыграть в `<audio>` вкладки).
 - Палитра: команда «YouCloud», пауза/следующий/предыдущий трек, строка «Найти в YouCloud» (если YouCloud
   открывали) → `#/search/<запрос>`.
+
+### Расширения Chrome (src/main/extensions.ts, lib/extensions.ts)
+
+- Electron умеет только загрузить расширение. Вкладки, кнопки (chrome.action), их всплывающие окна,
+  contextMenus, cookies, windows даёт **electron-chrome-extensions** (лицензия на выбор GPL-3 или платная —
+  у Masaki GPL-3, `license: 'GPL-3.0'`), установку и автообновление из Chrome Web Store —
+  **electron-chrome-web-store** (MIT). Обе — runtime-зависимости (`dependencies`): свои preload ищут в
+  node_modules и ставят сессии вкладок (`registerPreloadScript`); webRequest сессии не трогают.
+- Вкладки (webview) библиотека видит как вкладки окна Masaki: `trackTab` в `web-contents-created`, активную
+  интерфейс сообщает сам (`ext:active-tab`). Создать/выбрать/закрыть вкладку по просьбе расширения может только
+  интерфейс — main шлёт команды (`open-url`, `activate-wc`, `close-wc`) и ждёт webview. Своё «выбрать вкладку»
+  библиотеки на наших же вызовах не должно дёргать интерфейс (флаг `internal`), иначе первая созданная при
+  запуске вкладка становилась бы активной.
+- Кнопки рисует интерфейс Masaki (не `<browser-action-list>`): состояние — `crx-msg-remote` с сессией
+  `persist:frost` (`browserAction.getState/activate/addObserver`, событие `browserAction.update`), значки —
+  `crx://extension-icon/<id>/32/2?tabId=…&partition=persist:frost` (схема `crx` объявлена привилегированной,
+  `handleCRXProtocol` на сессии окна, `crx:` в CSP). «Пазл» и закреплённые кнопки — в адресной капсуле
+  (`ExtButtons`); закреплённые (`addons.pinnedExtensions`) и отключённые (`addons.disabledExtensions`) —
+  своё у компьютера, в синхронизацию не входят. Всплывающее окно — отдельное окно библиотеки у кнопки
+  (снизу в панели, сверху в доке).
+- Установка из магазина: кнопка «Установить» на chromewebstore.google.com → `beforeInstall` → окно Masaki
+  `ExtInstallSheet` (разрешения человеческими словами из manifest) → да/нет. Магазин при этом показывает
+  плашку «перейдите на Chrome» — косметика, установка работает. MV2 магазин не ставит.
+- Не работают: declarativeNetRequest (блокировщики вроде uBO Lite — у Masaki свой), `chrome.webRequest`
+  (Electron отдаёт события только одному обработчику, а webRequest сессии занят входом Google, YouCloud и
+  Ghostery), расширения, которым нужен вход в Chrome или nativeMessaging.
+- **Под Playwright Chromium не шлёт `preferred-size-changed`** — окно расширения оставалось бы невидимым
+  25×25. Поэтому, если события нет за 0,5 с, main меряет страницу окна сам и подаёт это событие.
+- Тест — шаги «кнопка расширения», «меню расширения», «отключение» в `test:addons` (расширение
+  `scripts/fixtures/ext-action`). Магазин — это сайт Google: только самопроверкой без автоматизации
+  (`MASAKI_SELFTEST_PRE` — выражение во вкладке до снимка, например нажать «Установить»), и редко.
 
 ## Решения, утверждённые пользователем (не менять без просьбы)
 
@@ -255,6 +297,7 @@ passkeys.json (ключи доступа: закрытый ключ PKCS#8 за�
    MASAKI_PROFILE=<временная папка> MASAKI_SELFTEST_URL=<адрес> MASAKI_SELFTEST_SHOT=<png> \
    MASAKI_SELFTEST_WAIT=8000 MASAKI_SELFTEST_EVAL="<выражение во вкладке>" npx electron .
    ```
+   `MASAKI_SELFTEST_PRE` — выражение во вкладке до снимка (нажать кнопку на странице).
    И даже так не долбить Google часто.
 4. Тесты всегда запускаются с `MASAKI_PROFILE` во временной папке — профиль пользователя не трогать.
    И с `MASAKI_TEST_INACTIVE=1`: окно открывается без фокуса, иначе то, что пользователь печатает
@@ -304,9 +347,9 @@ passkeys.json (ключи доступа: закрытый ключ PKCS#8 за�
   `Origin: https://www.google.com`.
 - `onBeforeSendHeaders` у сессии может быть только один — его занимает вход в Google. Блокировщик
   (Ghostery) использует onBeforeRequest/onHeadersReceived; его включение сериализовано очередью.
-- `@ghostery/adblocker-electron` — **единственная runtime-зависимость** (в `dependencies`): он ищет свой
-  preload через node_modules, вшивать его в бандл нельзя. Всё остальное — devDependencies, Vite
-  собирает это в бандл.
+- Runtime-зависимости (`dependencies`) — только `@ghostery/adblocker-electron`, `electron-chrome-extensions`
+  и `electron-chrome-web-store`: они ищут свои preload через node_modules, вшивать их в бандл нельзя.
+  Всё остальное — devDependencies, Vite собирает это в бандл.
 - Серые обои: библиотека цветов без запасного цвета подставляет синий Google — для них монохромная
   схема (`paletteFromImage`).
 - **Прозрачные сайты**: фон у `html` сайты задают и через `!important` (YouTube) — снимаем инлайн-стилем
@@ -372,8 +415,8 @@ passkeys.json (ключи доступа: закрытый ключ PKCS#8 за�
 
 ## Чего пока нет
 
-- Кнопок и всплывающих окон расширений Chrome (работают только расширения, меняющие страницы),
-  установки из Chrome Web Store.
+- У расширений Chrome: declarativeNetRequest и chrome.webRequest, горячих клавиш расширений (chrome.commands)
+  в настройках Masaki, страницы chrome://extensions — управление на странице «Аддоны».
 - У ключей доступа: входа по QR с телефона (hybrid), ключей в iframe (там встроенный WebAuthn), «тихого»
   создания ключа после входа паролем (`mediation: 'conditional'` у create), своего PIN перед входом.
 - Автозаполнения в iframe и выбора аккаунта стрелками с клавиатуры; экспорта паролей.

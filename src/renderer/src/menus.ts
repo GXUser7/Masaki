@@ -1,10 +1,11 @@
-import type { PageMenuParams, Shortcut } from '../../shared/types'
+import type { ExtensionInfo, ExtMenuItem, PageMenuParams, Shortcut } from '../../shared/types'
 import { toggleMute } from './actions'
 import type { MenuEntry } from './components/Menu'
 import { isTileColor, siteIconColors } from './lib/iconColor'
 import { isShape, shapeCycle, type ShapeName } from './lib/shapes'
 import { aiModeUrl, hostOf, searchUrl } from './lib/url'
 import { toggleGlassForSite } from './lib/glass'
+import { togglePin } from './lib/extensions'
 import { groupColors, useStore } from './store'
 
 const S = useStore.getState
@@ -150,8 +151,48 @@ export function openPageMenu(p: PageMenuParams): void {
     }
     sep()
   }
+  // Пункты расширений (chrome.contextMenus): у расширения с несколькими пунктами — его имя заголовком.
+  if (p.extItems?.length) {
+    const add = (items: ExtMenuItem[]): void => {
+      for (const it of items) {
+        if (it.type === 'separator') e.push({ kind: 'sep' })
+        else if (it.children?.length) {
+          e.push({ kind: 'header', label: it.label })
+          add(it.children)
+        } else
+          e.push({
+            kind: 'item',
+            icon: it.type !== 'normal' && it.checked ? 'check' : 'extension',
+            label: it.label,
+            disabled: !it.enabled,
+            run: () => window.masaki.extensions.menuClick(it.index)
+          })
+      }
+    }
+    add(p.extItems)
+    sep()
+  }
   e.push({ kind: 'item', icon: 'code', label: 'Просмотреть код элемента', kbd: 'F12', run: act({ type: 'inspect', x: p.x - left, y: p.y - top }) })
   S().openMenu(p.x, p.y, e)
+}
+
+/** Меню кнопки расширения: закрепить, параметры, управление, удалить. */
+export function openExtMenu(x: number, y: number, id: string, info?: ExtensionInfo): void {
+  const pinned = S().settings.addons.pinnedExtensions.includes(id)
+  S().openMenu(x, y, [
+    { kind: 'header', label: info?.name ?? 'Расширение', sub: info?.store ? 'Chrome Web Store' : info ? 'распакованное' : undefined },
+    { kind: 'item', icon: 'pin', label: pinned ? 'Открепить от адреса' : 'Закрепить у адреса', run: () => togglePin(id) },
+    ...(info?.options ? [{ kind: 'item' as const, icon: 'settings' as const, label: 'Параметры', run: () => S().newTab(info.options) }] : []),
+    { kind: 'item', icon: 'extension', label: 'Управление расширениями', run: () => S().openAddons() },
+    { kind: 'sep' },
+    {
+      kind: 'item',
+      icon: 'delete',
+      danger: true,
+      label: info?.store ? 'Удалить расширение' : 'Удалить из Masaki',
+      run: () => void window.masaki.extensions.remove(id)
+    }
+  ])
 }
 
 /** Меню вкладки: в боковой панели и в капсуле. */

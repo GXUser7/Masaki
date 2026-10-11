@@ -67,7 +67,10 @@ export function AddonsPage(): React.JSX.Element {
   const [exts, setExts] = useState<ExtensionInfo[]>([])
   const [extError, setExtError] = useState('')
   useEffect(() => {
-    void window.masaki.extensions.list().then(setExts)
+    const load = (): void => void window.masaki.extensions.list().then(setExts)
+    load()
+    // Поставили из магазина, обновилось, удалили из меню кнопки — список обновится сам.
+    return window.masaki.extensions.onChanged(load)
   }, [])
 
   return (
@@ -190,35 +193,60 @@ export function AddonsPage(): React.JSX.Element {
           icon="extension"
           shape="flower6"
           title="Расширения Chrome"
-          text="Распакованные расширения (папка с manifest.json). Работают те, что меняют страницы: стили, контент-скрипты, блокировщики. Кнопок расширений в панели пока нет."
+          text="Из Chrome Web Store — кнопкой «Установить» на странице расширения, или распакованные из папки. Кнопки расширений — у адреса, под значком пазла."
         >
           <div className="addon-body">
             {exts.length > 0 && (
               <div className="sc-edit">
                 {exts.map((x) => (
-                  <div key={x.id} className="sc-item">
+                  <div key={x.id} className={'sc-item' + (x.enabled ? '' : ' ext-off')}>
+                    {x.icon ? (
+                      <img className="ext-item-ic" src={x.icon} alt="" draggable={false} />
+                    ) : (
+                      <span className="ext-item-ic none">
+                        <Icon name="extension" />
+                      </span>
+                    )}
                     <span className="sc-item-t">
-                      <b>{x.name}</b>
-                      <small>
-                        {x.version} · {x.path}
-                      </small>
+                      <b>
+                        {x.name}
+                        <span className="ext-src">{x.store ? 'Web Store' : 'папка'}</span>
+                      </b>
+                      <small>{x.description ?? (x.store ? `версия ${x.version}` : `${x.version} · ${x.path}`)}</small>
                     </span>
+                    {x.options && x.enabled && (
+                      <button className="ib" aria-label={`Параметры ${x.name}`} title="Параметры" onClick={() => useStore.getState().newTab(x.options)}>
+                        <Icon name="settings" />
+                      </button>
+                    )}
                     <button
                       className="ib"
                       aria-label={`Удалить ${x.name}`}
+                      title={x.store ? 'Удалить расширение' : 'Удалить из Masaki (папка останется)'}
                       onClick={async () => {
                         await window.masaki.extensions.remove(x.id)
-                        set({ extensions: addons.extensions.filter((p) => p !== x.path) })
                         setExts(await window.masaki.extensions.list())
                       }}
                     >
                       <Icon name="delete" />
                     </button>
+                    <Toggle
+                      label={(x.enabled ? 'Отключить ' : 'Включить ') + x.name}
+                      on={x.enabled}
+                      onChange={async (on) => {
+                        await window.masaki.extensions.setEnabled(x.id, on)
+                        setExts(await window.masaki.extensions.list())
+                      }}
+                    />
                   </div>
                 ))}
               </div>
             )}
             <div className="set-row">
+              <button className="tonal" onClick={() => useStore.getState().newTab('https://chromewebstore.google.com/')}>
+                <Icon name="openInNew" />
+                Chrome Web Store
+              </button>
               <button
                 className="tonal"
                 onClick={async () => {
@@ -231,10 +259,15 @@ export function AddonsPage(): React.JSX.Element {
                 }}
               >
                 <Icon name="add" />
-                Загрузить распакованное…
+                Распакованное…
               </button>
               {extError && <span className="hint err-text">{extError}</span>}
             </div>
+            <p className="hint">
+              Работает большинство расширений: страницы и стили, кнопки и их окна, меню, вкладки. Не работают блокировщики
+              на declarativeNetRequest (у Masaki свой — «Блокировщик рекламы» выше) и расширения, которым нужен вход в
+              Chrome или системные программы.
+            </p>
           </div>
         </AddonCard>
       </div>

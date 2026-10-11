@@ -96,6 +96,22 @@ try {
     // не JSON
   }
   check(yt?.status === 200 && !!play, 'YouTube player через мост', `${yt?.status} ${play}`)
+  // Звук YouTube: ссылку находит yt-dlp через ретранслятор Masaki (тот же выход в сеть, что у вкладок),
+  // и её должен сыграть <audio> во вкладке — иначе при VPN «только для Masaki» ссылка не играет.
+  const st = await ask({ kind: 'yt-stream', videoId: 'dQw4w9WgXcQ' }, 90000)
+  const streamUrl = st?.value?.url ?? ''
+  check(/googlevideo\.com/.test(streamUrl), 'yt-dlp нашёл звук YouTube (через ретранслятор)', streamUrl ? 'ok' : JSON.stringify(st))
+  if (streamUrl) {
+    const playable = await inSite(`new Promise((res) => {
+      const a = new Audio()
+      a.preload = 'metadata'
+      a.onloadedmetadata = () => res('ok ' + Math.round(a.duration) + ' с')
+      a.onerror = () => res('ошибка ' + (a.error && a.error.code))
+      a.src = ${JSON.stringify(streamUrl)}
+      setTimeout(() => res('нет ответа'), 20000)
+    })`)
+    check(String(playable).startsWith('ok'), 'ссылка yt-dlp играет во вкладке', playable)
+  }
   const denied = await ask({ kind: 'fetch', request: { url: 'https://example.com/' } })
   check(String(denied?.error).includes('not allowed'), 'чужой хост мост не пускает', denied?.error)
   const account = await ask({ kind: 'call', name: 'yt-account' })

@@ -1,7 +1,7 @@
 {
   "name": "masaki",
   "productName": "Masaki",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Masaki — браузер для Windows на Chromium с матовым стеклом и Material 3 Expressive",
   "main": "out/main/index.js",
   "private": true,
@@ -104,7 +104,9 @@
     "copyright": "Masaki"
   },
   "dependencies": {
-    "@ghostery/adblocker-electron": "^2.20.1"
+    "@ghostery/adblocker-electron": "^2.20.1",
+    "electron-chrome-extensions": "^4.9.0",
+    "electron-chrome-web-store": "^0.13.0"
   },
   "homepage": "https://github.com/GXUser7/Masaki",
   "repository": {

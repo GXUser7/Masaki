@@ -5226,3 +5226,176 @@ input {
 .mac .side-top .wsep {
   display: none;
 }
+
+/* ---------- Расширения Chrome: кнопки у адреса, список, окно установки ---------- */
+.a-ext {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.ib.ext-act,
+.ib.a-ext-menu {
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+.ext-act img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+.a-ext-menu svg {
+  width: 20px;
+  height: 20px;
+}
+.a-ext-menu.on {
+  background: var(--sc);
+  color: var(--on-sc);
+}
+/* Бейдж — цвет задаёт расширение (инлайн), текст всегда белый, как в Chrome. */
+.ext-badge {
+  position: absolute;
+  right: 1px;
+  bottom: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+.capz.small .a-ext {
+  display: none;
+}
+.pop.extensions {
+  max-height: min(70vh, 520px);
+}
+.ext-row {
+  flex: none;
+  height: 44px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  transition:
+    background-color 0.2s,
+    border-radius 0.45s var(--spring);
+}
+.ext-row:hover {
+  background: var(--hov);
+  border-radius: 12px;
+}
+.ext-row-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  padding: 0 6px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.ext-row-ic {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.ext-row-ic img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+.ext-row-t {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ib.ext-pin {
+  width: 34px;
+  height: 34px;
+  margin-right: 5px;
+  color: var(--on-sv);
+  opacity: 0.55;
+}
+.ib.ext-pin svg {
+  width: 18px;
+  height: 18px;
+}
+.ext-row:hover .ext-pin,
+.ext-pin:focus-visible {
+  opacity: 1;
+}
+.ib.ext-pin.on {
+  opacity: 1;
+  color: var(--primary);
+}
+.ext-card-ic {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  margin-bottom: 4px;
+}
+.ext-perms {
+  align-self: stretch;
+  margin: 0 8px;
+  padding: 10px 14px 10px 30px;
+  border-radius: var(--r-m);
+  background: var(--glass-hi);
+  text-align: left;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.ext-perms li + li {
+  margin-top: 4px;
+}
+.pk-sub.ext-note {
+  font-size: 12.5px;
+  opacity: 0.8;
+}
+/* Страница «Аддоны»: строка расширения со значком. */
+.ext-item-ic {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 8px;
+  object-fit: contain;
+}
+.ext-item-ic.none {
+  display: grid;
+  place-items: center;
+  background: var(--glass-hi);
+}
+.ext-item-ic.none svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+.sc-item.ext-off .sc-item-t,
+.sc-item.ext-off .ext-item-ic {
+  opacity: 0.5;
+}
+.ext-src {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--glass-hi);
+  font-size: 11px;
+  font-weight: 600;
+}

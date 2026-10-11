@@ -245,6 +245,12 @@ export function handleCommand(c: Command): void {
       if (id) s.closeTab(id, false)
       break
     }
+    case 'activate-wc': {
+      // Расширение просит переключиться на вкладку (chrome.tabs.update).
+      const id = tabIdOfWebContents(c.wcId)
+      if (id) s.activate(id)
+      break
+    }
     case 'close-wc': {
       const id = tabIdOfWebContents(c.wcId)
       const back = c.then != null ? tabIdOfWebContents(c.then) : null

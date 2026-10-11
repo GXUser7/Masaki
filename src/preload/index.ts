@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   Command,
   DownloadInfo,
+  ExtInstallPrompt,
   HistoryEntry,
   MasakiApi,
   PageMenuParams,
@@ -13,6 +14,9 @@ import type {
   SyncState,
   WindowState
 } from '../shared/types'
+
+/** Сессия вкладок: в ней живут расширения. Имя осталось от прежнего названия — не переименовывать. */
+const TABS_PARTITION = 'persist:frost'
 
 function listen<T>(channel: string, cb: (value: T) => void): () => void {
   const handler = (_e: IpcRendererEvent, value: T): void => cb(value)
@@ -71,7 +75,27 @@ const api: MasakiApi = {
   extensions: {
     list: () => ipcRenderer.invoke('ext:list'),
     add: () => ipcRenderer.invoke('ext:add'),
-    remove: (id) => ipcRenderer.invoke('ext:remove', id)
+    remove: (id) => ipcRenderer.invoke('ext:remove', id),
+    setEnabled: (id, on) => ipcRenderer.invoke('ext:enable', id, !!on),
+    onChanged: (cb) => listen<void>('ext:changed', cb),
+    onInstallPrompt: (cb) => listen<ExtInstallPrompt>('ext:install-prompt', cb),
+    answerInstall: (id, allow) => ipcRenderer.send('ext:install-answer', id, !!allow),
+    activeTab: (wcId) => ipcRenderer.send('ext:active-tab', wcId),
+    // Кнопки расширений живут в electron-chrome-extensions: спрашиваем его же каналом, указывая сессию вкладок.
+    actions: async () => {
+      await ipcRenderer.invoke('crx-msg-remote', TABS_PARTITION, 'browserAction.addObserver')
+      return ipcRenderer.invoke('crx-msg-remote', TABS_PARTITION, 'browserAction.getState')
+    },
+    onActionsChanged: (cb) => listen<void>('browserAction.update', cb),
+    activate: (id, tabId, anchor, alignment) =>
+      void ipcRenderer.invoke('crx-msg-remote', TABS_PARTITION, 'browserAction.activate', {
+        eventType: 'click',
+        extensionId: id,
+        tabId,
+        anchorRect: anchor,
+        alignment
+      }),
+    menuClick: (index) => ipcRenderer.send('ext:menu-click', index)
   },
   captureTab: (wcId) => ipcRenderer.invoke('tab:capture', wcId),
   favicon: (url) => ipcRenderer.invoke('favicon', url),

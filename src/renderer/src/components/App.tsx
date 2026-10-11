@@ -4,12 +4,13 @@ import { handleCommand } from '../actions'
 import { commandFor } from '../../../shared/shortcuts'
 import { shapes } from '../lib/shapes'
 import { applyTokens, paletteFromImage, tokensFor, type PalettePair } from '../lib/theme'
-import { captureThumb, takeStageBefore, useStore } from '../store'
+import { captureThumb, takeStageBefore, useStore, wv } from '../store'
 import { Dock, ErrorView, FindBar, Popover, Sidebar } from './Chrome'
 import { ContextMenu } from './Menu'
 import { AddonsPage } from './AddonsPage'
 import { PasswordsPage } from './PasswordsPage'
 import { AutofillMenu, PasskeySheet, PasswordBar } from './PasswordUi'
+import { ExtInstallSheet } from './ExtInstall'
 import { matchesPanel, syncGlassAll } from '../lib/glass'
 import { Grain } from './parts'
 import { PermissionBar } from './Permissions'
@@ -205,6 +206,13 @@ export function App(): React.JSX.Element {
     if (activeKind === 'web') {
       const el = document.querySelector<HTMLElement>(`webview[data-tab="${activeId}"]`)
       el?.focus()
+      // Расширениям — какая вкладка активна (chrome.tabs, состояние кнопок). Не готов webview — скажет WebView.
+      try {
+        const id = wv(activeId)?.getWebContentsId()
+        if (id) window.masaki.extensions.activeTab(id)
+      } catch {
+        // webview ещё не готов
+      }
     } else {
       ;(document.activeElement as HTMLElement | null)?.blur?.()
       window.focus()
@@ -295,6 +303,7 @@ export function App(): React.JSX.Element {
           <PermissionBar />
           <PasswordBar />
           <PasskeySheet />
+          <ExtInstallSheet />
           <Dock />
         </div>
       </div>
