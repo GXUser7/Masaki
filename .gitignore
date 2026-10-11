@@ -3,3 +3,7 @@ out/
 dist/
 test-output/
 *.log
+
+# Ключ Google для синхронизации (вшивается в сборку, см. electron.vite.config.ts)
+google-oauth.json
+client_secret_*.json

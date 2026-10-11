@@ -24,11 +24,14 @@ function check(cond, msg) {
   }
 }
 
-async function launch(profile, tag) {
+// Встроенный ключ Masaki под подставным Google задаётся переменной, а не тем, что вшит в сборку.
+const BUILTIN = { MASAKI_SYNC_CLIENT: 'masaki-test.apps.googleusercontent.com:test-secret' }
+
+async function launch(profile, tag, env = {}) {
   const app = await electron.launch({
     args: [root],
     cwd: root,
-    env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url },
+    env: { ...process.env, MASAKI_SYNC_CLIENT: '', ...env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url },
     timeout: 60000
   })
   const page = await app.firstWindow()
@@ -61,6 +64,12 @@ async function shot(app, name) {
   console.log('  снимок', name)
 }
 
+// scrollIntoViewIfNeeded не докручивает страницу настроек, если раздел виден хоть краем.
+async function showSync(page) {
+  await page.evaluate(() => document.querySelector('.sy-section').scrollIntoView({ block: 'start' }))
+  await page.waitForTimeout(400)
+}
+
 async function openSettings(app, page) {
   await command(app, { type: 'settings' })
   await page.waitForSelector('.sy-section')
@@ -74,18 +83,23 @@ async function addFavorite(page, title, url) {
   await sec.locator('button:has-text("Добавить")').click()
 }
 
+// Вкладка входа: подставной Google сразу «разрешает» и возвращает на локальный адрес Masaki.
+async function waitSignedIn(page) {
+  await waitFor(async () => {
+    const s = await state(page)
+    return s.account && s.lastSync > 0 && s.status === 'idle'
+  }, 'вход и первая синхронизация')
+  await page.waitForTimeout(1800) // вкладка «Готово» закрывается, возвращаемся в настройки
+}
+
+/** Свой ключ из Google Cloud: подключить, затем «Войти через Google». */
 async function connectAndSignIn(app, page, shotName) {
   const r = await page.evaluate(() => window.masaki.sync.setClient('masaki-test.apps.googleusercontent.com', 'test-secret'))
   check(r.ok, 'ключ принят')
   await page.waitForSelector('.sy-cta')
   if (shotName) await shot(app, shotName)
   await page.click('.sy-cta')
-  // Вкладка входа: подставной Google сразу «разрешает» и возвращает на локальный адрес Masaki.
-  await waitFor(async () => {
-    const s = await state(page)
-    return s.account && s.lastSync > 0 && s.status === 'idle'
-  }, 'вход и первая синхронизация')
-  await page.waitForTimeout(1800) // вкладка «Готово» закрывается, возвращаемся в настройки
+  await waitSignedIn(page)
 }
 
 let current = null
@@ -118,11 +132,26 @@ try {
 
   // ---------- Компьютер B ----------
   console.log('Компьютер B: своё избранное, вход, слияние')
-  const B = (current = await launch(profiles[1], 'B'))
+  const B = (current = await launch(profiles[1], 'B', BUILTIN))
   await openSettings(B.app, B.page)
   await addFavorite(B.page, 'Только на B', `${mock.url}/page/Fav-B`)
   await B.page.waitForTimeout(300)
-  await connectAndSignIn(B.app, B.page)
+  // Встроенный ключ: никаких шагов в Google Cloud — сразу кнопка входа, свой ключ спрятан за ссылкой.
+  const bKey = await state(B.page)
+  check(bKey.builtinKey && !bKey.client, 'B видит встроенный ключ')
+  await B.page.waitForSelector('.sy-cta')
+  check((await B.page.locator('button:has-text("Выбрать файл ключа")').count()) === 0, 'без своего ключа нет шагов Google Cloud')
+  await showSync(B.page)
+  await shot(B.app, 'sync-02b-builtin')
+  await B.page.click('.sy-own')
+  check((await B.page.locator('button:has-text("Выбрать файл ключа")').count()) === 1, 'свой ключ можно подключить по ссылке')
+  // Вход одним кликом из меню аккаунта: ключ уже есть, настраивать нечего.
+  await B.page.click('.achip')
+  await B.page.waitForSelector('.pop.accounts .sy-mi')
+  await B.page.click('.pop.accounts .sy-mi')
+  await waitSignedIn(B.page)
+  await B.page.waitForSelector('.sy-section .sy-acc')
+  check(true, 'B вошёл встроенным ключом из меню аккаунта')
   const bSettings = await mainSettings(B.page)
   check(bSettings.palette === aPalette, 'палитра пришла из аккаунта')
   check(bSettings.favorites.some((f) => f.title === 'Только на A') && bSettings.favorites.some((f) => f.title === 'Только на B'), 'избранное объединилось')
@@ -181,6 +210,7 @@ try {
 
   await A.page.click('button:has-text("Выйти из синхронизации")')
   await waitFor(async () => !(await state(A.page)).account, 'выход')
+  await showSync(A.page)
   check(mock.log.includes('POST /revoke'), 'при выходе токен отозван')
   await A.page.waitForTimeout(400)
   await shot(A.app, 'sync-09-signed-out')

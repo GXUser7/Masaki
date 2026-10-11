@@ -334,8 +334,10 @@ export interface SyncDevice {
 }
 
 export interface SyncState {
-  /** Подключённый ключ Google (OAuth-клиент): название проекта или хвост client_id; null — ключа нет. */
+  /** Свой ключ Google (OAuth-клиент): название проекта или хвост client_id; null — своего ключа нет. */
   client: string | null
+  /** В сборку вшит ключ Masaki: свой ключ не нужен, вход — одной кнопкой. */
+  builtinKey: boolean
   account: SyncAccount | null
   /** off — не вошли; waiting — ждём подтверждения входа во вкладке Google; signin — Google отозвал вход. */
   status: 'off' | 'waiting' | 'idle' | 'syncing' | 'error' | 'signin'
@@ -573,8 +575,11 @@ export interface MasakiApi {
     pickClient(): Promise<{ ok: boolean; error?: string } | null>
     setClient(id: string, secret: string): Promise<{ ok: boolean; error?: string }>
     removeClient(): void
-    /** Вход: страница Google открывается вкладкой Masaki (external — в системном браузере). */
-    signIn(external?: boolean): Promise<{ ok: boolean; error?: string }>
+    /**
+     * Вход: страница Google открывается вкладкой Masaki (external — в системном браузере).
+     * hint — почта аккаунта, в который уже вошли: Google не спрашивает, какой выбрать.
+     */
+    signIn(external?: boolean, hint?: string): Promise<{ ok: boolean; error?: string }>
     cancelSignIn(): void
     signOut(): Promise<void>
     syncNow(): Promise<void>

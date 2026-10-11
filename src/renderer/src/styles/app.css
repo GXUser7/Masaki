@@ -3461,6 +3461,13 @@ input {
   font-size: 13px;
   margin-top: 4px;
 }
+/* Свой ключ при встроенном — запасной путь, поэтому тише основной кнопки входа. */
+.sy-own {
+  align-self: flex-start;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--on-sv);
+}
 .sy-vault-reset {
   display: flex;
   align-items: center;

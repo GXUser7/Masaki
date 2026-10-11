@@ -21,7 +21,7 @@ import { Icon } from './Icon'
 import { AddressLabel, Grain, ShapeTile, TabFav, useHoverOverPage } from './parts'
 import { LoadFill, MiniPlayer, WinButtons } from './Extras'
 import { openYouCloud } from '../lib/youcloud'
-import { syncStatusText } from './SyncSection'
+import { syncHint, syncStatusText } from './SyncSection'
 import { openExtMenu, openGroupMenu, openTabMenu, openTileMenu } from '../menus'
 
 function useActive(): Tab {
@@ -758,7 +758,12 @@ export function Popover(): React.JSX.Element | null {
             <button
               className={'mi sy-mi ' + (syncSt?.status ?? '')}
               title={syncSt?.account ? 'Аккаунт синхронизации: ' + syncSt.account.email : undefined}
-              onClick={run(() => s().openSettings())}
+              onClick={run(() => {
+                // Ключ уже есть (встроенный или свой) — настраивать нечего — сразу вход; итог (и ошибки) покажут настройки.
+                if (syncSt && !syncSt.account && (syncSt.client || syncSt.builtinKey) && syncSt.status !== 'waiting') {
+                  void window.masaki.sync.signIn(false, syncHint(accounts))
+                } else s().openSettings()
+              })}
             >
               <Icon name={syncSt?.status === 'error' || syncSt?.status === 'signin' ? 'warn' : 'sync'} />
               <span className="sy-mi-t">

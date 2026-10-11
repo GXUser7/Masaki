@@ -1017,7 +1017,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('sync:set-client', (_e, id: string, secret: string) => sync.setClient(String(id), String(secret)))
   ipcMain.on('sync:remove-client', () => sync.removeClient())
-  ipcMain.handle('sync:sign-in', (_e, external: boolean) => sync.signIn(!!external))
+  ipcMain.handle('sync:sign-in', (_e, external: boolean, hint: unknown) => sync.signIn(!!external, typeof hint === 'string' ? hint.slice(0, 320) : ''))
   ipcMain.on('sync:cancel', () => sync.cancelSignIn())
   ipcMain.handle('sync:sign-out', () => sync.signOut())
   ipcMain.handle('sync:now', () => sync.syncNow())

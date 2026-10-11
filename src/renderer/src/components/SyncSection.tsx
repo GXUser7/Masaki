@@ -39,7 +39,7 @@ export function syncStatusText(st: SyncState): string {
   }
 }
 
-/** Как получить ключ: Google не даёт сторонним браузерам встроенного ключа, его создают один раз. */
+/** Как получить свой ключ — для сборок без ключа Masaki или для тех, кто хочет свой проект в Google Cloud. */
 function KeyHowTo(): React.JSX.Element {
   const open = (url: string) => () => useStore.getState().newTab(url)
   return (
@@ -111,6 +111,36 @@ function ManualKey(): React.JSX.Element {
       {err && <p className="err-text">{err}</p>}
     </details>
   )
+}
+
+/** Свой ключ Google: файл из Google Cloud или Client ID и secret вручную. */
+function OwnKey({ note }: { note: string }): React.JSX.Element {
+  const [err, setErr] = useState<string | null>(null)
+  return (
+    <>
+      <div className="set-row">
+        <span>
+          Ключ Google
+          <small>{note}</small>
+        </span>
+        <button
+          className="tonal"
+          onClick={() => void window.masaki.sync.pickClient().then((r) => setErr(r && !r.ok ? (r.error ?? 'Не получилось') : null))}
+        >
+          <Icon name="key" />
+          Выбрать файл ключа…
+        </button>
+      </div>
+      {err && <p className="err-text">{err}</p>}
+      <KeyHowTo />
+      <ManualKey />
+    </>
+  )
+}
+
+/** Почта для подсказки Google при входе: если в Masaki вошли ровно в один аккаунт, выбирать нечего. */
+export function syncHint(accounts: { email: string }[]): string {
+  return accounts.length === 1 ? accounts[0].email : ''
 }
 
 /** Ключ шифрования паролей: придумать новый или ввести заданный на другом устройстве. */
@@ -233,56 +263,44 @@ function Devices({ st }: { st: SyncState }): React.JSX.Element | null {
 
 export function SyncSection(): React.JSX.Element {
   const st = useStore((s) => s.sync)
+  const accounts = useStore((s) => s.accounts)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [confirmWipe, setConfirmWipe] = useState(false)
   const [name, setName] = useState<string | null>(null)
+  const [ownKey, setOwnKey] = useState(false)
   const api = window.masaki.sync
 
   if (!st) return <p className="hint">…</p>
 
   const signIn = (external = false): void => {
     setErr(null)
-    void api.signIn(external).then((r) => !r.ok && r.error && setErr(r.error))
+    void api.signIn(external, syncHint(accounts)).then((r) => !r.ok && r.error && setErr(r.error))
   }
   const opt = (k: keyof SyncOptions) => (v: boolean) => api.setOptions({ [k]: v })
 
-  // 1. Ключа нет: объясняем, что это и где его взять.
-  if (!st.client) {
+  // 1. Ни своего, ни встроенного ключа (сборка без ключа Masaki): объясняем, что это и где его взять.
+  if (!st.client && !st.builtinKey) {
     return (
       <>
         <p className="hint">
           Избранное, ярлыки, оформление, история и открытые вкладки — на всех ваших компьютерах с Masaki. Данные лежат в
           скрытой папке приложения на вашем Google Диске: остальные файлы Диска Masaki не видит.
         </p>
-        <div className="set-row">
-          <span>
-            Ключ Google
-            <small>Chrome Sync закрыт для других браузеров, поэтому у Masaki свой ключ — его создают один раз в Google Cloud.</small>
-          </span>
-          <button
-            className="tonal"
-            onClick={() => void api.pickClient().then((r) => setErr(r && !r.ok ? (r.error ?? 'Не получилось') : null))}
-          >
-            <Icon name="key" />
-            Выбрать файл ключа…
-          </button>
-        </div>
-        {err && <p className="err-text">{err}</p>}
-        <KeyHowTo />
-        <ManualKey />
+        <OwnKey note="Chrome Sync закрыт для других браузеров, поэтому у Masaki свой ключ — его создают один раз в Google Cloud." />
       </>
     )
   }
 
-  // 2. Ключ есть, но вход не выполнен.
+  // 2. Ключ есть (свой или встроенный), но вход не выполнен.
   if (!st.account) {
     const waiting = st.status === 'waiting'
     return (
       <>
         <p className="hint">
           Избранное, ярлыки, оформление, история и открытые вкладки — на всех ваших компьютерах с Masaki. Данные лежат в
-          скрытой папке приложения на вашем Google Диске.
+          скрытой папке приложения на вашем Google Диске: остальные файлы Диска Masaki не видит.
+          {!st.client && ' Войдите и разрешите доступ — больше ничего настраивать не нужно.'}
         </p>
         <div className="sy-cta-row">
           <button className="sy-cta" disabled={waiting} onClick={() => signIn()}>
@@ -300,15 +318,28 @@ export function SyncSection(): React.JSX.Element {
           )}
         </div>
         {(err || st.error) && <p className="err-text">{err || st.error}</p>}
-        <div className="set-row">
-          <span>
-            Ключ Google
-            <small>Подключён · {st.client}</small>
-          </span>
-          <button className="perm-btn ghost" onClick={() => api.removeClient()}>
-            Убрать ключ
-          </button>
-        </div>
+        {st.client ? (
+          <div className="set-row">
+            <span>
+              Свой ключ Google
+              <small>
+                Подключён · {st.client}
+                {st.builtinKey && ' · уберёте — вход пойдёт через ключ Masaki'}
+              </small>
+            </span>
+            <button className="perm-btn ghost" onClick={() => api.removeClient()}>
+              Убрать ключ
+            </button>
+          </div>
+        ) : ownKey ? (
+          <OwnKey note="Необязательно: вход пойдёт через ваш проект Google Cloud, а не через ключ Masaki." />
+        ) : (
+          !waiting && (
+            <button className="sy-link sy-own" onClick={() => setOwnKey(true)}>
+              Использовать свой ключ Google Cloud
+            </button>
+          )
+        )}
       </>
     )
   }

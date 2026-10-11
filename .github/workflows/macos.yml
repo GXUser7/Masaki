@@ -19,7 +19,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # Ключ Google для синхронизации — из секретов репозитория (их нет — сборка попросит свой ключ).
       - run: npx electron-vite build
+        env:
+          MASAKI_GOOGLE_CLIENT_ID: ${{ secrets.MASAKI_GOOGLE_CLIENT_ID }}
+          MASAKI_GOOGLE_CLIENT_SECRET: ${{ secrets.MASAKI_GOOGLE_CLIENT_SECRET }}
       # Подписи Apple нет — ad hoc (identity "-" в package.json); --publish never: только файлы.
       - run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
       - uses: actions/upload-artifact@v4

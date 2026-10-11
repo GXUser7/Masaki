@@ -84,9 +84,10 @@ interface Local {
 }
 
 interface Secret {
-  clientId: string
-  clientSecret: string
-  project: string
+  /** Свой OAuth-клиент пользователя; нет — вход встроенным ключом Masaki (BUILTIN). */
+  clientId?: string
+  clientSecret?: string
+  project?: string
   refreshToken?: string
   /** Ключ шифрования паролей (выведен из фразы пользователя) и соль, с которой его вывели. */
   vaultKey?: string
@@ -136,6 +137,20 @@ const DRIVE = MOCK ? MOCK + '/drive/v3' : 'https://www.googleapis.com/drive/v3'
 const UPLOAD = MOCK ? MOCK + '/upload/drive/v3' : 'https://www.googleapis.com/upload/drive/v3'
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata'
 const SCOPES = ['openid', 'email', 'profile', DRIVE_SCOPE].join(' ')
+
+/**
+ * Ключ Masaki, вшитый при сборке (electron.vite.config.ts): с ним вход — одна кнопка, без своего проекта в
+ * Google Cloud. У настольных программ Google client secret секретом не считает: он всё равно лежит в программе.
+ * Данные при этом у каждого на своём Диске — ключ лишь называет программу. Под подставным Google настоящий
+ * ключ не трогаем: тест задаёт свой через MASAKI_SYNC_CLIENT=<id>:<secret>.
+ */
+declare const __GOOGLE_CLIENT__: { id: string; secret: string } | null
+const BUILTIN = MOCK ? mockClient() : __GOOGLE_CLIENT__
+
+function mockClient(): { id: string; secret: string } | null {
+  const [id, secret] = (process.env.MASAKI_SYNC_CLIENT ?? '').split(':')
+  return id && secret ? { id, secret } : null
+}
 
 const PERIOD = 5 * 60_000
 const VAULT = 'vault.json'
@@ -242,6 +257,11 @@ function saveSecret(): void {
   fs.writeFileSync(file, safeStorage.encryptString(JSON.stringify(secret)))
 }
 
+/** Ключ, которым входим: свой, если подключён, иначе встроенный. */
+function oauthClient(): { id: string; secret: string } | null {
+  return secret?.clientId ? { id: secret.clientId, secret: secret.clientSecret ?? '' } : BUILTIN
+}
+
 function save(): void {
   localFile.write(local, 300)
 }
@@ -257,9 +277,10 @@ function signedIn(): boolean {
 }
 
 export function getState(): SyncState {
-  const client = secret ? secret.project || '…' + secret.clientId.split('.')[0].slice(-8) : null
+  const client = secret?.clientId ? secret.project || '…' + secret.clientId.split('.')[0].slice(-8) : null
   return {
     client,
+    builtinKey: !!BUILTIN,
     account: local.account,
     status,
     lastSync: local.lastSync,
@@ -451,9 +472,11 @@ export function setClient(id: string, clientSecret: string, project = ''): { ok:
   if (!/^[\w.-]+\.apps\.googleusercontent\.com$/.test(id)) return { ok: false, error: 'Это не похоже на Client ID Google — он заканчивается на .apps.googleusercontent.com' }
   if (!clientSecret) return { ok: false, error: 'Нужен и Client secret' }
   if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: 'Шифрование Windows недоступно — ключ негде хранить безопасно' }
-  const changed = secret && secret.clientId !== id
+  // Вход привязан к ключу: другой ключ — войти заново (тот же, что встроенный, — вход остаётся).
+  const prev = oauthClient()
+  const changed = !!prev && prev.id !== id
   if (changed && signedIn()) void signOut()
-  secret = { clientId: id, clientSecret, project: project.trim(), refreshToken: changed ? undefined : secret?.refreshToken }
+  secret = { ...(changed ? {} : (secret ?? {})), clientId: id, clientSecret, project: project.trim() }
   saveSecret()
   emit()
   return { ok: true }
@@ -475,6 +498,7 @@ export function setClientFromFile(file: string): { ok: boolean; error?: string }
 
 export function removeClient(): void {
   void signOut()
+  // Без своего ключа остаётся встроенный, если он есть в сборке.
   secret = null
   saveSecret()
   emit()
@@ -484,10 +508,12 @@ export function cancelSignIn(): void {
   pendingSignIn?.()
 }
 
-export async function signIn(external = false): Promise<{ ok: boolean; error?: string }> {
-  if (!secret) return { ok: false, error: 'Сначала подключите ключ Google' }
+/** hint — почта аккаунта Google, в который уже вошли в Masaki: Google не спрашивает, какой аккаунт выбрать. */
+export async function signIn(external = false, hint = ''): Promise<{ ok: boolean; error?: string }> {
+  const client = oauthClient()
+  if (!client) return { ok: false, error: 'Сначала подключите ключ Google' }
   cancelSignIn()
-  const client = secret
+  const start = secret
   const verifier = b64url(crypto.randomBytes(32))
   const challenge = b64url(crypto.createHash('sha256').update(verifier).digest())
   const state = b64url(crypto.randomBytes(16))
@@ -526,7 +552,7 @@ export async function signIn(external = false): Promise<{ ok: boolean; error?: s
     AUTH_URL +
     '?' +
     new URLSearchParams({
-      client_id: client.clientId,
+      client_id: client.id,
       redirect_uri: redirect,
       response_type: 'code',
       scope: SCOPES,
@@ -535,7 +561,8 @@ export async function signIn(external = false): Promise<{ ok: boolean; error?: s
       state,
       access_type: 'offline',
       // Без prompt=consent Google при повторном входе не выдаёт refresh_token.
-      prompt: 'consent'
+      prompt: 'consent',
+      ...(hint ? { login_hint: hint } : {})
     }).toString()
   if (external) void shell.openExternal(url)
   else hooks.openUrl(url)
@@ -566,8 +593,8 @@ export async function signIn(external = false): Promise<{ ok: boolean; error?: s
       headers: form,
       body: new URLSearchParams({
         code: r.code,
-        client_id: client.clientId,
-        client_secret: client.clientSecret,
+        client_id: client.id,
+        client_secret: client.secret,
         redirect_uri: redirect,
         grant_type: 'authorization_code',
         code_verifier: verifier
@@ -599,7 +626,7 @@ export async function signIn(external = false): Promise<{ ok: boolean; error?: s
     local.merged = { bookmarks: false, settings: false }
     local.snapshot = {}
     local.account = account
-    secret = { ...client, refreshToken: tok.refresh_token }
+    secret = { ...(start ?? {}), refreshToken: tok.refresh_token }
     saveSecret()
     access = { token: tok.access_token, until: Date.now() + (tok.expires_in ?? 3600) * 1000 }
     status = 'idle'
@@ -641,13 +668,15 @@ export async function signOut(): Promise<void> {
 
 async function accessToken(): Promise<string> {
   if (access && access.until > Date.now() + 60_000) return access.token
-  if (!secret?.refreshToken) throw new SignInNeeded('Войдите в Google снова')
+  const client = oauthClient()
+  if (!secret?.refreshToken || !client) throw new SignInNeeded('Войдите в Google снова')
+  const own = !!secret.clientId
   const res = await net.fetch(TOKEN_URL, {
     method: 'POST',
     headers: form,
     body: new URLSearchParams({
-      client_id: secret.clientId,
-      client_secret: secret.clientSecret,
+      client_id: client.id,
+      client_secret: client.secret,
       refresh_token: secret.refreshToken,
       grant_type: 'refresh_token'
     }).toString()
@@ -655,9 +684,14 @@ async function accessToken(): Promise<string> {
   const tok = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: string }
   if (tok.error === 'invalid_grant') {
     // Отозвали доступ, сменили пароль или приложение в Google Cloud ещё в режиме «Testing» (токен живёт 7 дней).
-    throw new SignInNeeded('Google завершил вход в синхронизацию — войдите снова. Если это повторяется раз в неделю, опубликуйте приложение в Google Cloud (Audience → Publish app).')
+    throw new SignInNeeded(
+      'Google завершил вход в синхронизацию — войдите снова.' +
+        (own ? ' Если это повторяется раз в неделю, опубликуйте приложение в Google Cloud (Audience → Publish app).' : '')
+    )
   }
-  if (tok.error === 'invalid_client' || tok.error === 'unauthorized_client') throw new SignInNeeded('Google не принимает ключ — подключите ключ заново')
+  if (tok.error === 'invalid_client' || tok.error === 'unauthorized_client') {
+    throw new SignInNeeded(own ? 'Google не принимает ключ — подключите ключ заново' : 'Google не принимает ключ Masaki — обновите Masaki или подключите свой ключ')
+  }
   if (!res.ok || !tok.access_token) throw new Error(`Google не выдал доступ (${tok.error ?? res.status})`)
   access = { token: tok.access_token, until: Date.now() + (tok.expires_in ?? 3600) * 1000 }
   return access.token
@@ -670,7 +704,9 @@ async function driveError(res: Response): Promise<string> {
   const msg = body.error?.message ?? ''
   const reason = body.error?.errors?.[0]?.reason ?? ''
   if (res.status === 403 && (/has not been used|is disabled/i.test(msg) || reason === 'accessNotConfigured')) {
-    return 'В проекте Google Cloud не включён Google Drive API: APIs & Services → Library → Google Drive API → Enable.'
+    return secret?.clientId
+      ? 'В проекте Google Cloud не включён Google Drive API: APIs & Services → Library → Google Drive API → Enable.'
+      : 'Google Диск сейчас не пускает ключ Masaki — обновите Masaki или подключите свой ключ.'
   }
   if (res.status === 403 && /insufficient|scope/i.test(msg + reason)) {
     return 'Нет доступа к Диску — войдите снова и оставьте галочку доступа к данным приложения.'

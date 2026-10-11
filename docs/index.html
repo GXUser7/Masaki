@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Masaki — браузер</title>
+<meta name="description" content="Masaki — браузер для Windows на Chromium: матовое стекло, Material 3 Expressive и ничего лишнего.">
+<link rel="icon" href="icon.png">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #eef5f2; --card: #ffffffcc; --fg: #14201c; --muted: #44524d; --primary: #00695c; --on-primary: #ffffff; --line: #0000001a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d1513; --card: #18221fcc; --fg: #dde4e1; --muted: #a9b6b1; --primary: #7fd8c6; --on-primary: #00382f; --line: #ffffff1f; }
+  }
+  * { box-sizing: border-box }
+  body {
+    margin: 0; background: radial-gradient(80rem 40rem at 10% -10%, #3ad1b222, transparent), var(--bg); color: var(--fg);
+    font: 16px/1.6 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 56px 16px 64px; text-align: center }
+  .logo { width: 104px; height: 104px }
+  h1 { font-size: 44px; margin: 12px 0 4px }
+  .lead { color: var(--muted); font-size: 19px; margin: 0 auto 24px; max-width: 640px }
+  .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap }
+  .btn {
+    display: inline-flex; align-items: center; height: 52px; padding: 0 26px; border-radius: 26px; font-weight: 650;
+    text-decoration: none; transition: border-radius .25s cubic-bezier(.3,1.4,.5,1);
+  }
+  .btn:hover { border-radius: 14px }
+  .primary { background: var(--primary); color: var(--on-primary) }
+  .tonal { background: var(--card); color: var(--fg); border: 1px solid var(--line) }
+  .shot { width: 100%; border-radius: 28px; margin-top: 36px; border: 1px solid var(--line) }
+  .feat { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 28px; text-align: left }
+  .feat div { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 18px 20px }
+  .feat b { display: block; margin-bottom: 4px } .feat span { color: var(--muted) }
+  footer { margin-top: 40px; color: var(--muted); font-size: 14px } footer a { color: var(--primary) }
+</style>
+</head>
+<body>
+<main>
+  <img class="logo" src="icon.png" alt="">
+  <h1>Masaki</h1>
+  <p class="lead">Браузер для Windows на Chromium — матовое стекло, Material 3 Expressive и ничего лишнего.</p>
+  <div class="btns">
+    <a class="btn primary" href="https://github.com/GXUser7/Masaki/releases/latest">Скачать</a>
+    <a class="btn tonal" href="https://github.com/GXUser7/Masaki">Исходный код</a>
+  </div>
+  <img class="shot" src="screens/newtab.png" alt="Новая вкладка Masaki: часы как на экране блокировки Pixel">
+  <div class="feat">
+    <div><b>Тихая панель и док</b><span>Вкладки, избранное и адрес слева или компактный док внизу — страница целиком.</span></div>
+    <div><b>Палитра</b><span>Адрес, поиск, AI Mode, вкладки и команды в одном поле посередине экрана.</span></div>
+    <div><b>Синхронизация</b><span>Через скрытую папку на вашем Google Диске; пароли шифруются вашей фразой.</span></div>
+    <div><b>Пароли и passkey</b><span>Свой менеджер паролей и ключей доступа, без облака разработчика.</span></div>
+  </div>
+  <footer>
+    Открытый код под GPL-3.0 · <a href="privacy.html">Конфиденциальность</a> · <a href="https://github.com/GXUser7/Masaki/issues">Обратная связь</a>
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Masaki — конфиденциальность</title>
+<meta name="description" content="Политика конфиденциальности браузера Masaki: какие данные Google он использует и где они хранятся.">
+<link rel="icon" href="icon.png">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #eef5f2; --card: #ffffffcc; --fg: #14201c; --muted: #44524d; --primary: #00695c; --line: #0000001a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d1513; --card: #18221fcc; --fg: #dde4e1; --muted: #a9b6b1; --primary: #7fd8c6; --line: #ffffff1f; }
+  }
+  * { box-sizing: border-box }
+  body {
+    margin: 0; background: radial-gradient(80rem 40rem at 10% -10%, #3ad1b222, transparent), var(--bg); color: var(--fg);
+    font: 16px/1.6 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 28px; padding: 24px 28px; margin-top: 20px; backdrop-filter: blur(16px) }
+  h1 { font-size: 36px; line-height: 1.15; margin: 8px 0 4px } h2 { font-size: 21px; margin: 0 0 8px }
+  p, li { color: var(--muted) } p { margin: 8px 0 } ul { padding-left: 22px; margin: 8px 0 }
+  b, strong { color: var(--fg) } a { color: var(--primary); font-weight: 600 }
+  .top { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--fg); font-weight: 700; font-size: 20px }
+  .top img { width: 36px; height: 36px }
+  small { color: var(--muted) }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 40px 0 8px }
+</style>
+</head>
+<body>
+<main>
+  <a class="top" href="./"><img src="icon.png" alt="">Masaki</a>
+  <h1>Конфиденциальность</h1>
+  <small>Обновлено 12 октября 2026 года</small>
+
+  <section class="card">
+    <h2>Коротко</h2>
+    <p>Masaki — настольный браузер с открытым кодом. У него <b>нет своих серверов и нет телеметрии</b>: разработчик не
+    получает ни ваших данных, ни сведений о том, как вы пользуетесь браузером. Всё, что Masaki хранит, лежит на ваших
+    компьютерах и — если вы включили синхронизацию — на <b>вашем собственном</b> Google Диске.</p>
+  </section>
+
+  <section class="card">
+    <h2>Какие данные Google использует Masaki</h2>
+    <p>Только если вы сами включили синхронизацию («Войти через Google» в настройках Masaki):</p>
+    <ul>
+      <li><b>Адрес почты, имя и фото профиля</b> (доступы <code>openid</code>, <code>email</code>, <code>profile</code>) —
+        чтобы показать, в какой аккаунт выполнен вход синхронизации.</li>
+      <li><b>Скрытая папка приложения на Google Диске</b> (доступ <code>drive.appdata</code>) — в ней Masaki хранит данные
+        синхронизации. Остальные файлы, папки и документы вашего Диска Masaki не видит и прочитать не может.</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>Что лежит в папке приложения</h2>
+    <p>То, что вы решили синхронизировать: избранное и ярлыки, настройки оформления, историю посещений, список открытых
+    вкладок каждого устройства, а также — только если вы включили это отдельно — пароли и ключи доступа.</p>
+    <p><b>Пароли и ключи доступа шифруются на вашем компьютере</b> (AES-256-GCM, ключ выводится из фразы, которую знаете
+    только вы) ещё до отправки на Диск. Ни Google, ни разработчик Masaki прочитать их не могут.</p>
+  </section>
+
+  <section class="card">
+    <h2>Как эти данные используются</h2>
+    <ul>
+      <li>Только для синхронизации между вашими устройствами с Masaki.</li>
+      <li>Не продаются, не передаются третьим лицам, не используются для рекламы, профилирования или обучения моделей
+        искусственного интеллекта.</li>
+      <li>Токен входа хранится только на вашем компьютере, зашифрованным средствами операционной системы.</li>
+    </ul>
+    <p>Использование данных, полученных через API Google, соответствует
+    <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+    включая требования Limited Use.</p>
+  </section>
+
+  <section class="card">
+    <h2>Как всё удалить</h2>
+    <ul>
+      <li>«Удалить данные с Диска» в разделе «Синхронизация» настроек Masaki стирает всё, что Masaki положил на Диск.</li>
+      <li>«Выйти из синхронизации» отзывает доступ Masaki к вашему аккаунту. Отозвать его можно и на странице
+        <a href="https://myaccount.google.com/permissions">Сторонние приложения</a> аккаунта Google.</li>
+      <li>Данные на компьютере лежат в папке профиля (<code>%APPDATA%\Masaki</code> на Windows) и удаляются вместе с ней.</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>Другие обращения в сеть</h2>
+    <p>Для функций, которыми вы пользуетесь, Masaki обращается к сторонним сервисам напрямую со своего компьютера:
+    подсказки поиска и значки сайтов (Google), списки фильтров блокировщика (Ghostery), расширения (Chrome Web Store),
+    музыка YouCloud (Яндекс Музыка, YouTube, yt-dlp с GitHub). Разработчику Masaki при этом ничего не передаётся.</p>
+  </section>
+
+  <section class="card">
+    <h2>Вопросы</h2>
+    <p>Исходный код открыт: <a href="https://github.com/GXUser7/Masaki">github.com/GXUser7/Masaki</a>. Вопросы и
+    сообщения о проблемах — в <a href="https://github.com/GXUser7/Masaki/issues">Issues</a> или по адресу поддержки,
+    указанному на экране входа Google.</p>
+  </section>
+
+  <hr>
+  <section lang="en">
+    <h2>Privacy policy (English summary)</h2>
+    <p>Masaki is an open-source desktop browser with no servers and no telemetry. If you turn on sync, Masaki requests your
+    email address, name and profile photo (<code>openid</code>, <code>email</code>, <code>profile</code>) to show which
+    account is signed in, and access to its own hidden app data folder on <b>your</b> Google Drive
+    (<code>drive.appdata</code>) to store your bookmarks, settings, history, open tabs and — only if enabled — passwords
+    and passkeys, which are end-to-end encrypted on your device with a passphrase only you know. Masaki cannot see any
+    other Drive files. Google user data is used solely to sync between your own devices; it is never sold, shared with
+    third parties, used for advertising or used to train AI models, and it never reaches the developer. Masaki's use of
+    information received from Google APIs adheres to the
+    <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+    including the Limited Use requirements. You can delete synced data from Masaki's settings and revoke access at
+    <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
+  </section>
+</main>
+</body>
+</html>
