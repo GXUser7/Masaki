@@ -122,6 +122,8 @@ export interface AddonSettings {
     exclude: string[]
   }
   adblock: { enabled: boolean }
+  /** Статус «Слушает YouCloud» в Discord. Своё у компьютера (Discord на нём) — не синхронизируется. */
+  discord: { enabled: boolean }
   /** Пути к распакованным расширениям Chrome. */
   extensions: string[]
   /** Закреплённые кнопки расширений (id) — видны в адресной капсуле. Своё у каждого компьютера. */
@@ -203,6 +205,8 @@ export interface Settings {
   addons: AddonSettings
   /** Через сколько часов неактивные вкладки уходят в архив; 0 — никогда. */
   archiveAfter: number
+  /** Порт отладки Chromium для ИИ-агентов (Claude Code через chrome-devtools-mcp). Своё у устройства, работает с перезапуска. */
+  aiControl: boolean
 }
 
 export const defaultSettings: Settings = {
@@ -215,6 +219,7 @@ export const defaultSettings: Settings = {
   windowButtonsTucked: false,
   aiDefault: false,
   archiveAfter: 0,
+  aiControl: false,
   clock: { style: 'flex', color: 'auto', size: 'dynamic', rounded: true, thickness: 45 },
   shortcuts: [
     { title: 'YouTube', url: 'https://www.youtube.com/' },
@@ -226,6 +231,7 @@ export const defaultSettings: Settings = {
   addons: {
     glass: { enabled: false, strength: 'strong', opacity: 55, match: true, exclude: [] },
     adblock: { enabled: false },
+    discord: { enabled: false },
     extensions: [],
     pinnedExtensions: [],
     disabledExtensions: []
@@ -489,6 +495,48 @@ export interface WindowState {
   fullscreen: boolean
 }
 
+/** Порт отладки Chromium для «Управления для ИИ» — его же пишут в настройках MCP-сервера агента. */
+export const AI_PORT = 9222
+
+/** Что играет в YouCloud — для статуса в Discord. Время — в секундах; position — на момент отправки. */
+export interface DiscordTrack {
+  title: string
+  artist: string
+  album: string
+  artwork: string
+  playing: boolean
+  duration: number | null
+  position: number | null
+}
+
+/** Профиль Masaki, как в Chrome: своя папка данных и своё окно (src/main/profiles.ts). */
+export interface ProfileInfo {
+  /** default — основной профиль. */
+  id: string
+  name: string
+  /** Аккаунт Google профиля — для аватара в списке; пусто, если в Google не вошли. */
+  email: string
+  photo: string
+  /** Цвет буквы, пока нет аватара. */
+  color: string
+  /** Профиль этого окна. */
+  current: boolean
+}
+
+/** Masaki среди браузеров Windows (src/main/defaultBrowser.ts). */
+export interface DefaultBrowserState {
+  /** Windows: на других системах выбор браузера устроен иначе, кнопки нет. */
+  supported: boolean
+  registered: boolean
+  isDefault: boolean
+}
+
+/** Порт отладки для ИИ в этом запуске: port 0 — выключен; listening — Chromium его открыл (не занят другой программой). */
+export interface AiControlState {
+  port: number
+  listening: boolean
+}
+
 export interface MasakiApi {
   platform: string
   versions: { electron: string; chrome: string; node: string }
@@ -502,6 +550,15 @@ export interface MasakiApi {
     onState(cb: (s: WindowState) => void): () => void
   }
   onCommand(cb: (c: Command) => void): () => void
+  system: {
+    /** Адрес, с которым Masaki запустили (ссылка из другой программы); отдаётся один раз. */
+    launchUrl(): Promise<string | null>
+    relaunch(): void
+    aiControl(): Promise<AiControlState>
+    defaultBrowser(): Promise<DefaultBrowserState>
+    /** Зарегистрироваться в Windows и открыть «Приложения по умолчанию» на странице Masaki. */
+    makeDefault(): Promise<{ ok: boolean; error?: string }>
+  }
   /** Боковая кнопка мыши над самим интерфейсом (над страницей её ловит preload/guest.ts): назад или вперёд в активной вкладке. */
   navMouse(dir: 'back' | 'forward'): void
   settings: {
@@ -567,6 +624,19 @@ export interface MasakiApi {
   onFaviconUpdated(cb: (host: string) => void): () => void
   google: {
     accounts(): Promise<GoogleAccount[]>
+  }
+  discord: {
+    /** Что играет в YouCloud (null — ничего): главный процесс показывает это в Discord, если аддон включён. */
+    setTrack(t: DiscordTrack | null): void
+  }
+  profiles: {
+    list(): Promise<ProfileInfo[]>
+    /** Открыть окно профиля (или показать, если уже открыто). */
+    open(id: string): void
+    /** Новый профиль — сразу в своём окне. */
+    create(): Promise<ProfileInfo>
+    rename(id: string, name: string): void
+    remove(id: string): Promise<{ ok: boolean; error?: string }>
   }
   sync: {
     state(): Promise<SyncState>

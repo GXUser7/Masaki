@@ -190,6 +190,22 @@ export function AddonsPage(): React.JSX.Element {
         </AddonCard>
 
         <AddonCard
+          icon="music"
+          shape="flower6"
+          title="Статус в Discord"
+          text="Как у Spotify: друзья в Discord видят, что вы слушаете в YouCloud, — трек, исполнителя, обложку и сколько осталось. На паузе статус пропадает."
+          on={addons.discord.enabled}
+          onToggle={(enabled) => set({ discord: { enabled } })}
+        >
+          {addons.discord.enabled && (
+            <p className="hint addon-body">
+              Нужен запущенный Discord на этом компьютере. Статуса не видно — в Discord включите «Настройки →
+              Конфиденциальность активности → Показывать текущую активность».
+            </p>
+          )}
+        </AddonCard>
+
+        <AddonCard
           icon="extension"
           shape="flower6"
           title="Расширения Chrome"

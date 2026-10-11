@@ -1,0 +1,84 @@
+# Релиз по тегу: git tag -a v<версия> -F заметки.md && git push origin v<версия>.
+# GitHub собирает установщик Windows и сборки Mac (Apple Silicon и Intel) с ключом Google для синхронизации
+# из секретов репозитория и публикует релиз: заметки — из сообщения тега, к ним — SHA-256 каждого файла.
+# Так релиз не зависит от того, есть ли на компьютере gh, и Mac-сборки сразу лежат рядом с Windows.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx electron-vite build
+        env:
+          MASAKI_GOOGLE_CLIENT_ID: ${{ secrets.MASAKI_GOOGLE_CLIENT_ID }}
+          MASAKI_GOOGLE_CLIENT_SECRET: ${{ secrets.MASAKI_GOOGLE_CLIENT_SECRET }}
+      # --publish never: файлы публикует последний шаг, а не electron-builder.
+      - run: npx electron-builder --win nsis --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/Masaki-Setup-*.exe
+          if-no-files-found: error
+
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx electron-vite build
+        env:
+          MASAKI_GOOGLE_CLIENT_ID: ${{ secrets.MASAKI_GOOGLE_CLIENT_ID }}
+          MASAKI_GOOGLE_CLIENT_SECRET: ${{ secrets.MASAKI_GOOGLE_CLIENT_SECRET }}
+      # Подписи Apple нет — ad hoc (identity "-" в package.json).
+      - run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-mac
+          path: |
+            dist/Masaki-*-mac-*.dmg
+            dist/Masaki-*-mac-*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Сообщение тега — это заметки релиза; сам тег checkout не всегда приносит.
+      - run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Опубликовать релиз
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.md
+          {
+            echo
+            echo '**SHA-256**'
+            echo
+            echo '```'
+            (cd files && sha256sum *)
+            echo '```'
+          } >> notes.md
+          gh release create "$GITHUB_REF_NAME" files/* --title "Masaki ${GITHUB_REF_NAME#v}" --notes-file notes.md

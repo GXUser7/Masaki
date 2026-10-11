@@ -27,8 +27,13 @@ import * as passwords from './passwords'
 import * as passkeys from './passkeys'
 import { initYouCloud, isYouCloudExtension, overrideHeaders, watchWebview, YOUCLOUD_HEADER_URLS } from './youcloud'
 import * as extensions from './extensions'
+import { defaultBrowserState, makeDefault, refreshRegistration } from './defaultBrowser'
+import { parseTrack, setDiscordEnabled, setDiscordTrack } from './discord'
+import * as profiles from './profiles'
+import { pathToFileURL } from 'url'
 import { commandFor } from '../shared/shortcuts'
 import {
+  AI_PORT,
   defaultSettings,
   type ChromeImportResult,
   type Command,
@@ -102,8 +107,49 @@ function migrateFromFrost(): void {
 // Отдельный профиль для автотестов, чтобы не трогать настоящий.
 if (process.env.MASAKI_PROFILE) app.setPath('userData', process.env.MASAKI_PROFILE)
 else migrateFromFrost()
+// Профиль, как в Chrome: --profile=<id> — своя папка данных внутри основной (и своё окно-процесс).
+profiles.initProfile(app.getPath('userData'), process.argv)
 // И отдельная папка загрузок: тест паролей скачивает подставной CSV.
 if (process.env.MASAKI_DOWNLOADS) app.setPath('downloads', process.env.MASAKI_DOWNLOADS)
+
+// «Управление для ИИ»: порт отладки Chromium, через который агент (Claude Code с chrome-devtools-mcp) видит
+// вкладки и управляет ими. Ключ Chromium задаётся только до запуска, поэтому настройку читаем прямо из
+// файла, а переключатель в интерфейсе действует с перезапуска. Порт слушает только 127.0.0.1, а без
+// --remote-allow-origins к нему не подключиться со страницы сайта — только программой на этом компьютере.
+const aiPort = ((): number => {
+  try {
+    const saved = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')) as Partial<Settings>
+    return saved.aiControl === true ? AI_PORT : 0
+  } catch {
+    return 0
+  }
+})()
+if (aiPort) app.commandLine.appendSwitch('remote-debugging-port', String(aiPort))
+
+/** Открыл ли порт именно этот Masaki: его мог занять другой браузер с отладкой. */
+async function aiControlState(): Promise<{ port: number; listening: boolean }> {
+  if (!aiPort) return { port: 0, listening: false }
+  try {
+    const res = await fetch(`http://127.0.0.1:${aiPort}/json/version`, { signal: AbortSignal.timeout(1500) })
+    const info = (await res.json()) as { Browser?: string }
+    return { port: aiPort, listening: info.Browser === `Chrome/${process.versions.chrome}` }
+  } catch {
+    return { port: aiPort, listening: false }
+  }
+}
+
+/**
+ * Адрес из командной строки: так Windows передаёт ссылку или файл, когда Masaki — браузер по умолчанию
+ * («Masaki.exe "%1"»). Ключи Chromium и путь к проекту в разработке сюда не попадают.
+ */
+function urlFromArgv(argv: string[]): string | null {
+  for (const a of argv.slice(1)) {
+    if (/^(https?|file):\/\//i.test(a)) return a
+    if (/\.(s?html?|xht(ml)?|pdf|svg|webp)$/i.test(a) && path.isAbsolute(a) && fs.existsSync(a)) return pathToFileURL(a).href
+  }
+  return null
+}
+let launchUrl = urlFromArgv(process.argv)
 
 // Журнал запуска во временной папке: где профиль и читаются ли его файлы. Пишется до проверки
 // «второй копии», поэтому виден даже у запуска, который сразу передал управление открытому окну.
@@ -147,6 +193,7 @@ function mergeSettings(saved: Partial<Settings> | null): Settings {
     addons: {
       glass: { ...defaultSettings.addons.glass, ...(a?.glass ?? {}) },
       adblock: { ...defaultSettings.addons.adblock, ...(a?.adblock ?? {}) },
+      discord: { ...defaultSettings.addons.discord, ...(a?.discord ?? {}) },
       extensions: a?.extensions ?? [],
       pinnedExtensions: a?.pinnedExtensions ?? [],
       disabledExtensions: a?.disabledExtensions ?? []
@@ -781,6 +828,7 @@ function applySettings(s: Settings, fromSync = false): void {
   settings = mergeSettings(s)
   macTrafficLights()
   if (settings.addons.adblock.enabled !== adblockWas) void applyAdblock(settings.addons.adblock.enabled)
+  setDiscordEnabled(settings.addons.discord.enabled)
   nativeTheme.themeSource = settings.scheme
   settingsFile.write(settings)
   if (fromSync) win?.webContents.send('settings-changed', settings)
@@ -921,6 +969,20 @@ function registerIpc(): void {
   })
   ipcMain.handle('win:state', () => windowState())
 
+  ipcMain.handle('system:launch-url', () => {
+    const url = launchUrl
+    launchUrl = null
+    return url
+  })
+  ipcMain.on('system:relaunch', () => {
+    // Без ссылки, с которой Masaki когда-то запустили: иначе после перезапуска она открылась бы снова.
+    app.relaunch({ args: process.argv.slice(1).filter((a) => urlFromArgv(['', a]) === null) })
+    app.quit()
+  })
+  ipcMain.handle('system:ai-control', () => aiControlState())
+  ipcMain.handle('system:default-browser', () => defaultBrowserState())
+  ipcMain.handle('system:make-default', () => makeDefault())
+
   ipcMain.handle('settings:get', () => settings)
   ipcMain.on('settings:set', (_e, s: Settings) => {
     applySettings(s)
@@ -1000,7 +1062,24 @@ function registerIpc(): void {
     if (data) rememberFavicon(host, data)
   })
 
-  ipcMain.handle('google:accounts', () => googleAccounts())
+  ipcMain.handle('google:accounts', async () => {
+    const list = await fetchGoogleAccounts()
+    // Ответ Google (а не сбой сети) — аккаунт профиля для его аватара и имени в списке профилей.
+    if (list) profiles.noteAccount(list[0])
+    return list ?? []
+  })
+  ipcMain.on('discord:track', (_e, t: unknown) => setDiscordTrack(parseTrack(t)))
+  ipcMain.handle('profiles:list', () => profiles.listProfiles())
+  ipcMain.on('profiles:open', (_e, id: unknown) => {
+    if (typeof id !== 'string') return
+    if (id === profiles.currentProfile()) win?.focus()
+    else profiles.openProfile(id)
+  })
+  ipcMain.handle('profiles:create', () => profiles.createProfile())
+  ipcMain.on('profiles:rename', (_e, id: unknown, name: unknown) => {
+    if (typeof id === 'string' && typeof name === 'string') profiles.renameProfile(id, name)
+  })
+  ipcMain.handle('profiles:remove', (_e, id: unknown) => (typeof id === 'string' ? profiles.removeProfile(id) : { ok: false }))
   // Обложка того, что играет: картинкой data: — интерфейс берёт из неё цвет мини-плеера.
   ipcMain.handle('media:art', (_e, url: string) => (/^https?:\/\//i.test(String(url)) ? fetchAsDataUrl(String(url), 1_500_000) : null))
 
@@ -1232,7 +1311,8 @@ function rememberFavicon(host: string, data: string): void {
 // ---------- Аккаунты Google ----------
 // Тот же адрес, которым Chrome узнаёт, кто вошёл: ответ зависит только от cookie сессии вкладок.
 
-async function googleAccounts(): Promise<GoogleAccount[]> {
+/** Аккаунты Google, в которые вошли во вкладках; null — Google не ответил (сеть), а не «никого нет». */
+async function fetchGoogleAccounts(): Promise<GoogleAccount[] | null> {
   try {
     const res = await session
       .fromPartition(PARTITION)
@@ -1253,7 +1333,7 @@ async function googleAccounts(): Promise<GoogleAccount[]> {
         index: typeof a[7] === 'number' ? a[7] : i
       }))
   } catch {
-    return []
+    return null
   }
 }
 
@@ -1269,12 +1349,13 @@ if (!app.requestSingleInstanceLock()) {
     if (!win) return
     if (win.isMinimized()) win.restore()
     win.focus()
-    const url = argv.find((a) => /^https?:\/\//i.test(a))
+    const url = urlFromArgv(argv)
     if (url) send({ type: 'open-url', url })
   })
 
   app.whenReady().then(async () => {
     settings = mergeSettings(await settingsFile.read())
+    setDiscordEnabled(settings.addons.discord.enabled)
     history = (await historyFile.read()) ?? []
     favicons = (await faviconFile.read()) ?? {}
     decisions = (await permissionsFile.read()) ?? {}
@@ -1307,6 +1388,7 @@ if (!app.requestSingleInstanceLock()) {
     void loadSavedExtensions()
     if (settings.addons.adblock.enabled) void applyAdblock(true)
     createWindow(await windowFile.read())
+    void refreshRegistration()
   })
 
   app.on('before-quit', () => {

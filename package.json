@@ -1,7 +1,7 @@
 {
   "name": "masaki",
   "productName": "Masaki",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Masaki — браузер для Windows на Chromium с матовым стеклом и Material 3 Expressive",
   "main": "out/main/index.js",
   "private": true,
@@ -23,7 +23,9 @@
     "test:passwords": "electron-vite build && node scripts/passwords-test.mjs",
     "test:passkeys": "electron-vite build && node scripts/passkeys-test.mjs",
     "screens": "electron-vite build && node scripts/screens.mjs",
-    "test:youcloud": "electron-vite build && node scripts/youcloud-test.mjs"
+    "test:youcloud": "electron-vite build && node scripts/youcloud-test.mjs",
+    "test:system": "electron-vite build && node scripts/system-test.mjs",
+    "test:profiles": "electron-vite build && node scripts/profiles-test.mjs"
   },
   "devDependencies": {
     "@fontsource-variable/fraunces": "^5.3.0",
@@ -85,6 +87,7 @@
       "uninstallDisplayName": "Masaki",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh",
       "artifactName": "Masaki-Setup-${version}.exe"
     },
     "mac": {

@@ -2494,6 +2494,81 @@ input {
   opacity: 0.6;
 }
 
+/* ---------- Профили в меню аккаунта (префикс pf-) ---------- */
+.pf-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.pf-row > .acc-row {
+  flex: 1;
+  min-width: 0;
+}
+.pf-row.cur > .acc-row {
+  cursor: default;
+}
+.pf-row.cur > .acc-row > svg {
+  fill: var(--primary);
+  opacity: 1;
+}
+.pf-act {
+  flex: none;
+  opacity: 0.55;
+}
+.pf-act:hover,
+.pf-act:focus-visible {
+  opacity: 1;
+}
+.pf-letter {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  /* Цвет профиля (светлые тона групп вкладок) подмешан к фону темы — буква читается в обеих темах. */
+  background: color-mix(in srgb, var(--pf) 45%, var(--sc));
+  color: var(--on-sc);
+  font-weight: 700;
+  font-size: 17px;
+}
+.pf-edit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px 8px 8px;
+}
+.pf-edit img {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+.pf-edit input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  border-radius: 20px;
+  border: 1px solid var(--outline);
+  background: var(--sc);
+  color: inherit;
+  padding: 0 14px;
+  font: inherit;
+}
+.pf-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.pf-confirm-b {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.pf-err {
+  margin: 4px 12px;
+}
+
 /* ---------- Перетаскивание вкладок ---------- */
 .tab {
   position: relative;
@@ -3460,6 +3535,13 @@ input {
   align-self: flex-start;
   font-size: 13px;
   margin-top: 4px;
+}
+/* «Masaki — браузер по умолчанию»: вместо кнопки — галочка. */
+.db-ok {
+  width: 26px;
+  height: 26px;
+  fill: var(--primary);
+  flex: none;
 }
 /* Свой ключ при встроенном — запасной путь, поэтому тише основной кнопки входа. */
 .sy-own {

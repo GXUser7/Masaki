@@ -31,6 +31,13 @@ const api: MasakiApi = {
     chrome: process.versions.chrome,
     node: process.versions.node
   },
+  system: {
+    launchUrl: () => ipcRenderer.invoke('system:launch-url'),
+    relaunch: () => ipcRenderer.send('system:relaunch'),
+    aiControl: () => ipcRenderer.invoke('system:ai-control'),
+    defaultBrowser: () => ipcRenderer.invoke('system:default-browser'),
+    makeDefault: () => ipcRenderer.invoke('system:make-default')
+  },
   win: {
     minimize: () => ipcRenderer.send('win:minimize'),
     toggleMaximize: () => ipcRenderer.send('win:toggle-max'),
@@ -103,6 +110,16 @@ const api: MasakiApi = {
   onFaviconUpdated: (cb) => listen<string>('favicon-updated', cb),
   google: {
     accounts: () => ipcRenderer.invoke('google:accounts')
+  },
+  discord: {
+    setTrack: (t) => ipcRenderer.send('discord:track', t)
+  },
+  profiles: {
+    list: () => ipcRenderer.invoke('profiles:list'),
+    open: (id) => ipcRenderer.send('profiles:open', id),
+    create: () => ipcRenderer.invoke('profiles:create'),
+    rename: (id, name) => ipcRenderer.send('profiles:rename', id, name),
+    remove: (id) => ipcRenderer.invoke('profiles:remove', id)
   },
   sync: {
     state: () => ipcRenderer.invoke('sync:state'),

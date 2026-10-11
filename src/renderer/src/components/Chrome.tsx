@@ -22,6 +22,7 @@ import { AddressLabel, Grain, ShapeTile, TabFav, useHoverOverPage } from './part
 import { LoadFill, MiniPlayer, WinButtons } from './Extras'
 import { openYouCloud } from '../lib/youcloud'
 import { syncHint, syncStatusText } from './SyncSection'
+import { ProfilesBlock } from './Profiles'
 import { openExtMenu, openGroupMenu, openTabMenu, openTileMenu } from '../menus'
 
 function useActive(): Tab {
@@ -220,8 +221,12 @@ function DownloadsButton(): React.JSX.Element {
 function AccountChip(): React.JSX.Element {
   const accounts = useStore((s) => s.accounts)
   const sync = useStore((s) => s.sync)
+  const profiles = useStore((s) => s.profiles)
   const a = accounts[0]
-  const sub = sync?.account ? syncStatusText(sync) : a ? a.email : 'в Google'
+  const me = profiles.length > 1 ? profiles.find((p) => p.current) : undefined
+  const status = sync?.account ? syncStatusText(sync) : a ? a.email : 'в Google'
+  // Когда профилей несколько, видно, чьё это окно.
+  const sub = me ? `${me.name} · ${status}` : status
   return (
     <button
       className={'achip' + (sync?.status === 'error' || sync?.status === 'signin' ? ' warn' : '')}
@@ -754,6 +759,8 @@ export function Popover(): React.JSX.Element | null {
                 <Icon name="logout" /> Выйти из всех аккаунтов
               </button>
             )}
+            <div className="cm-sep" />
+            <ProfilesBlock close={close} />
             <div className="cm-sep" />
             <button
               className={'mi sy-mi ' + (syncSt?.status ?? '')}

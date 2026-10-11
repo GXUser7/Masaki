@@ -1,5 +1,16 @@
 import { useEffect, useState } from 'react'
-import type { BackgroundMode, ChromeProfile, ClockColor, ClockSettings, GlassLevel, Scheme, Shortcut } from '../../../shared/types'
+import {
+  AI_PORT,
+  type AiControlState,
+  type BackgroundMode,
+  type ChromeProfile,
+  type ClockColor,
+  type ClockSettings,
+  type DefaultBrowserState,
+  type GlassLevel,
+  type Scheme,
+  type Shortcut
+} from '../../../shared/types'
 import { handmadeIds, handmadeNames, hueOf, seedFromHue, seedPresets, swatchOf } from '../lib/theme'
 import { useStore } from '../store'
 import { Clock, clockStyles } from './Clock'
@@ -517,6 +528,9 @@ export function SettingsPage(): React.JSX.Element {
           </div>
         </section>
 
+        <DefaultBrowser />
+        <AiControl on={settings.aiControl} onChange={(aiControl) => set({ aiControl })} />
+
         <section>
           <h2>О Masaki</h2>
           <p className="hint">
@@ -525,5 +539,83 @@ export function SettingsPage(): React.JSX.Element {
         </section>
       </div>
     </div>
+  )
+}
+
+/** Masaki среди браузеров Windows. Последний шаг — «Установить по умолчанию» в Параметрах: его Windows оставляет пользователю. */
+function DefaultBrowser(): React.JSX.Element | null {
+  const [st, setSt] = useState<DefaultBrowserState | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    const check = (): void => void window.masaki.system.defaultBrowser().then(setSt)
+    check()
+    // Выбирают в Параметрах Windows: вернулись в окно — смотрим снова.
+    window.addEventListener('focus', check)
+    return () => window.removeEventListener('focus', check)
+  }, [])
+  if (!st?.supported) return null
+  return (
+    <section>
+      <h2>Браузер по умолчанию</h2>
+      <div className="set-row">
+        <span>
+          {st.isDefault ? 'Masaki — браузер по умолчанию' : 'Сделать Masaki браузером по умолчанию'}
+          <small>
+            {st.isDefault
+              ? 'Ссылки из других программ открываются в Masaki'
+              : 'Windows даёт выбрать браузер только в Параметрах: кнопка откроет страницу Masaki, там нажмите «Установить по умолчанию».'}
+          </small>
+        </span>
+        {st.isDefault ? (
+          <Icon name="check" className="db-ok" />
+        ) : (
+          <button
+            className="tonal"
+            onClick={() => void window.masaki.system.makeDefault().then((r) => setErr(r.ok ? null : (r.error ?? 'Не получилось')))}
+          >
+            <Icon name="openInNew" />
+            Сделать основным
+          </button>
+        )}
+      </div>
+      {err && <p className="err-text">{err}</p>}
+    </section>
+  )
+}
+
+/** Порт отладки для ИИ-агентов: ключ Chromium, поэтому включается и выключается с перезапуска. */
+function AiControl({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }): React.JSX.Element {
+  const [st, setSt] = useState<AiControlState | null>(null)
+  useEffect(() => {
+    void window.masaki.system.aiControl().then(setSt)
+  }, [])
+  const active = !!st?.port
+  return (
+    <section>
+      <h2>Управление для ИИ</h2>
+      <div className="set-row">
+        <span>
+          Разрешить ИИ-агентам управлять Masaki
+          <small>
+            Claude Code и другие агенты подключаются через порт отладки {AI_PORT} (протокол Chrome DevTools): видят вкладки, нажимают,
+            печатают, делают снимки — с вашими входами на сайты. Пока включено, это может любая программа на этом
+            компьютере, поэтому включайте, когда нужно.
+          </small>
+        </span>
+        <Switch label="Управление для ИИ" on={on} onChange={onChange} />
+      </div>
+      {st && on !== active && (
+        <div className="sy-warn">
+          <span>{on ? 'Порт откроется после перезапуска Masaki' : 'Порт закроется после перезапуска Masaki'}</span>
+          <button className="perm-btn primary" onClick={() => window.masaki.system.relaunch()}>
+            Перезапустить
+          </button>
+        </div>
+      )}
+      {st && on && active && !st.listening && (
+        <p className="err-text">Порт {st.port} занят другой программой — Masaki не смог его открыть.</p>
+      )}
+      {st && on && active && st.listening && <p className="hint">Агент подключается к http://127.0.0.1:{st.port}</p>}
+    </section>
   )
 }

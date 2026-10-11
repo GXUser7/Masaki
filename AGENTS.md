@@ -19,6 +19,8 @@ npm run test:sync    # сборка + синхронизация двух про
 npm run test:passwords # сборка + менеджер паролей: CSV, автозаполнение, сохранение, шифрованная синхронизация
 npm run test:passkeys  # сборка + ключи доступа: создание, вход (окно и автозаполнение), подписи, синхронизация
 npm run test:youcloud  # сборка + YouCloud: мост, мини-плеер с обложкой, поиск из палитры (нужен дев-сервер YouCloud/web)
+npm run test:system  # сборка + управление для ИИ (порт 9222), ссылка из командной строки, регистрация браузером
+npm run test:profiles  # сборка + профили (окна-процессы, раздельные куки, удаление) и статус в Discord (подставной)
 npm run perf         # замер плавности сворачивания панели (интервалы кадров)
 npm run pack         # dist/win-unpacked/Masaki.exe — то, что запускает пользователь
 npm run icon         # перерисовать build/icon.png
@@ -39,6 +41,9 @@ src/main/passwords.ts    менеджер паролей: хранение (safe
 src/main/passkeys.ts     ключи доступа (passkey): свой аутентификатор — создание, подпись, хранение, синхронизация
 src/main/youcloud.ts     YouCloud: мост вместо его расширения (запросы к Яндексу/YouTube, входы вкладками)
 src/main/ytdlp.ts        звук YouTube для YouCloud через yt-dlp (скачивает, обновляет, запускает, ретранслятор)
+src/main/defaultBrowser.ts Masaki среди браузеров Windows: регистрация в HKCU, проверка выбора пользователя
+src/main/profiles.ts     профили как в Chrome: папка данных профиля, список profiles.json, окна-процессы
+src/main/discord.ts      статус «Слушает YouCloud» в Discord (Rich Presence по локальному каналу discord-ipc)
 src/main/extensions.ts   расширения Chrome: вкладки для chrome.tabs, кнопки и окна, меню
                          (electron-chrome-extensions), установка из Chrome Web Store (electron-chrome-web-store)
 src/preload/index.ts     мост window.masaki для интерфейса (типы — MasakiApi в shared/types.ts)
@@ -162,6 +167,61 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   WebAuthn как есть (USB-ключи). В тестах эту кнопку не нажимать — откроется системное окно Windows.
 - Синхронизация — тот же `vault.json`, записи с `kind: 'passkey'` (закрытый ключ PKCS#8 base64url).
 - Тест — `scripts/passkeys-test.mjs` на http://localhost: подписи и форматы проверяет сам тест, как сервер.
+
+### Управление для ИИ и браузер по умолчанию (2026-10-12)
+
+- **Управление для ИИ** (настройка `aiControl`, раздел настроек «Управление для ИИ», выключено по умолчанию):
+  порт отладки Chromium `AI_PORT` = 9222 только на 127.0.0.1. Ключ Chromium ставится лишь до запуска, поэтому
+  main читает settings.json синхронно в самом начале, а переключатель действует с перезапуска (кнопка
+  «Перезапустить» → `system:relaunch`, без ссылки первого запуска). Своё у устройства — в `FIELDS` синхронизации
+  не добавлять. Без `--remote-allow-origins` страницы сайтов к порту не подключатся.
+- Агент — **chrome-devtools-mcp** с `--browser-url http://127.0.0.1:9222 --experimental-include-all-pages`
+  (инструкция для всех — в README, «Как подключить ИИ-помощника»; самому пользователю MCP не добавлять — он отказался):
+  вкладки Masaki — цели CDP типа `webview`, без этого флага Puppeteer их не показывает. **Playwright
+  (connectOverCDP, Playwright MCP) не годится**: цели `webview`, открытые до подключения, он отпускает и видит
+  только интерфейс Masaki. Выбранная вкладка в chrome-devtools-mcp — по `pageId` в каждом вызове.
+- **Браузер по умолчанию**: Windows 10/11 не дают программе назначить себя (выбор защищён хешем UserChoice —
+  обходить не пытаться). Masaki лишь регистрируется, как установщик Chrome, но в HKCU
+  (`StartMenuInternet\Masaki`, `RegisteredApplications`, ProgID `MasakiURL`/`MasakiHTML`, «Открыть с помощью»
+  для .html и т. п.): собранный Masaki делает это при каждом запуске, если путь в реестре не тот
+  (`refreshRegistration`; не в тестах с `MASAKI_PROFILE`). Кнопка «Сделать основным» открывает
+  `ms-settings:defaultapps?registeredAppUser=Masaki`, остальное — пользователь. Выбор читается из
+  `UserChoiceLatest` (Windows 11 24H2) или `UserChoice`. Удаление установщиком чистит ключи (`build/installer.nsh`).
+- Ссылки приходят аргументом `Masaki.exe "%1"` (`urlFromArgv`: http/https/file и пути к .html/.pdf/.svg…):
+  при первом запуске интерфейс забирает её после восстановления сессии (`system:launch-url`), вторая копия
+  передаёт её открытому окну (`second-instance`).
+- Тест `test:system` запускает Electron сам, не через Playwright (тот добавил бы свой порт отладки), и
+  требует свободный 9222. Регистрацию пишет под именем `MASAKI_REG_NAME=MasakiTest` (Параметры при этом не
+  открываются) и в конце удаляет.
+
+### Профили (src/main/profiles.ts, components/Profiles.tsx)
+
+- Как в Chrome: профиль — **отдельная папка данных и отдельный процесс** со своим окном. Основной профиль —
+  сама папка Masaki (`%APPDATA%\Masaki`), остальные — `Profiles/<id>` в ней (id — 12 hex), запуск —
+  `Masaki.exe --profile=<id>` (`initProfile` до готовности приложения; только существующая папка).
+  Блокировка «одной копии» у Electron — по папке данных: окна разных профилей живут рядом, повторный
+  запуск профиля показывает его окно. У профиля всё своё: куки `persist:frost`, вкладки, история,
+  настройки, пароли, ключи доступа, синхронизация, расширения, yt-dlp.
+- Список — `profiles.json` в основной папке (пишут все окна: атомарно, через временный файл). Имя и аватар
+  профиль берёт у своего первого аккаунта Google (`noteAccount` при ответе ListAccounts; сбой сети список
+  не трогает), пока имя не задали руками (`custom`).
+- Меню аккаунта (аватар внизу панели): «Профили» — открыть окно, переименовать, удалить, «Новый профиль».
+  Открытый профиль удалить нельзя: Chromium держит `lockfile` в его папке — если его не удалить, профиль
+  открыт (иначе папка удалилась бы наполовину). Заголовок окна — «<имя> — Masaki», когда профилей больше одного.
+- Ссылки из других программ (браузер по умолчанию) открываются в основном профиле.
+
+### Статус в Discord (src/main/discord.ts, lib/youcloud.ts)
+
+- Аддон «Статус в Discord» (`addons.discord`, выключен по умолчанию, своё у компьютера — не в `FIELDS`):
+  что играет во вкладке YouCloud (Media Session, `startDiscordPresence`) уходит главному процессу, тот
+  говорит с запущенным Discord по локальному каналу `discord-ipc-N` (Rich Presence, `SET_ACTIVITY`, тип 2 —
+  «Слушает»): трек, исполнитель, обложка (только https, иначе значок), полоска времени, кнопка «Открыть
+  YouCloud». На паузе статус снимается (как у Spotify). Шлём только перемены — Discord пускает 5 обновлений за 20 с.
+- Приложение Discord «YouCloud» — ID `1558936902051307630` (создал пользователь 2026-10-12, ID открытый).
+  Запасной значок — `https://gxuser7.github.io/Masaki/youcloud.png` (`docs/youcloud.png`: у сайта YouCloud
+  только SVG, а Discord берёт PNG/JPG).
+- Тест — с подставным каналом (`MASAKI_DISCORD_PIPE`, `MASAKI_DISCORD_APP_ID`) и подставным YouCloud на
+  localhost:5190 (`scripts/fixtures/youcloud-fake.html`); с настоящим Discord тест не говорит.
 
 ### YouCloud (src/main/youcloud.ts, preload/guest.ts, lib/youcloud.ts)
 
@@ -403,10 +463,11 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   собирать в `dist/next` (`npx electron-builder --win dir -c.directories.output=dist/next`) и подменять
   `dist/win-unpacked` после закрытия Masaki (можно фоновой задачей, ждущей закрытия процесса).
 - Перед выдачей: typecheck, smoke (и test:addons при необходимости), посмотреть снимки, собрать.
-- Релиз на GitHub (github.com/GXUser7/Masaki): поднять `version` в package.json, собрать установщик
-  в отдельную папку — `npx electron-vite build && npx electron-builder --win nsis -c.directories.output=dist/release`
-  (обычный `npm run dist` пересобирает dist/win-unpacked, которым пользуется пользователь), затем
-  `gh release create v<версия> dist/release/Masaki-Setup-<версия>.exe` с SHA-256 в описании.
+- Релиз на GitHub (github.com/GXUser7/Masaki) — **через GitHub Actions** (`.github/workflows/release.yml`,
+  с 0.4.0; `gh` на компьютере пользователя нет): поднять `version` в package.json, закоммитить, запушить, затем
+  `git tag -a v<версия> -F <заметки.md>` и `git push origin v<версия>`. Workflow собирает установщик Windows и
+  сборки Mac (arm64 и x64, dmg и zip) с ключом Google из секретов `MASAKI_GOOGLE_CLIENT_ID/SECRET` и публикует
+  релиз: заметки — из сообщения тега (по-русски, «## Что нового» как у прошлых), SHA-256 дописывает сам.
   Установщик не подписан — SmartScreen предупреждает, это описано в README. Снимки для README — `npm run screens`.
 - Код — на GitHub (публичный репозиторий). Коммитить и пушить только по просьбе пользователя.
 

@@ -9,6 +9,7 @@ import type {
   PasswordCsv,
   PasswordOffer,
   PermissionPrompt,
+  ProfileInfo,
   SavedSession,
   Settings,
   SyncState,
@@ -213,6 +214,8 @@ interface Store {
   /** Открытое контекстное меню (стеклянное, рисуем сами). */
   menu: { x: number; y: number; entries: MenuEntry[] } | null
   accounts: GoogleAccount[]
+  /** Профили Masaki (как в Chrome) — в меню аккаунта. */
+  profiles: ProfileInfo[]
   /** Очередь запросов сайтов на доступ. */
   permissions: PermissionPrompt[]
   /** Растёт, когда выбрана новая своя картинка фона, — App перечитывает её. */
@@ -287,6 +290,7 @@ interface Store {
   openMenu(x: number, y: number, entries: MenuEntry[]): void
   closeMenu(): void
   loadAccounts(): void
+  loadProfiles(): void
   addPermission(p: PermissionPrompt): void
   dropPermission(id: string): void
   moveTab(id: string, to: number): void
@@ -312,6 +316,7 @@ export const useStore = create<Store>((set, get) => ({
   winMaximized: false,
   menu: null,
   accounts: [],
+  profiles: [],
   permissions: [],
   wallpaperRev: 0,
   sync: null,
@@ -651,7 +656,20 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   loadAccounts() {
-    void window.masaki.google.accounts().then((accounts) => set({ accounts }))
+    // Профиль берёт имя и аватар у своего аккаунта Google — после ответа список профилей свежий.
+    void window.masaki.google.accounts().then((accounts) => {
+      set({ accounts })
+      get().loadProfiles()
+    })
+  },
+
+  loadProfiles() {
+    void window.masaki.profiles.list().then((profiles) => {
+      set({ profiles })
+      // Окна профилей различаются в панели задач и Alt+Tab по заголовку.
+      const me = profiles.find((p) => p.current)
+      document.title = profiles.length > 1 && me ? `${me.name} — Masaki` : 'Masaki'
+    })
   },
 
   moveTab(id, to) {

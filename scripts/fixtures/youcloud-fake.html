@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>YouCloud (тест)</title>
+<style>body { font: 18px system-ui; margin: 40px; background: #19120d; color: #f4e9df }</style>
+</head>
+<body>
+<h1>Подставной YouCloud</h1>
+<p>Играет ролик без звука и сообщает о «треке» через Media Session — как настоящий YouCloud.</p>
+<video id="v" src="/clip.webm" autoplay muted loop playsinline width="320"></video>
+<script>
+  const v = document.getElementById('v')
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: 'Тестовый трек',
+    artist: 'Masaki Band',
+    album: 'Альбом для Discord',
+    artwork: [{ src: 'https://example.com/cover.jpg', sizes: '512x512', type: 'image/jpeg' }]
+  })
+  navigator.mediaSession.setActionHandler('play', () => v.play())
+  navigator.mediaSession.setActionHandler('pause', () => v.pause())
+  const sync = () => {
+    navigator.mediaSession.playbackState = v.paused ? 'paused' : 'playing'
+    if (v.duration) navigator.mediaSession.setPositionState({ duration: v.duration, position: v.currentTime, playbackRate: 1 })
+  }
+  v.addEventListener('play', sync)
+  v.addEventListener('pause', sync)
+  v.addEventListener('loadedmetadata', sync)
+</script>
+</body>
+</html>

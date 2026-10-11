@@ -15,6 +15,41 @@ export function isYouCloud(url: string): boolean {
   }
 }
 
+/**
+ * Статус в Discord: что играет во вкладке YouCloud уходит главному процессу, а тот показывает это, если
+ * аддон включён. Шлём только перемены — трек, пауза, перемотка, — а не каждый тик позиции.
+ */
+export function startDiscordPresence(): () => void {
+  let last = ''
+  const update = (): void => {
+    const tabs = useStore.getState().tabs.filter((t) => t.kind === 'web' && isYouCloud(t.url) && t.media?.title)
+    const t = tabs.find(mediaPlaying) ?? tabs[0]
+    const m = t?.media
+    const p = m?.position
+    const playing = !!t && mediaPlaying(t)
+    // Когда трек «начался бы» при такой позиции: пока он просто играет, это число стоит на месте.
+    const origin = p ? Math.round((p.at - (p.position * 1000) / (p.rate || 1)) / 1000) : 0
+    const key = m ? JSON.stringify([m.title, m.artist, m.album, m.artwork, playing, p?.duration, origin]) : ''
+    if (key === last) return
+    last = key
+    window.masaki.discord.setTrack(
+      m
+        ? {
+            title: m.title,
+            artist: m.artist,
+            album: m.album,
+            artwork: m.artwork,
+            playing,
+            duration: p?.duration ?? null,
+            position: p ? Math.min(p.duration, Math.max(0, p.position + ((Date.now() - p.at) / 1000) * p.rate)) : null
+          }
+        : null
+    )
+  }
+  update()
+  return useStore.subscribe(update)
+}
+
 /** Пользовались ли YouCloud в Masaki: тогда палитра предлагает искать музыку и там. */
 export function youcloudKnown(): boolean {
   const s = useStore.getState()

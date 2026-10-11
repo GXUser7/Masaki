@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
-import { isYouCloud, sendYouCloudTheme } from '../lib/youcloud'
+import { isYouCloud, sendYouCloudTheme, startDiscordPresence } from '../lib/youcloud'
 import { handleCommand } from '../actions'
 import { commandFor } from '../../../shared/shortcuts'
 import { shapes } from '../lib/shapes'
@@ -91,6 +91,9 @@ export function App(): React.JSX.Element {
         window.masaki.history.list()
       ])
       useStore.getState().boot(s, session, history)
+      // Ссылка, с которой Masaki запустили (он — браузер по умолчанию): поверх восстановленных вкладок.
+      const launch = await window.masaki.system.launchUrl()
+      if (launch) useStore.getState().newTab(launch)
       useStore.getState().loadAccounts()
       useStore.setState({ sync: await window.masaki.sync.state() })
     })()
@@ -121,6 +124,7 @@ export function App(): React.JSX.Element {
       window.masaki.permissions.onPrompt((p) => useStore.getState().addPermission(p)),
       window.masaki.permissions.onDismiss((id) => useStore.getState().dropPermission(id)),
       () => window.removeEventListener('keydown', onKey),
+      startDiscordPresence(),
       () => window.removeEventListener('mouseup', onMouseUp),
       window.masaki.onCommand(handleCommand),
       window.masaki.downloads.onUpdate((d) => useStore.getState().upsertDownload(d)),
