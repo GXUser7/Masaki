@@ -8,6 +8,10 @@
 // цветом остаются. Всплывающие окна (диалоги, меню, баннеры) не трогаем вовсе — иначе их текст
 // ляжет прямо на страницу. Шапки и боковые меню, под которыми прокручивается страница, делаем
 // полупрозрачными, а не голыми.
+// Затемнения «к фону» (градиент от прозрачного к цвету сайта под свёрнутым текстом, как «Развернуть»
+// под AI-обзором Google) — тоже эффект фона, а на светлых обоях они видны тёмной плашкой. Градиент,
+// все цвета которого близки к цвету сайта, снимаем у самого элемента и у его ::before / ::after
+// (псевдоэлемент инлайн-стилем не поправить: ставим элементу атрибут и гасим правилом в <style>).
 ;(() => {
   if (window.__masakiGlass) return
 
@@ -54,11 +58,12 @@
     if (!saved.has(el)) saved.set(el, props.map(([p]) => [p, el.style.getPropertyValue(p), el.style.getPropertyPriority(p)]))
     for (const [p, v] of props) el.style.setProperty(p, v, 'important')
   }
-  const clear = (el) => put(el, [['background-color', 'transparent']])
+  // more — что снять заодно (у градиента «к фону» это background-image).
+  const clear = (el, more = []) => put(el, [...more, ['background-color', 'transparent']])
   // Без backdrop-filter: внутри вкладки он размывает не то, что видно глазу, и полоса выходит
   // светлее страницы. Просто полупрозрачный цвет сайта — страница под шапкой не мешает тексту.
-  const tint = (el) => {
-    put(el, [['background-color', `rgba(${barRgb.join(',')}, .62)`]])
+  const tint = (el, more = []) => {
+    put(el, [...more, ['background-color', `rgba(${barRgb.join(',')}, .62)`]])
     tinted.add(el)
   }
 
@@ -101,6 +106,104 @@
     return r.width * r.height <= q.width * q.height * 2 + 1
   }
 
+  // ---- Затемнения «к фону»: градиенты и ::before / ::after ----
+  const ATTR = 'data-masaki-glass-pseudo' // какие псевдоэлементы элемента гасим: "before after"
+  const PSEUDO_CSS = `[${ATTR}~="before"]::before,[${ATTR}~="after"]::after{background-image:none!important;background-color:transparent!important}`
+  const styled = new Map() // корень (document или shadowRoot) → наш <style> с правилом выше
+  const ensureStyle = (el) => {
+    const root = el.getRootNode()
+    const host = root instanceof ShadowRoot ? root : document // в shadow DOM правила документа не действуют
+    if (styled.has(host)) return
+    const st = document.createElement('style')
+    st.textContent = PSEUDO_CSS
+    const where = host === document ? document.head || document.documentElement : host
+    where.appendChild(st)
+    styled.set(host, st)
+  }
+
+  const GRADIENT = /^(?:repeating-)?(?:linear|radial|conic)-gradient\(/
+  const COLOR = /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^)]*\)|\btransparent\b/g
+  // background-image делим по запятым верхнего уровня: слоёв может быть несколько.
+  const layersOf = (s) => {
+    const list = []
+    let depth = 0
+    let from = 0
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i]
+      if (ch === '(') depth++
+      else if (ch === ')') depth--
+      else if (ch === ',' && depth === 0) {
+        list.push(s.slice(from, i).trim())
+        from = i + 1
+      }
+    }
+    list.push(s.slice(from).trim())
+    return list
+  }
+  const fades = new Map() // строка background-image → «градиент к фону»; своя для каждого base
+  // «Градиент к фону»: только градиенты (ни одного url()), и все видимые остановки близки к цвету
+  // фона сайта. Альфа любая: от прозрачного к base — затемнение, и оно же эффект самого фона.
+  const fadeToBase = (img) => {
+    let v = fades.get(img)
+    if (v !== undefined) return v
+    const layers = layersOf(img)
+    v = layers.every((l) => GRADIENT.test(l))
+    let stops = 0
+    if (v) {
+      for (const l of layers) {
+        for (const m of l.match(COLOR) || []) {
+          const c = rgba(m)
+          if (!c) continue // полностью прозрачная остановка цвета не несёт: градиенты считаются с предумножением
+          stops++
+          if (!near(c.rgb, 22)) v = false
+        }
+      }
+    }
+    v = v && stops > 0
+    fades.set(img, v)
+    return v
+  }
+  // Под градиентом пусто или тот же цвет сайта; иначе это карточка своего цвета с затемнением.
+  const bgNear = (st) => {
+    const c = rgba(st.backgroundColor)
+    return !c || near(c.rgb, 22)
+  }
+  // Затемнение поверх видео (полоса управления плеера) — не фон: без него кнопки не видно на светлом кадре.
+  const overVideo = (r) => {
+    for (const v of document.getElementsByTagName('video')) {
+      const q = v.getBoundingClientRect()
+      const w = Math.min(r.right, q.right) - Math.max(r.left, q.left)
+      const h = Math.min(r.bottom, q.bottom) - Math.max(r.top, q.top)
+      if (w > 0 && h > 0 && w * h >= r.width * r.height * 0.5) return true
+    }
+    return false
+  }
+  const pseudoHit = (el, which) => {
+    const ps = getComputedStyle(el, which)
+    // Сначала content: у подавляющего большинства элементов псевдоэлемента нет — отсев почти бесплатный.
+    if (ps.content === 'none' || ps.content === 'normal') return false
+    if (ps.backgroundImage !== 'none') return ps.backgroundClip !== 'text' && fadeToBase(ps.backgroundImage) && bgNear(ps)
+    // Сплошная полоса цвета сайта поверх элемента — тоже затемнение; точки и галочки (маленькие) не трогаем.
+    const c = rgba(ps.backgroundColor)
+    if (!c || c.a < 0.5 || !near(c.rgb, 22) || ps.position !== 'absolute') return false
+    return parseFloat(ps.width) >= el.getBoundingClientRect().width * 0.5
+  }
+  const markPseudo = (el, cs) => {
+    if (cs.display === 'none') return
+    const b = pseudoHit(el, '::before')
+    const a = pseudoHit(el, '::after')
+    if ((!b && !a) || overVideo(el.getBoundingClientRect())) return
+    ensureStyle(el)
+    el.setAttribute(ATTR, b && a ? 'before after' : b ? 'before' : 'after')
+  }
+  const unmarkPseudo = () => {
+    styled.forEach((st, host) => {
+      host.querySelectorAll(`[${ATTR}]`).forEach((e) => e.removeAttribute(ATTR))
+      st.remove()
+    })
+    styled.clear()
+  }
+
   let seen = new WeakSet()
   // ctx: { bar: прямоугольник полосы или null, tinted: в полосе уже есть матовый слой }
   const visit = (el, ctx) => {
@@ -111,24 +214,43 @@
     if (kind === 'overlay') return
     let next = ctx
     if (kind === 'bar' && !ctx.bar) next = { bar: el.getBoundingClientRect(), tinted: false }
-    if (!saved.has(el) && cs.backgroundImage === 'none') {
-      const c = rgba(cs.backgroundColor)
-      if (c) {
+    // В полосе (шапка, боковое меню) мягкая сила не трогает ничего — как и раньше.
+    const touch = !next.bar || strong
+    if (!saved.has(el)) {
+      const img = cs.backgroundImage
+      if (img === 'none') {
+        const c = rgba(cs.backgroundColor)
+        if (c) {
+          const r = el.getBoundingClientRect()
+          if (next.bar) {
+            if (strong && c.a >= 0.5 && near(c.rgb, 22)) {
+              const b = next.bar
+              if (!next.tinted && r.width * r.height >= b.width * b.height * 0.5) {
+                tint(el)
+                next = { bar: b, tinted: true }
+              } else clear(el)
+            }
+          } else if (c.a >= 0.85 && cs.boxShadow === 'none' && !playerBox(el, r)) {
+            const hit = strong ? near(c.rgb, 22) || large(r) : near(c.rgb, 6) && large(r)
+            if (hit) clear(el)
+          }
+        }
+      } else if (touch && (next.bar || cs.boxShadow === 'none') && cs.backgroundClip !== 'text' && fadeToBase(img) && bgNear(cs)) {
+        // Градиент «к фону» (не карточка с тенью и не затемнение видео): снимаем и его, и цвет под ним.
         const r = el.getBoundingClientRect()
-        if (next.bar) {
-          if (strong && c.a >= 0.5 && near(c.rgb, 22)) {
+        if (!overVideo(r) && !playerBox(el, r)) {
+          const drop = [['background-image', 'none']]
+          if (next.bar) {
             const b = next.bar
             if (!next.tinted && r.width * r.height >= b.width * b.height * 0.5) {
-              tint(el)
+              tint(el, drop)
               next = { bar: b, tinted: true }
-            } else clear(el)
-          }
-        } else if (c.a >= 0.85 && cs.boxShadow === 'none' && !playerBox(el, r)) {
-          const hit = strong ? near(c.rgb, 22) || large(r) : near(c.rgb, 6) && large(r)
-          if (hit) clear(el)
+            } else clear(el, drop)
+          } else clear(el, drop)
         }
       }
     }
+    if (touch) markPseudo(el, cs)
     for (const ch of el.children) visit(ch, next)
     if (el.shadowRoot) for (const ch of el.shadowRoot.children) visit(ch, next)
   }
@@ -150,7 +272,7 @@
   const sign = () => {
     const h = document.documentElement
     return [...h.attributes, ...(document.body ? document.body.attributes : [])]
-      .filter((a) => a.name !== 'style')
+      .filter((a) => a.name !== 'style' && a.name !== ATTR) // свои пометки темой сайта не считаем
       .map((a) => a.name + '=' + a.value)
       .join(' ')
   }
@@ -211,6 +333,7 @@
       strong = s
       panel = p
       base = readBase()
+      fades.clear() // «близко к фону» считается от base — у другого base ответы другие
       // «Как у панели»: шапки и меню сайта — цветом панели, если сайт той же светлоты, что тема.
       // Светлый сайт в тёмной теме (и наоборот) остаётся на своём цвете, иначе пропадёт текст.
       barRgb = p && isDark(base) === p.dark ? p.rgb : base
@@ -234,6 +357,8 @@
         for (const [p, v, pr] of list) v ? el.style.setProperty(p, v, pr) : el.style.removeProperty(p)
       })
       saved.clear()
+      unmarkPseudo()
+      fades.clear()
       base = null
     }
   }

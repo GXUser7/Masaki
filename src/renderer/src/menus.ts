@@ -1,6 +1,7 @@
 import type { PageMenuParams, Shortcut } from '../../shared/types'
 import { toggleMute } from './actions'
 import type { MenuEntry } from './components/Menu'
+import { isTileColor, siteIconColors } from './lib/iconColor'
 import { isShape, shapeCycle, type ShapeName } from './lib/shapes'
 import { aiModeUrl, hostOf, searchUrl } from './lib/url'
 import { toggleGlassForSite } from './lib/glass'
@@ -220,24 +221,40 @@ export function openGroupMenu(x: number, y: number, id: string, rename: () => vo
   ])
 }
 
-/** Меню плитки избранного или ярлыка: форма, открыть, убрать. */
+/** Меню плитки избранного или ярлыка: форма, цвет, открыть, убрать. */
 export function openTileMenu(x: number, y: number, list: 'favorites' | 'shortcuts', index: number): void {
   const items = S().settings[list]
   const item = items[index]
   if (!item) return
   const current: ShapeName = isShape(item.shape) ? item.shape : shapeCycle[index % shapeCycle.length]
   const save = (next: Shortcut[]): void => S().setSettings({ [list]: next })
+  // Меню не закрываем: пусть плитка на глазах перетекает в новую форму или цвет, а выбранное в ряду сразу отмечается.
+  const refresh = (patch: (e: MenuEntry) => MenuEntry): void =>
+    useStore.setState((st) => (st.menu ? { menu: { ...st.menu, entries: st.menu.entries.map(patch) } } : {}))
   const pick = (shape: ShapeName): void => {
-    const now = S().settings[list]
-    save(now.map((it, j) => (j === index ? { ...it, shape } : it)))
-    // Меню не закрываем: пусть плитка на глазах перетекает в новую форму.
-    useStore.setState((st) =>
-      st.menu ? { menu: { ...st.menu, entries: st.menu.entries.map((e) => (e.kind === 'shapes' ? { ...e, current: shape } : e)) } } : {}
+    save(S().settings[list].map((it, j) => (j === index ? { ...it, shape } : it)))
+    refresh((e) => (e.kind === 'shapes' ? { ...e, current: shape } : e))
+  }
+  const pickColor = (color: string | undefined): void => {
+    // «Авто» — поля нет совсем, а не пустое: так цвет снова берётся из значка и в файлах настроек ничего лишнего.
+    save(
+      S().settings[list].map((it, j) => {
+        if (j !== index) return it
+        const { color: _was, ...rest } = it
+        return color ? { ...rest, color } : rest
+      })
     )
+    refresh((e) => (e.kind === 'colors' ? { ...e, current: color } : e))
   }
   S().openMenu(x, y, [
     { kind: 'header', label: item.title, sub: hostOf(item.url) },
     { kind: 'shapes', current, pick },
+    {
+      kind: 'colors',
+      current: isTileColor(item.color) ? item.color.toLowerCase() : undefined,
+      auto: siteIconColors(item.url),
+      pick: pickColor
+    },
     { kind: 'sep' },
     { kind: 'item', icon: 'add', label: 'Открыть в новой вкладке', run: () => S().newTab(item.url) },
     { kind: 'item', icon: 'link', label: 'Копировать адрес', run: () => window.masaki.copyText(item.url) },

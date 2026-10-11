@@ -34,6 +34,8 @@ export interface Shortcut {
   url: string
   /** Форма плитки из библиотеки M3 Expressive (имя из shapes.ts). */
   shape?: string
+  /** Цвет фона плитки, '#rrggbb'. Нет поля — «Авто»: цвет берётся из значка сайта. */
+  color?: string
 }
 
 /** Запрос сайта на доступ (геопозиция, камера, уведомления…), который показывает интерфейс. */
@@ -382,11 +384,13 @@ export type Command =
   | { type: 'tab-index'; index: number }
   | { type: 'palette'; withUrl: boolean }
   | { type: 'toggle-sidebar' }
-  | { type: 'back' }
-  | { type: 'forward' }
+  /** wcId — вкладка, где нажали боковую кнопку мыши (при двух вкладках рядом она не обязательно активная). */
+  | { type: 'back'; wcId?: number }
+  | { type: 'forward'; wcId?: number }
   | { type: 'reload'; hard?: boolean }
   | { type: 'find' }
-  | { type: 'zoom'; delta: 1 | -1 | 0 }
+  /** wcId — вкладка под курсором при Ctrl+колесе, иначе активная. */
+  | { type: 'zoom'; delta: 1 | -1 | 0; wcId?: number }
   | { type: 'devtools' }
   | { type: 'settings' }
   | { type: 'addons' }
@@ -404,6 +408,20 @@ export type Command =
   | { type: 'tab-search' }
   /** Закрыть вкладку входа (YouCloud) и вернуться во вкладку then, если она ещё открыта. */
   | { type: 'close-wc'; wcId: number; then?: number }
+  /** Остановить загрузку страницы (клавиша «Стоп» на клавиатуре). */
+  | { type: 'stop' }
+  /** Звёздочка: добавить страницу в избранное или убрать (Ctrl+D). */
+  | { type: 'favorite' }
+  /** История — палитра без запроса, как кнопка «История» в панели (Ctrl+H). */
+  | { type: 'history' }
+  /** Загрузки (Ctrl+J): всплывающее окно открывается и закрывается тем же сочетанием. */
+  | { type: 'downloads' }
+  /** Меню Masaki (Alt+F, Alt+E, F10). */
+  | { type: 'menu' }
+  /** Переставить активную вкладку на одно место влево или вправо (Ctrl+Shift+PageUp/PageDown). */
+  | { type: 'move-tab'; delta: -1 | 1 }
+  /** Следующее или предыдущее совпадение поиска на странице; поиск закрыт — открыть его (F3, Ctrl+G). */
+  | { type: 'find-next'; back?: boolean }
 
 export interface WindowState {
   maximized: boolean
@@ -423,6 +441,8 @@ export interface MasakiApi {
     onState(cb: (s: WindowState) => void): () => void
   }
   onCommand(cb: (c: Command) => void): () => void
+  /** Боковая кнопка мыши над самим интерфейсом (над страницей её ловит preload/guest.ts): назад или вперёд в активной вкладке. */
+  navMouse(dir: 'back' | 'forward'): void
   settings: {
     get(): Promise<Settings>
     set(s: Settings): void

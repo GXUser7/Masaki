@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<meta charset="utf-8">
+<title>Затемнение к фону</title>
+<!-- Как блок «Развернуть» под AI-обзором Google: свёрнутый текст, поверх его низа — затемнение
+     «к цвету фона», под ним полоса с кнопкой. Три способа затемнить: отдельный div с градиентом,
+     ::after с градиентом и ::before со сплошной полосой. Ниже то, что трогать нельзя: карточка
+     своего цвета, её акцент в ::before и обычный цветной градиент. -->
+<style>
+  html { background: #202124; }
+  body { margin: 0; font: 16px/1.5 sans-serif; color: #e8eaed; }
+  main { max-width: 620px; margin: 0 auto; padding: 24px; }
+  h2 { margin: 28px 0 8px; font: 700 13px sans-serif; color: #9aa0a6; }
+  .clip { position: relative; max-height: 92px; overflow: hidden; }
+  .clip p { margin: 0 0 8px; }
+  /* 1. Отдельный div поверх низа текста: от прозрачного к цвету сайта. */
+  .fade { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; background: linear-gradient(rgba(32, 33, 36, 0), #202124); }
+  /* Полоса с кнопкой «Развернуть» — цвета сайта. */
+  .strip { background: #202124; padding: 8px 0 12px; text-align: center; }
+  .more { border: 0; border-radius: 20px; padding: 8px 20px; background: #3c4043; color: #e8eaed; font: inherit; }
+  /* 2. Затемнение в ::after, три остановки, часть с альфой. */
+  .clip2::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 64px; background: linear-gradient(to bottom, rgba(32, 33, 36, 0) 0%, rgba(32, 33, 36, 0.85) 55%, #202124 100%); }
+  /* 3. Сплошная полоса цвета сайта в ::before. */
+  .clip3::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: #202124; z-index: 1; }
+  /* Своё: карточка своего цвета, акцент в её ::before и цветной градиент — остаются как есть. */
+  .own { position: relative; margin-top: 24px; padding: 16px 16px 16px 28px; border-radius: 12px; background: #35506b; }
+  .own::before { content: ''; position: absolute; left: 10px; top: 12px; bottom: 12px; width: 6px; border-radius: 3px; background: linear-gradient(#ff0080, #7928ca); }
+  .hero { height: 40px; margin-top: 16px; border-radius: 12px; background: linear-gradient(90deg, #ff6d00, #ffd600); }
+</style>
+<body>
+  <main>
+    <h2>1. ОТДЕЛЬНЫЙ DIV С ГРАДИЕНТОМ</h2>
+    <div class="clip">
+      <p>Material 3 Expressive — это язык дизайна, в котором формы, цвет и движение работают на выразительность интерфейса.</p>
+      <p>Пружинные анимации, живые формы и контрастные акценты помогают быстрее находить главное на экране.</p>
+      <p>Остальной текст свёрнут и показывается кнопкой ниже.</p>
+      <div class="fade"></div>
+    </div>
+    <div class="strip"><button class="more">Развернуть</button></div>
+
+    <h2>2. ЗАТЕМНЕНИЕ В ::AFTER</h2>
+    <div class="clip clip2">
+      <p>Второй блок затемнён псевдоэлементом: в разметке никакого отдельного узла нет.</p>
+      <p>Поэтому снять такое затемнение стилем самого элемента нельзя — нужно правило для ::after.</p>
+      <p>Остальной текст свёрнут.</p>
+    </div>
+
+    <h2>3. СПЛОШНАЯ ПОЛОСА В ::BEFORE</h2>
+    <div class="clip clip3">
+      <p>Третий блок прикрыт сплошной полосой цвета сайта, тоже из псевдоэлемента.</p>
+      <p>Полоса лежит поверх последних строк текста.</p>
+      <p>Остальной текст свёрнут и тоже прикрыт.</p>
+    </div>
+
+    <div class="own">Карточка своего цвета — должна остаться, как и цветной акцент слева</div>
+    <div class="hero"></div>
+  </main>
+</body>
+</html>

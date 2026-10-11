@@ -1,6 +1,6 @@
 import type { Command } from '../../shared/types'
 import { aiModeUrl, searchUrl } from './lib/url'
-import { tabIdOfWebContents, useStore, wv } from './store'
+import { tabIdOfWebContents, useStore, wv, type Tab } from './store'
 
 const S = useStore.getState
 
@@ -9,15 +9,42 @@ function activeWebview(): Electron.WebviewTag | null {
   return t && t.kind === 'web' ? wv(t.id) : null
 }
 
-export function goBack(): void {
-  const el = activeWebview()
-  if (el?.canGoBack()) el.goBack()
+/** Вкладка по webContents её webview (боковая кнопка мыши, Ctrl+колесо), без wcId — активная веб-вкладка. */
+function webTab(wcId?: number): Tab | null {
+  if (wcId == null) {
+    const t = S().active()
+    return t && t.kind === 'web' ? t : null
+  }
+  const id = tabIdOfWebContents(wcId)
+  return (id && S().tabs.find((t) => t.id === id)) || null
 }
 
-export function goForward(): void {
-  const el = activeWebview()
-  if (el?.canGoForward()) el.goForward()
+/** Карточка «взгляда» — тоже webview, но не вкладка: боковая кнопка мыши над ней ходит по её истории. */
+function glanceWebview(wcId: number): Electron.WebviewTag | null {
+  const el = document.querySelector<Electron.WebviewTag>('webview.gl-wv')
+  try {
+    return el && el.getWebContentsId() === wcId ? el : null
+  } catch {
+    return null
+  }
 }
+
+/** Назад или вперёд в вкладке wcId (при двух вкладках рядом нажали не обязательно в активной), без wcId — в активной. */
+export function navigateHistory(dir: 'back' | 'forward', wcId?: number): void {
+  let el: Electron.WebviewTag | null
+  if (wcId == null) el = activeWebview()
+  else {
+    const t = webTab(wcId)
+    el = t ? wv(t.id) : glanceWebview(wcId)
+  }
+  if (!el) return
+  if (dir === 'back') {
+    if (el.canGoBack()) el.goBack()
+  } else if (el.canGoForward()) el.goForward()
+}
+
+export const goBack = (): void => navigateHistory('back')
+export const goForward = (): void => navigateHistory('forward')
 
 export function reloadOrStop(hard = false): void {
   const t = S().active()
@@ -35,10 +62,11 @@ export function reloadOrStop(hard = false): void {
   else el.reload()
 }
 
-export function zoom(delta: 1 | -1 | 0): void {
-  const t = S().active()
-  const el = activeWebview()
-  if (!el) return
+/** Масштаб вкладки wcId (Ctrl+колесо над страницей) или активной; запоминается в tab.zoom, как у Ctrl+=. */
+export function zoom(delta: 1 | -1 | 0, wcId?: number): void {
+  const t = webTab(wcId)
+  const el = t ? wv(t.id) : null
+  if (!t || !el) return
   const z = delta === 0 ? 0 : Math.min(5, Math.max(-4, t.zoom + delta * 0.5))
   el.setZoomLevel(z)
   S().updateTab(t.id, { zoom: z })
@@ -125,10 +153,10 @@ export function handleCommand(c: Command): void {
       s.toggleSidebar()
       break
     case 'back':
-      goBack()
+      navigateHistory('back', c.wcId)
       break
     case 'forward':
-      goForward()
+      navigateHistory('forward', c.wcId)
       break
     case 'reload': {
       const el = activeWebview()
@@ -141,7 +169,7 @@ export function handleCommand(c: Command): void {
       if (s.active().kind === 'web') s.setFind({ open: true, focusTick: s.find.focusTick + 1 })
       break
     case 'zoom':
-      zoom(c.delta)
+      zoom(c.delta, c.wcId)
       break
     case 'devtools':
       toggleDevtools()
@@ -172,6 +200,36 @@ export function handleCommand(c: Command): void {
       else if (s.palette.open) s.closePalette()
       else if (s.popover) s.setPopover(null)
       else if (s.find.open) closeFind()
+      // Ничего открытого нет — Esc останавливает загрузку страницы, как в Chrome.
+      else if (s.active().kind === 'web' && s.active().loading) activeWebview()?.stop()
+      break
+    case 'stop':
+      if (s.active().kind === 'web') activeWebview()?.stop()
+      break
+    case 'favorite':
+      toggleFavorite()
+      break
+    case 'history':
+      // Как кнопка «История» в панели: палитра без запроса, показывает историю.
+      s.openPalette(false)
+      break
+    case 'downloads':
+      s.setPopover(s.popover === 'downloads' ? null : 'downloads')
+      break
+    case 'menu':
+      s.setPopover(s.popover === 'menu' ? null : 'menu')
+      break
+    case 'move-tab': {
+      const i = s.tabs.findIndex((t) => t.id === s.activeId)
+      // moveTab принимает место вставки до изъятия вкладки: вправо на одну — это i + 2.
+      if (i >= 0 && (c.delta < 0 ? i > 0 : i < s.tabs.length - 1)) s.moveTab(s.activeId, c.delta < 0 ? i - 1 : i + 2)
+      break
+    }
+    case 'find-next':
+      if (s.active().kind !== 'web') break
+      // Поиск закрыт или в нём пусто — открываем его, как Ctrl+F; иначе идём по совпадениям.
+      if (!s.find.open || !s.find.text) s.setFind({ open: true, focusTick: s.find.focusTick + 1 })
+      else findInPage(s.find.text, !c.back, true)
       break
     case 'open-url':
       s.newTab(c.url, { background: c.background })

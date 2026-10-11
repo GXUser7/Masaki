@@ -3,7 +3,6 @@ import type { Shortcut } from '../../../shared/types'
 import { useSiteIcon } from '../lib/iconColor'
 import { isShape, shapeCycle, shapes } from '../lib/shapes'
 import { displayUrl, hostOf, letterOf, searchQueryOf } from '../lib/url'
-import { wavePath } from '../lib/shapes'
 import { internalPages, type Tab, useStore } from '../store'
 import { Icon } from './Icon'
 
@@ -26,23 +25,33 @@ export function toneOf(key: string): number {
 }
 
 /**
- * Плитка ярлыка или избранного: форма M3 Expressive, окрашенная в главный цвет значка сайта,
- * и сам значок на белом кружке. Смена формы плавно перетекает (у всех форм одинаковое число точек).
+ * Плитка ярлыка или избранного: форма M3 Expressive, окрашенная в главный цвет значка сайта
+ * (или в цвет, который выбрал пользователь), и сам значок на кружке: белом, а для светлых значков — тёмном.
+ * Смена формы и цвета плавно перетекает (у всех форм одинаковое число точек).
  */
 export function ShapeTile({ item, index }: { item: Shortcut; index: number }): React.JSX.Element {
-  const { src, colors } = useSiteIcon(item.url)
+  const { src, colors } = useSiteIcon(item.url, item.color)
+  // Картинка, которую не удалось показать, — не пустой кружок, а буква, как без значка.
+  const [bad, setBad] = useState<string | null>(null)
   const shape = isShape(item.shape) ? item.shape : shapeCycle[index % shapeCycle.length]
   const vars = colors
-    ? ({ '--tl': colors.light.fill, '--td': colors.dark.fill, '--il': colors.light.ink, '--id': colors.dark.ink } as CSSProperties)
+    ? ({
+        '--tl': colors.light.fill,
+        '--td': colors.dark.fill,
+        '--il': colors.light.ink,
+        '--id': colors.dark.ink,
+        // Подложка значка живёт во внешнем стиле плитки, а рисует её .site-ic.
+        ...(colors.plate ? { '--plate': colors.plate } : {})
+      } as CSSProperties)
     : undefined
   return (
     <span className="tile" style={vars}>
       <svg viewBox="0 0 200 200" aria-hidden="true">
         <path className={'tile-shape t' + ((index % 4) + 1)} style={{ d: `path("${shapes[shape]}")` } as CSSProperties} />
       </svg>
-      {src ? (
-        <span className="site-ic">
-          <img src={src} alt="" draggable={false} />
+      {src && bad !== src ? (
+        <span className={'site-ic' + (colors?.plate ? ' dk' : '')}>
+          <img src={src} alt="" draggable={false} onError={() => setBad(src)} />
         </span>
       ) : (
         <b className="tile-letter">{letterOf(item.title, item.url)}</b>
@@ -152,18 +161,6 @@ export function useHoverOverPage(): [React.RefObject<HTMLDivElement | null>, boo
     }
   }, [hot])
   return [ref, hot, () => setHot(true)]
-}
-
-export function Wave({ on }: { on: boolean }): React.JSX.Element {
-  return (
-    <div className="wave" aria-hidden="true">
-      {on && (
-        <svg viewBox="0 0 1000 12">
-          <path d={wavePath} />
-        </svg>
-      )}
-    </div>
-  )
 }
 
 /** Содержимое адресной строки: значок безопасности + адрес, запрос или подсказка. */

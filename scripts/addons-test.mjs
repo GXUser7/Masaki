@@ -96,6 +96,53 @@ try {
   await page.waitForTimeout(500)
   await shot('22c-glass-scrolled')
 
+  // Затемнения «к фону» (как «Развернуть» под AI-обзором Google): градиент к цвету сайта — тоже
+  // эффект фона, а не деталь страницы. Иначе на светлых обоях остаётся тёмная плашка.
+  console.log('шаг затемнения «к фону»')
+  await open(fileUrl('glass-fade.html'))
+  await page.waitForTimeout(2500)
+  await shot('22d-glass-fade')
+  const inFade = (code) =>
+    app.evaluate(async ({ webContents }, code) => {
+      const g = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().includes('glass-fade.html'))
+      return g?.executeJavaScript(code)
+    }, code)
+  const fadeState = `(() => {
+    const q = (s) => document.querySelector(s)
+    const st = (s, p) => getComputedStyle(q(s), p)
+    return {
+      fade: [st('.fade').backgroundImage, st('.fade').backgroundColor],
+      strip: st('.strip').backgroundColor,
+      more: st('.more').backgroundColor,
+      after: [st('.clip2', '::after').backgroundImage, st('.clip2', '::after').backgroundColor],
+      before: [st('.clip3', '::before').backgroundImage, st('.clip3', '::before').backgroundColor],
+      own: st('.own').backgroundColor,
+      accent: st('.own', '::before').backgroundImage,
+      hero: st('.hero').backgroundImage,
+      marks: document.querySelectorAll('[data-masaki-glass-pseudo]').length,
+      styles: document.querySelectorAll('style').length
+    }
+  })()`
+  const fade = await inFade(fadeState)
+  console.log('затемнения:', JSON.stringify(fade))
+  if (!fade) throw new Error('страница glass-fade.html не открылась')
+  if (fade.fade[0] !== 'none' || fade.fade[1] !== clearBg) throw new Error('Градиент «к фону» (div) остался непрозрачным: ' + JSON.stringify(fade.fade))
+  if (fade.strip !== clearBg) throw new Error('Полоса цвета сайта под градиентом осталась непрозрачной')
+  if (fade.after[0] !== 'none' || fade.after[1] !== clearBg) throw new Error('Затемнение в ::after осталось: ' + JSON.stringify(fade.after))
+  if (fade.before[0] !== 'none' || fade.before[1] !== clearBg) throw new Error('Сплошная полоса в ::before осталась: ' + JSON.stringify(fade.before))
+  if (fade.more === clearBg || fade.own !== 'rgb(53, 80, 107)') throw new Error('Прозрачность съела кнопку или карточку своего цвета')
+  if (!fade.accent.includes('gradient') || !fade.hero.includes('gradient')) throw new Error('Прозрачность съела цветной градиент')
+  // Помечены ровно два элемента (::after и ::before); акцент карточки пометки не получил.
+  if (fade.marks !== 2) throw new Error('Пометок псевдоэлементов должно быть 2, а не ' + fade.marks)
+  // Снятие аддона возвращает всё: пометки, правило-<style> и сами градиенты.
+  await inFade('window.__masakiGlass.remove()')
+  const fadeOff = await inFade(fadeState)
+  if (fadeOff.marks !== 0 || fadeOff.styles !== fade.styles - 1) throw new Error('После снятия остались пометки или <style>: ' + JSON.stringify(fadeOff))
+  if (!fadeOff.fade[0].includes('gradient') || !fadeOff.after[0].includes('gradient') || fadeOff.before[1] === clearBg) {
+    throw new Error('Снятие аддона не вернуло затемнения: ' + JSON.stringify(fadeOff))
+  }
+  await shot('22d-glass-fade-off')
+
   console.log('шаг прозрачность «Своя»')
   await page.click('.tab:has-text("Аддоны")')
   await page.waitForSelector('.addons-page')

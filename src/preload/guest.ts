@@ -314,6 +314,19 @@ window.addEventListener(
   { passive: true, capture: true }
 )
 
+// 6а. Боковые кнопки мыши («назад», «вперёд»). Chromium сам разбирает WM_XBUTTON* и отдаёт их странице как
+// mouseup с button 3/4, а WM_APPCOMMAND до окна уже не доходит — поэтому win.on('app-command') их не слышит.
+// Если страница отменила событие (preventDefault), кнопка ей нужна (карты, редакторы) — не трогаем, как Chrome.
+// Предзагрузка идёт только в главном фрейме вкладки: нажатие над iframe сюда не попадёт.
+// Наш слушатель поставлен раньше страничных, поэтому об отмене узнаём, когда событие обойдёт всех.
+window.addEventListener('mouseup', (e) => {
+  if (!e.isTrusted || (e.button !== 3 && e.button !== 4)) return
+  const dir = e.button === 3 ? 'back' : 'forward'
+  setTimeout(() => {
+    if (!e.defaultPrevented) ipcRenderer.send('nav:mouse', dir)
+  })
+})
+
 // 7. Что играет: Media Session сайта — в мини-плеер Masaki (обложка, название, «следующий»).
 // Команды мини-плеера приходят сюда (webview.send) и зовут обработчики сайта, как медиаклавиши.
 let mediaRun: ((action: string, time: number) => void) | null = null

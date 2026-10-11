@@ -32,16 +32,29 @@ export function commandFor(input: KeyInput): Command | null {
         return { type: 'toggle-sidebar' }
       case 'Tab':
         return shift ? { type: 'prev-tab' } : { type: 'next-tab' }
+      // Как в Chrome: Ctrl+Shift+PageUp/PageDown двигают саму вкладку, без Shift — переключают.
       case 'PageDown':
-        return { type: 'next-tab' }
+        return shift ? { type: 'move-tab', delta: 1 } : { type: 'next-tab' }
       case 'PageUp':
-        return { type: 'prev-tab' }
+        return shift ? { type: 'move-tab', delta: -1 } : { type: 'prev-tab' }
       case 'KeyR':
         return { type: 'reload', hard: shift }
       case 'F5':
         return { type: 'reload', hard: true }
       case 'KeyF':
         return { type: 'find' }
+      case 'KeyG':
+        return { type: 'find-next', back: shift }
+      case 'KeyD':
+        return shift ? null : { type: 'favorite' }
+      case 'KeyH':
+        // На Mac ⌘H — «Скрыть Masaki», его не отнимаем.
+        return shift || input.meta ? null : { type: 'history' }
+      case 'KeyJ':
+        return shift ? { type: 'devtools' } : { type: 'downloads' }
+      case 'KeyC':
+        // Без Shift это «копировать» — не трогаем.
+        return shift ? { type: 'devtools' } : null
       case 'Equal':
       case 'NumpadAdd':
         return { type: 'zoom', delta: 1 }
@@ -73,11 +86,16 @@ export function commandFor(input: KeyInput): Command | null {
     if (code === 'ArrowLeft') return { type: 'back' }
     if (code === 'ArrowRight') return { type: 'forward' }
     if (code === 'KeyD') return { type: 'palette', withUrl: true }
+    // Меню Chrome открывается Alt+F / Alt+E; у Masaki это его меню. По code, поэтому и на русской раскладке.
+    if (code === 'KeyF' || code === 'KeyE') return { type: 'menu' }
+    // Домашняя страница Chrome — у Masaki это новая вкладка.
+    if (code === 'Home') return { type: 'new-tab' }
   }
   if (!ctrl && !alt) {
-    if (code === 'F5') return { type: 'reload' }
+    if (code === 'F5') return { type: 'reload', hard: shift }
     if (code === 'F6') return { type: 'palette', withUrl: true }
-    if (code === 'F3') return { type: 'find' }
+    if (code === 'F3') return { type: 'find-next', back: shift }
+    if (code === 'F10') return shift ? null : { type: 'menu' }
     if (code === 'F12') return { type: 'devtools' }
   }
   return null

@@ -18,7 +18,7 @@ import { NewTab } from './NewTab'
 import { Palette } from './Palette'
 import { SettingsPage } from './SettingsPage'
 import { WebView } from './WebView'
-import { Glance, MorphKeyframes, PageProgress, SnapPicker, SplitDivider, SwipeArrow, TabPreview } from './Extras'
+import { Glance, MorphKeyframes, SnapPicker, SplitDivider, SwipeArrow, TabPreview } from './Extras'
 
 function useSystemDark(): boolean {
   const [dark, setDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -101,6 +101,11 @@ export function App(): React.JSX.Element {
       handleCommand(c)
     }
     window.addEventListener('keydown', onKey)
+    // Боковые кнопки мыши над самим интерфейсом (над страницей их ловит preload/guest.ts, мимо app-command).
+    const onMouseUp = (e: MouseEvent): void => {
+      if (e.isTrusted && !e.defaultPrevented && (e.button === 3 || e.button === 4)) window.masaki.navMouse(e.button === 3 ? 'back' : 'forward')
+    }
+    window.addEventListener('mouseup', onMouseUp)
     // Своё меню для полей ввода интерфейса; у остального интерфейса меню нет.
     const onContext = (e: MouseEvent): void => {
       const t = e.target
@@ -115,6 +120,7 @@ export function App(): React.JSX.Element {
       window.masaki.permissions.onPrompt((p) => useStore.getState().addPermission(p)),
       window.masaki.permissions.onDismiss((id) => useStore.getState().dropPermission(id)),
       () => window.removeEventListener('keydown', onKey),
+      () => window.removeEventListener('mouseup', onMouseUp),
       window.masaki.onCommand(handleCommand),
       window.masaki.downloads.onUpdate((d) => useStore.getState().upsertDownload(d)),
       window.masaki.win.onState((st) => useStore.setState({ winMaximized: st.maximized })),
@@ -284,7 +290,6 @@ export function App(): React.JSX.Element {
             {active.kind === 'passwords' && <PasswordsPage />}
             {active.kind === 'web' && active.error && <ErrorView tab={active} />}
           </main>
-          <PageProgress on={active.kind === 'web' && active.loading} />
           <SwipeArrow />
           {findOpen && active.kind === 'web' && <FindBar />}
           <PermissionBar />

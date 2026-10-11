@@ -173,6 +173,25 @@ function attachShortcuts(contents: WebContents, isGuest: boolean): void {
   })
 }
 
+// ---------- Назад и вперёд: боковые кнопки мыши и клавиши браузера ----------
+
+/**
+ * Боковая кнопка мыши приходит от страницы (preload/guest.ts → 'nav:mouse'), клавиша «Назад» на клавиатуре —
+ * через WM_APPCOMMAND ('app-command'). На части мышек и драйверов может прийти и то, и другое: тогда второе
+ * (из другого источника, в ту же сторону, в пределах полусекунды) отбрасываем, чтобы не уйти сразу на две страницы.
+ * Два нажатия мыши подряд — это два перехода, их не склеиваем.
+ */
+let lastNav: { src: 'mouse' | 'app'; dir: 'back' | 'forward'; at: number } | null = null
+const NAV_DEDUPE_MS = 500
+
+/** wcId — вкладка, в которой нажали (две вкладки рядом); без него команда идёт в активную. */
+function navigateHistory(src: 'mouse' | 'app', dir: 'back' | 'forward', wcId?: number): void {
+  const now = Date.now()
+  if (lastNav && lastNav.src !== src && lastNav.dir === dir && now - lastNav.at < NAV_DEDUPE_MS) return
+  lastNav = { src, dir, at: now }
+  send(wcId == null ? { type: dir } : { type: dir, wcId })
+}
+
 // ---------- Контекстное меню страницы ----------
 // Меню рисует интерфейс (стеклянное, в стиле Masaki), здесь только параметры и действия.
 
@@ -578,10 +597,46 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
   for (const ev of ['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'restore'] as const) {
     win.on(ev as 'maximize', () => win?.webContents.send('win-state', windowState()))
   }
-  // Боковые кнопки мыши «назад/вперёд».
+  // Специальные клавиши клавиатуры (WM_APPCOMMAND). Боковые кнопки мыши сюда обычно не доходят: Chromium
+  // разбирает WM_XBUTTON* сам и отдаёт странице как mouseup с button 3/4 — их ловит preload/guest.ts ('nav:mouse').
   win.on('app-command', (_e, cmd) => {
-    if (cmd === 'browser-backward') send({ type: 'back' })
-    if (cmd === 'browser-forward') send({ type: 'forward' })
+    switch (cmd) {
+      case 'browser-backward':
+        navigateHistory('app', 'back')
+        break
+      case 'browser-forward':
+        navigateHistory('app', 'forward')
+        break
+      case 'browser-refresh':
+        send({ type: 'reload' })
+        break
+      case 'browser-stop':
+        send({ type: 'stop' })
+        break
+      case 'browser-search':
+        send({ type: 'palette', withUrl: false })
+        break
+      case 'browser-home':
+      case 'new':
+        // Домашняя страница Masaki — новая вкладка.
+        send({ type: 'new-tab' })
+        break
+      case 'browser-favorites':
+        send({ type: 'favorite' })
+        break
+      case 'find':
+        send({ type: 'find' })
+        break
+      case 'close':
+        send({ type: 'close-tab' })
+        break
+      case 'print':
+        send({ type: 'print' })
+        break
+      case 'save':
+        send({ type: 'save-page' })
+        break
+    }
   })
   win.on('closed', () => {
     win = null
@@ -635,6 +690,9 @@ app.on('web-contents-created', (_e, contents) => {
   if (contents.getType() !== 'webview') return
   attachShortcuts(contents, true)
   watchWebview(contents)
+  // Ctrl+колесо над страницей: Electron масштаб сам не меняет, а только сообщает направление.
+  // Применяет интерфейс (как Ctrl+=, с запоминанием в tab.zoom) в той вкладке, над которой крутили.
+  contents.on('zoom-changed', (_ev, dir) => send({ type: 'zoom', delta: dir === 'in' ? 1 : -1, wcId: contents.id }))
   contents.on('context-menu', (_ev, p) => sendPageMenu(contents, p))
   // navigator.userAgent на странице входа Google должен совпадать с заголовком.
   contents.on('did-start-navigation', (e) => {
@@ -786,6 +844,14 @@ function registerIpc(): void {
   })
   ipcMain.on('win:close', () => win?.close())
   ipcMain.on('win:fullscreen', (_e, on: boolean) => win?.setFullScreen(on))
+  // Боковая кнопка мыши: от страницы вкладки (назад/вперёд именно в ней — важно при двух вкладках рядом)
+  // или от самого интерфейса (тогда в активной). Страница шлёт только из главного фрейма.
+  ipcMain.on('nav:mouse', (e, dir: unknown) => {
+    if (dir !== 'back' && dir !== 'forward') return
+    if (e.sender.getType() === 'webview') {
+      if (e.senderFrame && !e.senderFrame.parent) navigateHistory('mouse', dir, e.sender.id)
+    } else if (win && e.sender === win.webContents) navigateHistory('mouse', dir)
+  })
   // Свои раскладки окна: Windows показывает Snap Layouts только у системных кнопок.
   ipcMain.on('win:snap', (_e, r: { x: number; y: number; w: number; h: number }) => {
     if (!win || win.isFullScreen()) return

@@ -39,6 +39,7 @@ const api: MasakiApi = {
     }
   },
   onCommand: (cb) => listen<Command>('command', cb),
+  navMouse: (dir) => ipcRenderer.send('nav:mouse', dir),
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (s) => ipcRenderer.send('settings:set', s),

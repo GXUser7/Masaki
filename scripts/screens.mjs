@@ -100,9 +100,7 @@ try {
   await wait(500)
 
   await win.click('.side-top .ib[aria-label^="Свернуть панель"]')
-  await wait(1200)
-  await win.focus('.capsule .cap-side')
-  await wait(900)
+  await wait(2100)
   await shot('capsule')
   await win.click('.capsule .cap-side')
   await wait(1200)

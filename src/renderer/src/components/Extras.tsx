@@ -1,6 +1,6 @@
 import { createElement, useEffect, useRef, useState } from 'react'
 import { goBack, goForward } from '../actions'
-import { shapes, wavePath } from '../lib/shapes'
+import { shapes } from '../lib/shapes'
 import { hostOf } from '../lib/url'
 import { useStore, wv, type Tab } from '../store'
 import { useArtColors } from '../lib/iconColor'
@@ -138,9 +138,11 @@ export function TabPreview(): React.JSX.Element | null {
   const tab = useStore((s) => s.tabs.find((t) => t.id === s.preview?.tabId))
   const thumb = useStore((s) => (s.preview ? s.thumbs[s.preview.tabId] : undefined))
   if (!preview || !tab) return null
-  const top = Math.min(Math.max(8, preview.y - 40), window.innerHeight - 250)
+  // Над доком превью встаёт над вкладкой, в боковой панели — справа от неё.
+  const top = preview.above ? Math.max(8, preview.y - 238) : Math.min(Math.max(8, preview.y - 40), window.innerHeight - 250)
+  const left = preview.above ? Math.min(Math.max(8, preview.x - 144), window.innerWidth - 296) : preview.x
   return (
-    <div className="glass tprev" style={{ left: preview.x, top }} aria-hidden="true">
+    <div className="glass tprev" style={{ left, top }} aria-hidden="true">
       <Grain />
       <div className="tprev-img">
         {thumb ? <img src={thumb} alt="" draggable={false} /> : <TabFav tab={tab} className="tprev-fav" />}
@@ -182,18 +184,24 @@ function useBackgroundAudio() {
 
 const placeOf = (url: string): string => (url.startsWith('file:') ? 'файл на компьютере' : hostOf(url))
 
-/** Где трек: тонкая полоса внизу плеера, щелчок — перемотка (если сайт её умеет). */
-function MediaProgress({ tab, playing }: { tab: Tab; playing: boolean }): React.JSX.Element | null {
-  const position = tab.media?.position
+/** Где трек, от 0 до 1 (пока играет — раз в секунду); null — сайт не сообщает. */
+function useMediaPos(tab: Tab | undefined, playing: boolean): number | null {
+  const position = tab?.media?.position
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
-    if (!playing) return
+    if (!playing || !position) return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
-  }, [playing])
+  }, [playing, position])
   if (!position) return null
   const at = position.position + (playing ? (Math.max(0, now - position.at) / 1000) * position.rate : 0)
-  const p = Math.min(1, Math.max(0, at / position.duration))
+  return Math.min(1, Math.max(0, at / position.duration))
+}
+
+/** Где трек: тонкая полоса внизу плеера, щелчок — перемотка (если сайт её умеет). */
+function MediaProgress({ tab, p }: { tab: Tab; p: number | null }): React.JSX.Element | null {
+  const position = tab.media?.position
+  if (!position || p === null) return null
   const seekable = !!tab.media?.actions.includes('seekto')
   return (
     <div
@@ -211,15 +219,17 @@ function MediaProgress({ tab, playing }: { tab: Tab; playing: boolean }): React.
 }
 
 /** Звук в фоновой вкладке: что играет и кнопки прямо в панели, не надо искать, где играет.
- *  Сайт с Media Session (YouCloud, YouTube, SoundCloud…) даёт обложку, название и «следующий». */
-export function MiniPlayer({ compact = false }: { compact?: boolean }): React.JSX.Element | null {
+ *  Сайт с Media Session (YouCloud, YouTube, SoundCloud…) даёт обложку, название и «следующий».
+ *  dock — островом справа от капсулы в свёрнутом режиме. */
+export function MiniPlayer({ dock = false }: { dock?: boolean }): React.JSX.Element | null {
   const { tab, playing, toggle } = useBackgroundAudio()
   const m = tab?.media
   const art = useArtColors(m?.artwork || undefined)
+  const p = useMediaPos(tab, playing)
   if (!tab) return null
   if (!m?.title) {
     return (
-      <div className={'mplayer' + (compact ? ' compact' : '') + (playing ? ' playing' : '')}>
+      <div className={'mplayer' + (dock ? ' dock' : '') + (playing ? ' playing' : '')}>
         <button className="mp-main" title="Перейти на вкладку" onClick={() => S().activate(tab.id)}>
           <TabFav tab={tab} />
           <span className="mp-t">
@@ -241,9 +251,10 @@ export function MiniPlayer({ compact = false }: { compact?: boolean }): React.JS
     )
   }
   const c = art?.colors
-  const tint = c ? ({ '--mp-l': c.light.fill, '--mp-d': c.dark.fill } as React.CSSProperties) : undefined
+  // --mp-p — где трек: кольцо вокруг обложки в сжатом доке.
+  const style = { '--mp-p': p ?? 0, ...(c ? { '--mp-l': c.light.fill, '--mp-d': c.dark.fill } : {}) } as React.CSSProperties
   return (
-    <div className={'mplayer rich' + (compact ? ' compact' : '') + (playing ? ' playing' : '') + (c ? ' tinted' : '')} style={tint}>
+    <div className={'mplayer rich' + (dock ? ' dock' : '') + (playing ? ' playing' : '') + (c ? ' tinted' : '')} style={style}>
       <button className="mp-art" title="Перейти на вкладку" onClick={() => S().activate(tab.id)}>
         {m.artwork ? <img src={art?.src ?? m.artwork} alt="" draggable={false} /> : <TabFav tab={tab} />}
       </button>
@@ -268,42 +279,53 @@ export function MiniPlayer({ compact = false }: { compact?: boolean }): React.JS
           </button>
         )}
       </div>
-      <MediaProgress tab={tab} playing={playing} />
+      <MediaProgress tab={tab} p={p} />
     </div>
   )
 }
 
-/** Звук в капсуле: эквалайзер; клик — пауза, подробности — над капсулой при наведении. */
-export function CapsuleAudio(): React.JSX.Element | null {
-  const { tab, playing, toggle } = useBackgroundAudio()
-  if (!tab) return null
-  const name = tab.media?.title ? tab.media.title + (tab.media.artist ? ' — ' + tab.media.artist : '') : tab.title || hostOf(tab.url)
-  return (
-    <button
-      className={'ib cap-aud' + (playing ? ' playing' : '')}
-      aria-label={(playing ? 'Пауза: ' : 'Продолжить: ') + name}
-      title={name + (playing ? ' · пауза' : ' · продолжить')}
-      onClick={toggle}
-    >
-      <span className="eq" aria-hidden="true">
-        <i />
-        <i />
-        <i />
-      </span>
-    </button>
-  )
-}
+// ---------- Загрузка страницы ----------
 
-// ---------- Загрузка страницы: волна по кромке ----------
-
-/** Волнистый индикатор M3 Expressive по верхней кромке страницы — вместо спиннера на вкладке. */
-export function PageProgress({ on }: { on: boolean }): React.JSX.Element {
+/**
+ * Заливка адресной капсулы — индикатор загрузки вместо волны по кромке страницы (она на сайте
+ * смотрелась чужой). Точного процента webview не отдаёт, поэтому, как у настоящих индикаторов:
+ * быстрый рывок до пятой части, потом ползёт к ~85 % и ждёт; готово — доезжает до края и гаснет.
+ * Фазы ставим прямо в data-p (без перерисовок React), едет только transform — вёрстку не трогаем.
+ * Состояние живёт в самом компоненте, а Chrome держит его с key = id вкладки: переключение
+ * вкладок не «доезжает» чужую загрузку, а новая вкладка начинает с нуля.
+ */
+export function LoadFill({ loading }: { loading: boolean }): React.JSX.Element {
+  const ref = useRef<HTMLSpanElement>(null)
+  const ran = useRef(false) // загрузка шла при нас — её нужно довести до конца
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const timers: number[] = []
+    // Чтение offsetWidth заставляет браузер посчитать стиль прежней фазы — иначе переход не стартует.
+    const set = (p: string): void => {
+      el.dataset.p = p
+      void el.offsetWidth
+    }
+    const after = (ms: number, fn: () => void): void => {
+      timers.push(window.setTimeout(fn, ms))
+    }
+    if (loading) {
+      ran.current = true
+      set('idle')
+      set('start')
+      after(480, () => set('crawl'))
+    } else if (ran.current) {
+      ran.current = false
+      set('finish')
+      after(220, () => set('fade'))
+      after(620, () => set('idle'))
+    }
+    return () => timers.forEach((t) => window.clearTimeout(t))
+  }, [loading])
   return (
-    <div className={'pprog' + (on ? ' on' : '')} aria-hidden="true">
-      <svg viewBox="0 0 1000 12" preserveAspectRatio="none">
-        <path d={wavePath} />
-      </svg>
-    </div>
+    <span className="abar-fill" ref={ref} data-p="idle" aria-hidden="true">
+      <i />
+    </span>
   )
 }
 

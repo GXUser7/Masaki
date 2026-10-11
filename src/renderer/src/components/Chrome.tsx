@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   closeFind,
   findInPage,
@@ -18,7 +18,7 @@ import type { TabGroup } from '../../../shared/types'
 import { useStore, type Tab } from '../store'
 import { Icon } from './Icon'
 import { AddressLabel, Grain, ShapeTile, TabFav, useHoverOverPage } from './parts'
-import { CapsuleAudio, MiniPlayer, WinButtons } from './Extras'
+import { LoadFill, MiniPlayer, WinButtons } from './Extras'
 import { openYouCloud } from '../lib/youcloud'
 import { syncStatusText } from './SyncSection'
 import { openGroupMenu, openTabMenu, openTileMenu } from '../menus'
@@ -38,6 +38,7 @@ function AddressBar({ where }: { where: 'side' | 'cap' }): React.JSX.Element {
   const web = t.kind === 'web'
   return (
     <div className={'abar abar-' + where + (t.canBack ? ' can-back' : '') + (t.canFwd ? ' can-fwd' : '')}>
+      <LoadFill key={t.id} loading={web && t.loading} />
       <span className="abar-nav">
         <button className="ib an-b" tabIndex={t.canBack ? 0 : -1} aria-hidden={!t.canBack} aria-label="Назад" title="Назад · Alt+←" onClick={goBack}>
           <Icon name="back" />
@@ -54,7 +55,7 @@ function AddressBar({ where }: { where: 'side' | 'cap' }): React.JSX.Element {
         <button
           className={'ib a-star' + (fav ? ' on' : '')}
           aria-label={fav ? 'Убрать из избранного' : 'Добавить в избранное'}
-          title={fav ? 'Убрать из избранного' : 'В избранное'}
+          title={fav ? 'Убрать из избранного · Ctrl+D' : 'В избранное · Ctrl+D'}
           onClick={toggleFavorite}
         >
           <Icon name={fav ? 'starFilled' : 'star'} />
@@ -320,7 +321,7 @@ export function Sidebar(): React.JSX.Element {
       <div className="side-bottom">
         <AccountChip />
         <DownloadsButton />
-        <button className="ib" aria-label="История" title="История и поиск по вкладкам · Ctrl+Shift+A" onClick={() => s().openPalette(false)}>
+        <button className="ib" aria-label="История" title="История · Ctrl+H, поиск по вкладкам · Ctrl+Shift+A" onClick={() => s().openPalette(false)}>
           <Icon name="history" />
         </button>
         <button className="ib" aria-label="Меню" title="Меню" onClick={() => s().setPopover('menu')}>
@@ -331,76 +332,223 @@ export function Sidebar(): React.JSX.Element {
   )
 }
 
-// ---------- Капсула (когда боковая свёрнута) ----------
+// ---------- Док (когда боковая свёрнута) ----------
+
+/** Шаг вкладки-значка: кнопка 40 px и промежуток 4 px. */
+const DK_STEP = 44
+/** Поля острова вкладок (отступы и рамка), кнопка «+» с промежутком, «ещё N» с промежутком. */
+const DK_PAD = 14
+const DK_ADD = 44
+const DK_MORE = 60
+/** Вкладка с названием не уже этого — иначе названия не прочесть, и остров переходит на значки. */
+const DK_TITLED_MIN = 150
+/** В сжатом доке (страницу листают вниз): значки 22 px через 6 px, без «+». */
+const DK_TINY_STEP = 28
 
 /**
- * Одна капсула внизу вместо дока: панель, назад/вперёд, адрес, меню и кнопки окна. Наведение
- * поднимает над ней вкладки с названиями; пока страницу листают вниз, капсула сжимается до домена.
+ * Вкладки дока — слева от капсулы, в свободном месте, а не над страницей. Сколько влезает, решает
+ * ширина колонки: просторно — с названиями, тесно — значками, совсем тесно — значки вокруг активной
+ * и «ещё N» со списком всех вкладок. Колесо над островом сдвигает видимое окно.
  */
-export function Dock(): React.JSX.Element {
-  const tabs = useStore((st) => st.tabs)
-  const activeId = useStore((st) => st.activeId)
-  const small = useStore((st) => st.capsuleSmall)
-  const [ref, hot, enter] = useHoverOverPage()
+function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Element {
+  const tabs = useStore((s) => s.tabs)
+  const activeId = useStore((s) => s.activeId)
+  const groups = useStore((s) => s.groups)
+  const listOpen = useStore((s) => s.popover === 'tabs')
   const s = useStore.getState
-  const strip = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (hot) strip.current?.querySelector('.ct.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [hot, activeId])
+  const box = useRef<HTMLDivElement>(null)
+  const hover = useRef<number | undefined>(undefined)
+  const wheel = useRef(0)
+  const [room, setRoom] = useState(0)
+  const [start, setStart] = useState(0)
 
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setRoom(el.clientWidth))
+    ro.observe(el)
+    setRoom(el.clientWidth)
+    return () => ro.disconnect()
+  }, [])
+
+  const n = tabs.length
+  const titledW = Math.floor((room - DK_PAD - DK_ADD) / Math.max(1, n)) - 4
+  const titled = !tiny && titledW >= DK_TITLED_MIN
+  const step = tiny ? DK_TINY_STEP : DK_STEP
+  const free = room - DK_PAD - (tiny ? 0 : DK_ADD)
+  const all = titled || Math.floor(free / step) >= n
+  const fit = all ? n : Math.max(1, Math.floor((free - DK_MORE) / step))
+  const from = Math.min(Math.max(0, start), Math.max(0, n - fit))
+  const ai = tabs.findIndex((t) => t.id === activeId)
+
+  // Переключились на скрытую вкладку — окно доезжает до неё; колесом активную можно и увести из виду.
+  useEffect(() => {
+    if (ai < 0) return
+    setStart((st) => (ai < st ? ai : ai >= st + fit ? ai - fit + 1 : st))
+  }, [ai, fit])
+  // Курсор ушёл с дока (в том числе прямо на страницу) — превью вкладки не должно остаться висеть.
+  useEffect(() => {
+    if (hot) return
+    window.clearTimeout(hover.current)
+    if (useStore.getState().preview?.above) useStore.setState({ preview: null })
+  }, [hot])
+
+  const shown = all ? tabs : tabs.slice(from, from + fit)
   return (
-    <div ref={ref} className={'capz' + (hot ? ' open' : '') + (small && !hot ? ' small' : '')} onPointerEnter={enter} onPointerMove={hot ? undefined : enter}>
-      <div className="glass cap-tabs" role="tablist" aria-label="Вкладки">
+    <div className="dk-left" ref={box}>
+      <div
+        className={'glass dk-tabs' + (titled ? ' titled' : '')}
+        style={titled ? ({ '--dk-tw': Math.min(220, titledW) + 'px' } as React.CSSProperties) : undefined}
+        role="tablist"
+        aria-label="Вкладки"
+        onWheel={(e) => {
+          if (all) return
+          // Тачпад шлёт много мелких шагов — копим, чтобы окно не пролетало мимо.
+          wheel.current += Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+          if (Math.abs(wheel.current) < 50) return
+          const d = wheel.current > 0 ? 1 : -1
+          wheel.current = 0
+          setStart(Math.min(Math.max(0, from + d), n - fit))
+        }}
+      >
         <Grain />
-        <div
-          className="ct-strip"
-          ref={strip}
-          onWheel={(e) => {
-            // Колесо мыши листает ленту вкладок вбок.
-            if (strip.current && Math.abs(e.deltaY) > Math.abs(e.deltaX)) strip.current.scrollLeft += e.deltaY
-          }}
-        >
-          {tabs.map((tab) => (
+        {shown.map((tab) => {
+          const g = tab.group ? groups.find((x) => x.id === tab.group) : undefined
+          const name = tab.title || hostOf(tab.url)
+          return (
             <div
               key={tab.id}
-              className={'ct' + (tab.id === activeId ? ' on' : '')}
+              className={'dk-t' + (tab.id === activeId ? ' on' : '')}
+              style={g ? ({ '--gc': g.color } as React.CSSProperties) : undefined}
               role="tab"
               aria-selected={tab.id === activeId}
               onAuxClick={(e) => e.button === 1 && s().closeTab(tab.id)}
               onContextMenu={(e) => {
                 e.preventDefault()
+                window.clearTimeout(hover.current)
                 openTabMenu(e.clientX, e.clientY, tab.id)
               }}
+              onMouseEnter={(e) => {
+                window.clearTimeout(hover.current)
+                if (tiny || tab.id === activeId || tab.kind !== 'web') return
+                const r = e.currentTarget.getBoundingClientRect()
+                hover.current = window.setTimeout(
+                  () => useStore.setState({ preview: { tabId: tab.id, x: r.left + r.width / 2, y: r.top, above: true } }),
+                  650
+                )
+              }}
+              onMouseLeave={() => {
+                window.clearTimeout(hover.current)
+                if (useStore.getState().preview) useStore.setState({ preview: null })
+              }}
             >
-              <button className="ct-main" title={tab.title} onClick={() => s().activate(tab.id)}>
+              <button className="dk-main" title={name} aria-label={name} onClick={() => s().activate(tab.id)}>
                 <TabFav tab={tab} />
-                <span className="ct-t">{tab.title || hostOf(tab.url)}</span>
+                {titled && <span className="dk-tt">{name}</span>}
               </button>
-              <button className="ct-x" aria-label={`Закрыть вкладку «${tab.title}»`} onClick={() => s().closeTab(tab.id)}>
-                <Icon name="close" />
-              </button>
+              {titled && (
+                <button className="dk-x" aria-label={`Закрыть вкладку «${name}»`} onClick={() => s().closeTab(tab.id)}>
+                  <Icon name="close" />
+                </button>
+              )}
+              {g && <i className="dk-g" />}
             </div>
-          ))}
-        </div>
-        <button className="ib ct-add" aria-label="Новая вкладка" title="Новая вкладка · Ctrl+T" onClick={() => s().newTab()}>
+          )
+        })}
+        {!all && (
+          <button
+            className={'dk-more' + (listOpen ? ' on' : '')}
+            aria-label={`Все вкладки, скрыто ${n - fit}`}
+            aria-expanded={listOpen}
+            title="Все вкладки"
+            onClick={() => s().setPopover(listOpen ? null : 'tabs')}
+          >
+            +{n - fit}
+          </button>
+        )}
+        <button className="ib dk-add" aria-label="Новая вкладка" title="Новая вкладка · Ctrl+T" onClick={() => s().newTab()}>
           <Icon name="add" />
         </button>
       </div>
-      <MiniPlayer compact />
+    </div>
+  )
+}
+
+/**
+ * Док вместо боковой панели (вариант A редизайна дока): вкладки слева, капсула с адресом по центру,
+ * плеер справа — всё в свободном месте и видно сразу. Пока страницу листают вниз, док худеет целиком;
+ * наведи — вернётся.
+ */
+export function Dock(): React.JSX.Element {
+  const small = useStore((st) => st.capsuleSmall)
+  const [ref, hot, enter] = useHoverOverPage()
+  const s = useStore.getState
+  const tiny = small && !hot
+  return (
+    <div ref={ref} className={'capz' + (tiny ? ' small' : '')} onPointerEnter={enter} onPointerMove={hot ? undefined : enter}>
+      <DockTabs tiny={tiny} hot={hot} />
       <div className="glass capsule">
         <Grain />
         <button className="ib cap-side" aria-label="Показать панель" title="Показать панель · Ctrl+B" onClick={() => s().toggleSidebar()}>
           <Icon name="sidebar" />
         </button>
         <AddressBar where="cap" />
-        <CapsuleAudio />
         <button className="ib cap-more" aria-label="Меню" title="Меню" onClick={() => s().setPopover('menu')}>
           <Icon name="more" />
         </button>
         <span className="vdiv cap-div" />
         <WinButtons className="cap-w" />
       </div>
+      <div className="dk-right">
+        <MiniPlayer dock />
+      </div>
     </div>
+  )
+}
+
+/** Все вкладки дока («ещё N»): поиск и список; Enter открывает первую найденную. */
+function TabsList({ close }: { close: () => void }): React.JSX.Element {
+  const tabs = useStore((s) => s.tabs)
+  const activeId = useStore((s) => s.activeId)
+  const [q, setQ] = useState('')
+  const s = useStore.getState
+  const needle = q.trim().toLowerCase()
+  const list = needle ? tabs.filter((t) => (t.title + ' ' + t.url).toLowerCase().includes(needle)) : tabs
+  const pick = (id: string): void => {
+    close()
+    s().activate(id)
+  }
+  return (
+    <>
+      <label className="dkl-q">
+        <Icon name="search" />
+        <input
+          autoFocus
+          value={q}
+          placeholder={`Найти среди ${tabs.length} вкладок`}
+          aria-label="Найти вкладку"
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && list[0]) pick(list[0].id)
+            if (e.key === 'Escape') close()
+          }}
+        />
+      </label>
+      <div className="dkl-list">
+        {list.map((t) => (
+          <div key={t.id} className={'dkl-row' + (t.id === activeId ? ' on' : '')} onAuxClick={(e) => e.button === 1 && s().closeTab(t.id)}>
+            <button className="dkl-main" title={t.title} onClick={() => pick(t.id)}>
+              <TabFav tab={t} />
+              <span className="dkl-t">{t.title || hostOf(t.url)}</span>
+            </button>
+            <button className="ib dkl-x" aria-label={`Закрыть вкладку «${t.title}»`} onClick={() => s().closeTab(t.id)}>
+              <Icon name="close" />
+            </button>
+          </div>
+        ))}
+        {!list.length && <div className="pop-empty">Ничего не нашлось</div>}
+      </div>
+    </>
   )
 }
 
@@ -435,6 +583,8 @@ export function Popover(): React.JSX.Element | null {
         <Grain />
         {popover === 'qr' ? (
           <QrCode url={qrUrl} />
+        ) : popover === 'tabs' ? (
+          <TabsList close={close} />
         ) : popover === 'accounts' ? (
           <>
             <div className="pop-h">Аккаунты Google</div>
@@ -544,7 +694,7 @@ export function Popover(): React.JSX.Element | null {
               </button>
             </div>
             <button className="mi" onClick={run(() => s().setPopover('downloads'))}>
-              <Icon name="download" /> Загрузки
+              <Icon name="download" /> Загрузки <span className="kbd">Ctrl J</span>
             </button>
             <button className="mi" disabled={t.kind !== 'web'} onClick={run(printPage)}>
               <Icon name="print" /> Печать <span className="kbd">Ctrl P</span>

@@ -205,7 +205,8 @@ interface Store {
   htmlFullscreen: boolean
   history: HistoryEntry[]
   downloads: DownloadInfo[]
-  popover: null | 'downloads' | 'menu' | 'accounts' | 'qr'
+  /** tabs — список всех вкладок дока («ещё N»). */
+  popover: null | 'downloads' | 'menu' | 'accounts' | 'qr' | 'tabs'
   /** Адрес для QR-кода страницы. */
   qrUrl: string
   winMaximized: boolean
@@ -233,7 +234,8 @@ interface Store {
   /** Свои раскладки окна у кнопки «развернуть»: где показать. */
   snap: { x: number; y: number } | null
   /** Превью вкладки при наведении в панели. */
-  preview: { tabId: string; x: number; y: number } | null
+  /** above — превью над вкладкой дока (x — середина вкладки), иначе справа от вкладки панели. */
+  preview: { tabId: string; x: number; y: number; above?: boolean } | null
   /** Снимки вкладок, сделанные, когда их оставляли, — для превью. */
   thumbs: Record<string, string>
   /** «Взгляд»: ссылка открыта карточкой поверх страницы (Alt+клик). */
