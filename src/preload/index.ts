@@ -12,6 +12,7 @@ import type {
   PermissionPrompt,
   Settings,
   SyncState,
+  UpdateState,
   WindowState
 } from '../shared/types'
 
@@ -48,6 +49,12 @@ const api: MasakiApi = {
       void ipcRenderer.invoke('win:state').then((s: WindowState) => cb(s))
       return listen<WindowState>('win-state', cb)
     }
+  },
+  update: {
+    state: () => ipcRenderer.invoke('update:state'),
+    check: () => ipcRenderer.send('update:check'),
+    install: () => ipcRenderer.send('update:install'),
+    onState: (cb) => listen<UpdateState>('update-state', cb)
   },
   onCommand: (cb) => listen<Command>('command', cb),
   navMouse: (dir) => ipcRenderer.send('nav:mouse', dir),

@@ -30,6 +30,7 @@ import * as extensions from './extensions'
 import { defaultBrowserState, makeDefault, refreshRegistration } from './defaultBrowser'
 import { parseTrack, setDiscordEnabled, setDiscordTrack } from './discord'
 import * as profiles from './profiles'
+import * as updater from './updater'
 import { pathToFileURL } from 'url'
 import { commandFor } from '../shared/shortcuts'
 import {
@@ -979,6 +980,14 @@ function registerIpc(): void {
     app.relaunch({ args: process.argv.slice(1).filter((a) => urlFromArgv(['', a]) === null) })
     app.quit()
   })
+  ipcMain.handle('update:state', () => updater.updateState())
+  ipcMain.on('update:check', () => void updater.check())
+  ipcMain.on('update:install', () => {
+    if (updater.install()) return
+    // Сам поставить не может (сборка без установщика, Mac): страница выпуска — там установщик и что нового.
+    const u = updater.updateState()
+    send({ type: 'open-url', url: u.version ? `${updater.RELEASES}/tag/v${u.version}` : updater.RELEASES })
+  })
   ipcMain.handle('system:ai-control', () => aiControlState())
   ipcMain.handle('system:default-browser', () => defaultBrowserState())
   ipcMain.handle('system:make-default', () => makeDefault())
@@ -1389,6 +1398,7 @@ if (!app.requestSingleInstanceLock()) {
     if (settings.addons.adblock.enabled) void applyAdblock(true)
     createWindow(await windowFile.read())
     void refreshRegistration()
+    updater.initUpdater((st) => win?.webContents.send('update-state', st))
   })
 
   app.on('before-quit', () => {

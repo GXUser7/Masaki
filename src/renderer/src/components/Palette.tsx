@@ -148,7 +148,19 @@ function commands(): PaletteCommand[] {
     { title: 'Пароли', sub: 'Менеджер паролей', icon: 'key', run: () => S().openPasswords() },
     { title: 'Загрузки', sub: 'Скачанные файлы', icon: 'download', run: () => S().setPopover('downloads') },
     { title: 'Аддоны', sub: 'Прозрачные сайты, блокировщик, расширения', icon: 'extension', run: () => S().openAddons() },
-    { title: 'Настройки', sub: 'Ctrl+,', icon: 'settings', run: () => S().openSettings() }
+    { title: 'Настройки', sub: 'Ctrl+,', icon: 'settings', run: () => S().openSettings() },
+    s.update?.status === 'ready'
+      ? { title: 'Обновить Masaki', sub: `Версия ${s.update.version} — перезапуск`, icon: 'update', run: () => window.masaki.update.install() }
+      : {
+          title: 'Проверить обновления',
+          sub: `Masaki ${s.update?.current ?? ''}`,
+          icon: 'update',
+          run: () => {
+            S().openSettings()
+            window.masaki.update.check()
+          },
+          hidden: !s.update || s.update.mode === 'off'
+        }
   ]
 }
 

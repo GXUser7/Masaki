@@ -21,6 +21,7 @@ npm run test:passkeys  # сборка + ключи доступа: создан�
 npm run test:youcloud  # сборка + YouCloud: мост, мини-плеер с обложкой, поиск из палитры (нужен дев-сервер YouCloud/web)
 npm run test:system  # сборка + управление для ИИ (порт 9222), ссылка из командной строки, регистрация браузером
 npm run test:profiles  # сборка + профили (окна-процессы, раздельные куки, удаление) и статус в Discord (подставной)
+npm run test:update  # автообновление: два установщика NSIS под тестовым именем, 0.0.1 → 0.0.2 (долго)
 npm run perf         # замер плавности сворачивания панели (интервалы кадров)
 npm run pack         # dist/win-unpacked/Masaki.exe — то, что запускает пользователь
 npm run icon         # перерисовать build/icon.png
@@ -44,6 +45,7 @@ src/main/ytdlp.ts        звук YouTube для YouCloud через yt-dlp (с�
 src/main/defaultBrowser.ts Masaki среди браузеров Windows: регистрация в HKCU, проверка выбора пользователя
 src/main/profiles.ts     профили как в Chrome: папка данных профиля, список profiles.json, окна-процессы
 src/main/discord.ts      статус «Слушает YouCloud» в Discord (Rich Presence по локальному каналу discord-ipc)
+src/main/updater.ts      автообновление: выпуски GitHub (electron-updater), фоновая загрузка, установка при выходе
 src/main/extensions.ts   расширения Chrome: вкладки для chrome.tabs, кнопки и окна, меню
                          (electron-chrome-extensions), установка из Chrome Web Store (electron-chrome-web-store)
 src/preload/index.ts     мост window.masaki для интерфейса (типы — MasakiApi в shared/types.ts)
@@ -223,6 +225,29 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
 - Тест — с подставным каналом (`MASAKI_DISCORD_PIPE`, `MASAKI_DISCORD_APP_ID`) и подставным YouCloud на
   localhost:5190 (`scripts/fixtures/youcloud-fake.html`); с настоящим Discord тест не говорит.
 
+### Автообновление (src/main/updater.ts, 2026-10-13)
+
+- Как у браузеров: **electron-updater** с выпусков GitHub (`build.publish` в package.json → `app-update.yml` в
+  сборке; к релизу workflow прикладывает `latest.yml`, `latest-mac.yml` и `.blockmap`). Проверка через 15 с после
+  запуска и раз в 4 часа; скачивание в фоне; ставится при выходе (`autoInstallOnAppQuit`) или сразу — «Обновить
+  Masaki» первым пунктом меню (точка на кнопке меню, `MenuButton` в Chrome.tsx), «О Masaki» в настройках,
+  команда палитры. `quitAndInstall(true, true)`: NSIS тихо, затем сам запускает новую версию; сессия
+  сохраняется обычным `before-quit`.
+- Режимы (`UpdateState.mode`): **auto** — Masaki поставлен установщиком (рядом с exe лежит `Uninstall *.exe`);
+  **notify** — копия без установщика (dist/win-unpacked — её собирают и подменяют руками) и Mac (без подписи
+  Apple Squirrel.Mac обновление не примет): только «Доступна версия X» → страница выпуска; **off** — разработка,
+  автотесты с `MASAKI_PROFILE` и не основной профиль (обновляет только основной; установщик закрывает все окна).
+- Установщик при обновлении запускает старый деинсталлятор: `build/installer.nsh` удаляет регистрацию браузером
+  только `${ifNot} ${isUpdated}`, иначе ссылки из других программ на время обновления было бы нечем открыть.
+- Первая версия с обновлениями — следующая после 0.4.0: у 0.4.0 их нет, её ставят руками.
+- **Новую версию после обновления установщик запускает с окружением Windows** — без `MASAKI_PROFILE` и прочих
+  переменных теста. 2026-10-13 так тестовая сборка открылась с профилем пользователя (у неё было то же имя
+  программы — `productName` верхнего уровня в package.json — и та же папка `%APPDATA%\Masaki`). Поэтому в
+  `test:update`: `MASAKI_UPDATE_NO_RELAUNCH` (новую версию запускает сам тест), у сборки своё имя
+  (`-c.extraMetadata.productName=MasakiUpdateTest` — своя папка данных), без `installer.nsh`, а
+  `refreshRegistration` регистрирует браузером только программу с именем Masaki.
+- Тесты: `MASAKI_UPDATE_URL` — свой сервер выпусков (generic), `MASAKI_UPDATE_DELAY` — первая проверка раньше.
+
 ### YouCloud (src/main/youcloud.ts, preload/guest.ts, lib/youcloud.ts)
 
 - YouCloud — музыкальный сайт пользователя (репозиторий YouCloud, папка `web/`, живой адрес
@@ -245,6 +270,9 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
 - Мини-плеер — для любого сайта с Media Session: `media-page.ts` в мире страницы перехватывает
   metadata/playbackState/setPositionState/setActionHandler и шлёт JSON (`sendToHost('media')`);
   кнопки зовут обработчики сайта (`webview.send('media:action')`). Данные страницы проверяет `parseMedia`.
+  **Плеер YouCloud — `new Audio()` вне документа**: `querySelectorAll` его не видит, события до `document` не
+  доходят — `media-page.ts` узнаёт о нём по перехвату `play()` (иначе «играет» всегда false и статус в Discord
+  не появлялся, 2026-10-13). Подставной YouCloud в `test:profiles` играет так же.
   Цвет плеера — из обложки (`media:art` → data:, `useArtColors`).
 - **Звук YouTube — через yt-dlp** (`main/ytdlp.ts`, сообщение `yt-stream`, мост версии 0.7), как в
   Android-приложении YouCloud: в браузере YouTube многим трекам отказывает (клиентам сайта — «подтвердите,
@@ -496,6 +524,6 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
 - Защищённого видео (Widevine: Netflix и т. п.).
 - Отдельной страницы истории и загрузок (история — в палитре, загрузки — во всплывающем окне).
 - Папок избранного: закладки Chrome при переносе раскладываются в один плоский список.
-- Установщика с автообновлением (`npm run dist` собирает NSIS, но обновлений нет).
+- Автообновления на Mac (нужна подпись Apple Developer ID) — там только «доступна новая версия».
 - Кнопок плеера на панели задач Windows (thumbar) и своей реакции на медиаклавиши — их обслуживает Chromium.
 - Дизайн-макеты — в артефакте-холсте «Masaki — варианты дизайна» на claude.ai (5 артбордов).

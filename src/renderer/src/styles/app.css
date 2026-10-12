@@ -5488,3 +5488,48 @@ input {
   font-size: 11px;
   font-weight: 600;
 }
+
+/* ---------- Обновления Masaki (префикс upd-) ---------- */
+/* Точка на кнопке меню, как у Chrome: обновление скачано и ждёт перезапуска (или вышла версия). */
+.ib.has-update {
+  position: relative;
+}
+.ib.has-update::after {
+  content: '';
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 2px var(--glass-pop);
+  animation: upd-pop 0.5s var(--spring) both;
+}
+@keyframes upd-pop {
+  from {
+    transform: scale(0);
+  }
+}
+.upd-mi > svg {
+  fill: var(--primary);
+}
+.upd-bar {
+  height: 4px;
+  border-radius: 2px;
+  margin: 2px 0 10px;
+  background: var(--hov);
+  overflow: hidden;
+}
+/* Едет transform, а не width: вёрстка на каждом кадре не пересчитывается. */
+.upd-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transform-origin: left;
+  transition: transform 0.4s var(--snap);
+}
+.upd-notes {
+  color: var(--primary);
+}

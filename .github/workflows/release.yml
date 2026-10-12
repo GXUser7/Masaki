@@ -2,6 +2,8 @@
 # GitHub собирает установщик Windows и сборки Mac (Apple Silicon и Intel) с ключом Google для синхронизации
 # из секретов репозитория и публикует релиз: заметки — из сообщения тега, к ним — SHA-256 каждого файла.
 # Так релиз не зависит от того, есть ли на компьютере gh, и Mac-сборки сразу лежат рядом с Windows.
+# latest.yml / latest-mac.yml и .blockmap — для автообновления (src/main/updater.ts): по ним установленный
+# Masaki узнаёт о новой версии, сверяет sha512 и докачивает только изменившиеся куски.
 name: Release
 
 on:
@@ -31,7 +33,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-windows
-          path: dist/Masaki-Setup-*.exe
+          path: |
+            dist/Masaki-Setup-*.exe
+            dist/Masaki-Setup-*.exe.blockmap
+            dist/latest.yml
           if-no-files-found: error
 
   mac:
@@ -55,6 +60,8 @@ jobs:
           path: |
             dist/Masaki-*-mac-*.dmg
             dist/Masaki-*-mac-*.zip
+            dist/Masaki-*-mac-*.blockmap
+            dist/latest-mac.yml
           if-no-files-found: error
 
   publish:

@@ -19,9 +19,16 @@ export function installMediaHook(report: (json: string) => void, listen: (run: (
   const state = Object.getOwnPropertyDescriptor(proto, 'playbackState')
   let position: { duration: number; position: number; rate: number; at: number } | null = null
   let timer = 0
+  /** Плееры вне документа (new Audio() у YouCloud): слабые ссылки — брошенные сайтом пусть собирает сборщик мусора. */
+  const loose = new Set<WeakRef<HTMLMediaElement>>()
 
   const media = (): HTMLMediaElement | null => {
     const all = [...document.querySelectorAll('audio, video')] as HTMLMediaElement[]
+    for (const ref of loose) {
+      const m = ref.deref()
+      if (!m) loose.delete(ref)
+      else if (!m.isConnected) all.push(m)
+    }
     return all.find((m) => !m.paused) ?? all.find((m) => m.currentSrc) ?? null
   }
 
@@ -48,7 +55,8 @@ export function installMediaHook(report: (json: string) => void, listen: (run: (
           artwork: best,
           actions: [...handlers.keys()],
           state: navigator.mediaSession.playbackState,
-          playing: !!el && !el.paused,
+          // Плеера не нашли — верим тому, что сайт говорит системе.
+          playing: el ? !el.paused : navigator.mediaSession.playbackState === 'playing',
           position: pos
         })
       )
@@ -93,8 +101,19 @@ export function installMediaHook(report: (json: string) => void, listen: (run: (
     })
   }
   // Пауза, перемотка, новый трек у самого плеера — тоже повод обновить мини-плеер.
-  for (const type of ['play', 'pause', 'seeked', 'loadedmetadata', 'emptied', 'ratechange']) {
-    document.addEventListener(type, () => send(), true)
+  const EVENTS = ['play', 'pause', 'seeked', 'loadedmetadata', 'emptied', 'ratechange']
+  for (const type of EVENTS) document.addEventListener(type, () => send(), true)
+  // Плеер вне документа (YouCloud играет через new Audio()) querySelectorAll не найдёт, а его события
+  // до document не доходят. Узнаём о нём, когда сайт зовёт play(), и слушаем его самого.
+  const known = new WeakSet<HTMLMediaElement>()
+  const origPlay = HTMLMediaElement.prototype.play
+  HTMLMediaElement.prototype.play = function (this: HTMLMediaElement): Promise<void> {
+    if (!this.isConnected && !known.has(this)) {
+      known.add(this)
+      loose.add(new WeakRef(this))
+      for (const type of EVENTS) this.addEventListener(type, () => send())
+    }
+    return origPlay.call(this)
   }
 
   listen((action, time) => {

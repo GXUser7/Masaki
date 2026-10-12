@@ -13,6 +13,7 @@ import type {
   SavedSession,
   Settings,
   SyncState,
+  UpdateState,
   TabGroup
 } from '../../shared/types'
 import type { MenuEntry } from './components/Menu'
@@ -222,6 +223,8 @@ interface Store {
   wallpaperRev: number
   /** Синхронизация через Google Диск; null — главный процесс ещё не ответил. */
   sync: SyncState | null
+  /** Обновления Masaki; null — главный процесс ещё не ответил. */
+  update: UpdateState | null
   /** Предложения сохранить пароль после входа на сайт. */
   pwOffers: PasswordOffer[]
   /** Скачанные файлы экспорта паролей, которые можно перенести. */
@@ -320,6 +323,7 @@ export const useStore = create<Store>((set, get) => ({
   permissions: [],
   wallpaperRev: 0,
   sync: null,
+  update: null,
   pwOffers: [],
   pwCsv: [],
   autofill: null,

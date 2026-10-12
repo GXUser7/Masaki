@@ -1,7 +1,7 @@
 {
   "name": "masaki",
   "productName": "Masaki",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Masaki — браузер для Windows на Chromium с матовым стеклом и Material 3 Expressive",
   "main": "out/main/index.js",
   "private": true,
@@ -25,7 +25,8 @@
     "screens": "electron-vite build && node scripts/screens.mjs",
     "test:youcloud": "electron-vite build && node scripts/youcloud-test.mjs",
     "test:system": "electron-vite build && node scripts/system-test.mjs",
-    "test:profiles": "electron-vite build && node scripts/profiles-test.mjs"
+    "test:profiles": "electron-vite build && node scripts/profiles-test.mjs",
+    "test:update": "node scripts/update-test.mjs"
   },
   "devDependencies": {
     "@fontsource-variable/fraunces": "^5.3.0",
@@ -39,6 +40,7 @@
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^44.7.0",
     "electron-builder": "^26.15.3",
+    "electron-updater": "^6.8.9",
     "electron-vite": "^5.0.0",
     "playwright": "^1.64.0",
     "qrcode": "^1.5.4",
@@ -53,6 +55,13 @@
   "license": "GPL-3.0-only",
   "build": {
     "appId": "app.masaki.browser",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "GXUser7",
+        "repo": "Masaki"
+      }
+    ],
     "productName": "Masaki",
     "directories": {
       "output": "dist",

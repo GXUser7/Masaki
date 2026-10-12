@@ -92,7 +92,9 @@ async function registeredExe(): Promise<string | null> {
  * реестре устарел). Так Masaki сразу есть в списке браузеров, как после установщика.
  */
 export async function refreshRegistration(): Promise<void> {
-  if (!canRegister() || process.env.MASAKI_PROFILE) return
+  // Только сам Masaki: сборка под другим именем (тест обновления, MasakiUpdateTest) запускается и без
+  // MASAKI_PROFILE — после обновления её запускает установщик — и не должна забирать регистрацию себе.
+  if (!canRegister() || process.env.MASAKI_PROFILE || app.getName() !== 'Masaki') return
   if ((await registeredExe()) === `"${process.execPath}"`) return
   await register().catch((e) => console.error('Не удалось зарегистрировать Masaki как браузер', e))
 }

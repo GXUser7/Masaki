@@ -9,7 +9,8 @@ import {
   type DefaultBrowserState,
   type GlassLevel,
   type Scheme,
-  type Shortcut
+  type Shortcut,
+  type UpdateState
 } from '../../../shared/types'
 import { handmadeIds, handmadeNames, hueOf, seedFromHue, seedPresets, swatchOf } from '../lib/theme'
 import { useStore } from '../store'
@@ -531,14 +532,79 @@ export function SettingsPage(): React.JSX.Element {
         <DefaultBrowser />
         <AiControl on={settings.aiControl} onChange={(aiControl) => set({ aiControl })} />
 
-        <section>
-          <h2>О Masaki</h2>
-          <p className="hint">
-            Chromium {v.chrome} · Electron {v.electron} · Node {v.node}
-          </p>
-        </section>
+        <About versions={v} />
       </div>
     </div>
+  )
+}
+
+/** Что сказать об обновлениях одной строкой. */
+export function updateText(u: UpdateState | null): string {
+  if (!u) return ''
+  switch (u.status) {
+    case 'checking':
+      return 'Проверяю обновления…'
+    case 'latest':
+      return `Это последняя версия · проверено в ${new Date(u.checkedAt ?? Date.now()).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+    case 'downloading':
+      return `Скачивается версия ${u.version} — ${u.percent ?? 0} %`
+    case 'ready':
+      return `Версия ${u.version} скачана и поставится при выходе — или перезапустите сейчас, вкладки вернутся`
+    case 'available':
+      return `Доступна версия ${u.version}. ${u.note ?? ''}`.trim()
+    case 'error':
+      return `Не удалось проверить обновления: ${u.error}`
+    default:
+      return u.note ?? 'Masaki сам проверяет обновления и ставит их при выходе'
+  }
+}
+
+/** Версия Masaki и его обновления: проверить, скачанное — поставить, что нового — на странице выпуска. */
+function About({ versions: v }: { versions: { chrome: string; electron: string; node: string } }): React.JSX.Element {
+  const u = useStore((s) => s.update)
+  const busy = u?.status === 'checking' || u?.status === 'downloading'
+  return (
+    <section>
+      <h2>О Masaki</h2>
+      <div className="set-row">
+        <span>
+          Masaki {u?.current}
+          <small>{updateText(u)}</small>
+        </span>
+        {u?.status === 'ready' ? (
+          <button className="tonal upd-go" onClick={() => window.masaki.update.install()}>
+            <Icon name="update" />
+            Перезапустить
+          </button>
+        ) : u?.status === 'available' ? (
+          <button className="tonal" onClick={() => window.masaki.update.install()}>
+            <Icon name="openInNew" />
+            Скачать
+          </button>
+        ) : u && u.mode !== 'off' ? (
+          <button className="tonal" disabled={busy} onClick={() => window.masaki.update.check()}>
+            <Icon name="sync" />
+            Проверить
+          </button>
+        ) : null}
+      </div>
+      {u?.status === 'downloading' && (
+        <div className="upd-bar">
+          <span style={{ transform: `scaleX(${(u.percent ?? 0) / 100})` }} />
+        </div>
+      )}
+      <p className="hint">
+        Chromium {v.chrome} · Electron {v.electron} · Node {v.node}
+        {u?.version && (u.status === 'ready' || u.status === 'available') && (
+          <>
+            {' · '}
+            <a className="upd-notes" href="#" onClick={(e) => (e.preventDefault(), useStore.getState().newTab(`https://github.com/GXUser7/Masaki/releases/tag/v${u.version}`))}>
+              Что нового в {u.version}
+            </a>
+          </>
+        )}
+      </p>
+    </section>
   )
 }
 

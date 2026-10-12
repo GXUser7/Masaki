@@ -14,7 +14,7 @@ import {
 import { shapes } from '../lib/shapes'
 import QRCode from 'qrcode'
 import { hostOf } from '../lib/url'
-import type { ExtAction, ExtensionInfo, TabGroup } from '../../../shared/types'
+import type { ExtAction, ExtensionInfo, TabGroup, UpdateState } from '../../../shared/types'
 import { actionFor, actionIcon, badgeColor, pressAction, STORE_URL, togglePin, useExtensions } from '../lib/extensions'
 import { useStore, type Tab } from '../store'
 import { Icon } from './Icon'
@@ -24,6 +24,24 @@ import { openYouCloud } from '../lib/youcloud'
 import { syncHint, syncStatusText } from './SyncSection'
 import { ProfilesBlock } from './Profiles'
 import { openExtMenu, openGroupMenu, openTabMenu, openTileMenu } from '../menus'
+
+/** Есть что сказать об обновлении: скачано и ждёт перезапуска, или вышла версия, которую предлагаем скачать. */
+const updateNews = (u: UpdateState | null): boolean => u?.status === 'ready' || u?.status === 'available'
+
+/** Кнопка меню; точка на ней — обновление ждёт (как у Chrome), сам пункт — первым в меню. */
+function MenuButton({ className }: { className: string }): React.JSX.Element {
+  const news = useStore((s) => updateNews(s.update))
+  return (
+    <button
+      className={className + (news ? ' has-update' : '')}
+      aria-label={news ? 'Меню — есть обновление Masaki' : 'Меню'}
+      title={news ? 'Меню · есть обновление Masaki' : 'Меню'}
+      onClick={() => useStore.getState().setPopover('menu')}
+    >
+      <Icon name="more" />
+    </button>
+  )
+}
 
 function useActive(): Tab {
   return useStore((s) => s.tabs.find((t) => t.id === s.activeId) ?? s.tabs[0])
@@ -458,9 +476,7 @@ export function Sidebar(): React.JSX.Element {
         <button className="ib" aria-label="История" title="История · Ctrl+H, поиск по вкладкам · Ctrl+Shift+A" onClick={() => s().openPalette(false)}>
           <Icon name="history" />
         </button>
-        <button className="ib" aria-label="Меню" title="Меню" onClick={() => s().setPopover('menu')}>
-          <Icon name="more" />
-        </button>
+        <MenuButton className="ib" />
       </div>
     </aside>
   )
@@ -627,9 +643,7 @@ export function Dock(): React.JSX.Element {
           <Icon name="sidebar" />
         </button>
         <AddressBar where="cap" />
-        <button className="ib cap-more" aria-label="Меню" title="Меню" onClick={() => s().setPopover('menu')}>
-          <Icon name="more" />
-        </button>
+        <MenuButton className="ib cap-more" />
         <span className="vdiv cap-div" />
         <WinButtons className="cap-w" />
       </div>
@@ -701,6 +715,7 @@ export function Popover(): React.JSX.Element | null {
   const accounts = useStore((s) => s.accounts)
   const syncSt = useStore((s) => s.sync)
   const qrUrl = useStore((s) => s.qrUrl)
+  const update = useStore((s) => s.update)
   const t = useActive()
   const s = useStore.getState
   if (!popover) return null
@@ -820,6 +835,18 @@ export function Popover(): React.JSX.Element | null {
           </>
         ) : (
           <>
+            {update && updateNews(update) && (
+              <>
+                <button className="mi sy-mi upd-mi" onClick={run(() => window.masaki.update.install())}>
+                  <Icon name="update" />
+                  <span className="sy-mi-t">
+                    {update.status === 'ready' ? 'Обновить Masaki' : `Доступна версия ${update.version}`}
+                    <small>{update.status === 'ready' ? `Версия ${update.version} — перезапуск, вкладки вернутся` : 'Скачать с GitHub'}</small>
+                  </span>
+                </button>
+                <div className="cm-sep" />
+              </>
+            )}
             <button className="mi" onClick={run(() => s().newTab())}>
               <Icon name="add" /> Новая вкладка <span className="kbd">Ctrl T</span>
             </button>

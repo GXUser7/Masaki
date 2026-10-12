@@ -8,9 +8,12 @@
 <body>
 <h1>Подставной YouCloud</h1>
 <p>Играет ролик без звука и сообщает о «треке» через Media Session — как настоящий YouCloud.</p>
-<video id="v" src="/clip.webm" autoplay muted loop playsinline width="320"></video>
 <script>
-  const v = document.getElementById('v')
+  // Как у настоящего YouCloud: плеер — new Audio(), в документ он не вставлен.
+  const v = (window.player = new Audio('/clip.webm'))
+  v.muted = true
+  v.loop = true
+  v.play()
   navigator.mediaSession.metadata = new MediaMetadata({
     title: 'Тестовый трек',
     artist: 'Masaki Band',

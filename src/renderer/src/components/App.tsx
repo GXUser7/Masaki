@@ -96,6 +96,7 @@ export function App(): React.JSX.Element {
       if (launch) useStore.getState().newTab(launch)
       useStore.getState().loadAccounts()
       useStore.setState({ sync: await window.masaki.sync.state() })
+      useStore.setState({ update: await window.masaki.update.state() })
     })()
     // Запасной путь для хоткеев: обычно их ловит главный процесс и до окна они не доходят.
     const onKey = (e: KeyboardEvent): void => {
@@ -133,6 +134,7 @@ export function App(): React.JSX.Element {
       window.masaki.settings.onChanged((settings) => useStore.setState({ settings })),
       window.masaki.history.onChanged((history) => useStore.setState({ history })),
       window.masaki.sync.onState((sync) => useStore.setState({ sync })),
+      window.masaki.update.onState((update) => useStore.setState({ update })),
       window.masaki.passwords.onOffer((o) =>
         useStore.setState((st) => ({ pwOffers: [...st.pwOffers.filter((x) => x.id !== o.id), o] }))
       ),

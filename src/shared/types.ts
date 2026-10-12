@@ -537,6 +537,22 @@ export interface AiControlState {
   listening: boolean
 }
 
+/** Обновления Masaki (main/updater.ts). */
+export interface UpdateState {
+  /** auto — скачивает и ставит сам; notify — только предлагает скачать (сборка без установщика, Mac); off — нечем или незачем. */
+  mode: 'auto' | 'notify' | 'off'
+  status: 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'ready' | 'error'
+  /** Версия, которая работает сейчас. */
+  current: string
+  /** Новая версия, когда она есть. */
+  version?: string
+  percent?: number
+  error?: string
+  checkedAt?: number
+  /** Почему Masaki не ставит обновления сам (или вовсе не проверяет) — для настроек. */
+  note?: string
+}
+
 export interface MasakiApi {
   platform: string
   versions: { electron: string; chrome: string; node: string }
@@ -558,6 +574,14 @@ export interface MasakiApi {
     defaultBrowser(): Promise<DefaultBrowserState>
     /** Зарегистрироваться в Windows и открыть «Приложения по умолчанию» на странице Masaki. */
     makeDefault(): Promise<{ ok: boolean; error?: string }>
+  }
+  update: {
+    state(): Promise<UpdateState>
+    /** Проверить сейчас (кнопка в настройках). */
+    check(): void
+    /** Поставить скачанное и перезапуститься; без установщика или на Mac — открыть страницу выпуска. */
+    install(): void
+    onState(cb: (s: UpdateState) => void): () => void
   }
   /** Боковая кнопка мыши над самим интерфейсом (над страницей её ловит preload/guest.ts): назад или вперёд в активной вкладке. */
   navMouse(dir: 'back' | 'forward'): void

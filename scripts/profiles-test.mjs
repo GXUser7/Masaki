@@ -208,14 +208,14 @@ try {
     const before = activities.length
     await A.app.evaluate(async ({ webContents }) => {
       const wc = webContents.getAllWebContents().find((w) => w.getURL().startsWith('http://localhost:5190'))
-      await wc.executeJavaScript('document.getElementById("v").pause()')
+      await wc.executeJavaScript('player.pause()')
     })
     await waitFor(() => activities.length > before && activities.at(-1) === null, 'снятие статуса на паузе', 20000)
     check(true, 'на паузе статус снят')
 
     await A.app.evaluate(async ({ webContents }) => {
       const wc = webContents.getAllWebContents().find((w) => w.getURL().startsWith('http://localhost:5190'))
-      await wc.executeJavaScript('document.getElementById("v").play()')
+      await wc.executeJavaScript('player.play()')
     })
     await waitFor(() => activities.at(-1)?.details === 'Тестовый трек', 'статус после паузы', 20000)
     check(true, 'продолжили играть — статус вернулся')
