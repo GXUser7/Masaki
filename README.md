@@ -11,7 +11,7 @@
 ![Chromium](https://img.shields.io/badge/Electron%2044-Chromium-5fd4b4?style=for-the-badge&labelColor=1d2a27&logo=electron&logoColor=white)
 [![Лицензия](https://img.shields.io/github/license/GXUser7/Masaki?label=license&style=for-the-badge&color=5fd4b4&labelColor=1d2a27)](LICENSE)
 
-<img src="docs/screens/newtab.png" alt="Новая вкладка Masaki: часы как на экране блокировки Pixel" width="100%">
+<img src="docs/screens/live/newtab.webp" alt="Новая вкладка Masaki: часы «Пузыри» как на экране блокировки Pixel" width="100%">
 
 </div>
 
@@ -24,16 +24,20 @@ Masaki — браузер со всем, что умеет Chrome, но в св�
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screens/browser.png" alt="Боковая панель и страница"><p align="center"><b>Тихая панель</b> — вкладки, избранное и адрес слева, страница целиком</p></td>
-<td width="50%"><img src="docs/screens/capsule.png" alt="Свёрнутая панель — док"><p align="center"><b>Док</b> — Ctrl+B: вкладки, адрес и плеер в одной строке внизу</p></td>
+<td width="50%"><img src="docs/screens/live/panel.webp" alt="Боковая панель, прозрачный сайт и мини-плеер"><p align="center"><b>Тихая панель</b> — вкладки, избранное и адрес слева, сайт на стекле, мини-плеер внизу</p></td>
+<td width="50%"><img src="docs/screens/live/dock.webp" alt="Свёрнутая панель — док"><p align="center"><b>Док</b> — Ctrl+B: вкладки, адрес и плеер в одной строке внизу</p></td>
 </tr>
 <tr>
 <td><img src="docs/screens/commands.png" alt="Палитра команд"><p align="center"><b>Палитра</b> — адрес, поиск, AI Mode и команды через «>»</p></td>
 <td><img src="docs/screens/passkey.png" alt="Создание ключа доступа"><p align="center"><b>Ключи доступа</b> — свой менеджер passkey, вход без пароля</p></td>
 </tr>
 <tr>
-<td><img src="docs/screens/glass-sites.png" alt="Прозрачные сайты"><p align="center"><b>Прозрачные сайты</b> — фон сайта становится стеклом панели</p></td>
-<td><img src="docs/screens/clocks.png" alt="Стили часов"><p align="center"><b>Часы как на Pixel</b> — девять стилей для новой вкладки</p></td>
+<td><img src="docs/screens/live/youcloud.webp" alt="YouCloud во вкладке Masaki"><p align="center"><b>YouCloud встроен</b> — SoundCloud, Яндекс Музыка и YouTube Music без расширения</p></td>
+<td><img src="docs/screens/live/clocks.webp" alt="Стили часов"><p align="center"><b>Часы как на Pixel</b> — девять стилей; нажмите на часы, и цифры «станцуют»</p></td>
+</tr>
+<tr>
+<td><img src="docs/screens/live/addons.webp" alt="Страница аддонов"><p align="center"><b>Аддоны</b> — прозрачные сайты, блокировщик рекламы, статус в Discord, расширения Chrome</p></td>
+<td><img src="docs/screens/live/look.webp" alt="Настройки оформления"><p align="center"><b>Оформление</b> — тема, палитры, сила стекла, фон окна</p></td>
 </tr>
 </table>
 
@@ -217,7 +221,7 @@ npm run test:passwords  # менеджер паролей и его шифров
 npm run test:passkeys   # ключи доступа: создание, вход, подписи, синхронизация
 npm run test:youcloud   # YouCloud: мост, мини-плеер, поиск из палитры (нужен дев-сервер YouCloud/web)
 npm run perf            # плавность сворачивания боковой панели
-npm run screens         # снимки для этого README (docs/screens)
+npm run screens         # демо-снимки для README (docs/screens); живые — docs/screens/live, снимаются руками
 ```
 
 Как всё устроено, принятые решения и грабли, на которые уже наступали, — в [AGENTS.md](AGENTS.md).
