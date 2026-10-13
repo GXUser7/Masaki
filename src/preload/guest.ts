@@ -382,7 +382,7 @@ if (YOUCLOUD.includes(location.origin)) {
     if (d.kind === 'ping') hello()
     else if (d.kind === 'fetch') answer(d.id, ipcRenderer.invoke('yc:fetch', d.request))
     else if (d.kind === 'call') answer(d.id, ipcRenderer.invoke('yc:call', String(d.name)))
-    else if (d.kind === 'yt-stream') answer(d.id, ipcRenderer.invoke('yc:yt-stream', String(d.videoId), !!d.fresh))
+    else if (d.kind === 'yt-stream') answer(d.id, ipcRenderer.invoke('yc:yt-stream', String(d.videoId), !!d.fresh, !!d.live))
   })
   ipcRenderer.on('yc:token', (_e, t: { kind: string; token: string; expiresIn?: number }) => reply({ kind: t.kind, token: t.token, expiresIn: t.expiresIn }))
   ipcRenderer.on('yc:event', (_e, ev: Record<string, unknown>) => reply({ ...ev, event: ev.kind, kind: 'event' }))

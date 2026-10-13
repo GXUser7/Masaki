@@ -17,8 +17,9 @@ import * as ytdlp from './ytdlp'
 export const YOUCLOUD_URL = 'https://youcloud.inkerror67.workers.dev/'
 /** Сайт и его дев-сервер — вкладки, которым отвечает мост. */
 export const YOUCLOUD_ORIGINS = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
-/** Какой версии расширения YouCloud равен мост (сайт сверяет, что он умеет): 0.7 — звук YouTube от yt-dlp. */
-const BRIDGE_VERSION = '0.7.0'
+/** Какой версии расширения YouCloud равен мост (сайт сверяет, что он умеет): 0.7 — звук YouTube от yt-dlp,
+ *  0.8 — и прямых трансляций (их плейлист HLS). */
+const BRIDGE_VERSION = '0.8.0'
 
 type Ops = Record<string, string | null>
 
@@ -29,7 +30,9 @@ const PROFILES: { domains: string[]; headers: Ops }[] = [
   { domains: ['music.youtube.com'], headers: { origin: 'https://music.youtube.com', referer: 'https://music.youtube.com/' } },
   { domains: ['www.youtube.com', 'youtubei.googleapis.com'], headers: { origin: 'https://www.youtube.com', referer: 'https://www.youtube.com/' } }
 ]
-const ALLOWED = PROFILES.flatMap((p) => p.domains)
+/** Откуда идут плейлист и куски прямой трансляции YouTube: только чтение, как есть (hls.js на странице). */
+const MEDIA = ['googlevideo.com']
+const ALLOWED = [...PROFILES.flatMap((p) => p.domains), ...MEDIA]
 const YOUTUBE_HOSTS = ['music.youtube.com', 'www.youtube.com', 'youtubei.googleapis.com']
 /** Адреса, у которых главный процесс правит заголовки (onBeforeSendHeaders сессии вкладок). */
 export const YOUCLOUD_HEADER_URLS = ['https://*.yandex.net/*', 'https://music.youtube.com/*', 'https://www.youtube.com/*', 'https://youtubei.googleapis.com/*']
@@ -113,6 +116,8 @@ interface FetchRequest {
   body?: string
   overrides?: Ops
   session?: boolean | string
+  /** Ответ — байты (куски трансляции): в body base64. */
+  binary?: boolean
 }
 
 interface Answer {
@@ -120,6 +125,8 @@ interface Answer {
   statusText?: string
   headers?: [string, string][]
   body?: string
+  /** body — base64 байтов ответа. */
+  base64?: boolean
   value?: unknown
   error?: string
 }
@@ -133,6 +140,19 @@ async function relay(req: FetchRequest): Promise<Answer> {
   }
   if (url.protocol !== 'https:' || !allowedHost(url.hostname)) return { error: `host not allowed: ${url.hostname}` }
   const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET'
+  // Плейлист и куски трансляции: браузеру их не взять самому — googlevideo через границу сайтов отвечает
+  // только страницам YouTube, а свой HLS Chromium не берёт куски с другого хоста, чем плейлист, без CORS.
+  if (MEDIA.some((d) => url.hostname.endsWith('.' + d))) {
+    if (method !== 'GET') return { error: 'only GET' }
+    try {
+      const range = typeof req.headers?.range === 'string' ? { range: req.headers.range } : undefined
+      const res = await ses().fetch(url.href, { headers: range, credentials: 'omit', signal: AbortSignal.timeout(45_000) })
+      const body = req.binary ? Buffer.from(await res.arrayBuffer()).toString('base64') : await res.text()
+      return { status: res.status, statusText: res.statusText, headers: [...res.headers], body, base64: !!req.binary }
+    } catch (e) {
+      return { error: String((e as Error)?.message ?? e) }
+    }
+  }
   const headers: Record<string, string> = {}
   for (const [k, v] of Object.entries(req.headers ?? {})) if (typeof v === 'string') headers[k] = v
   const ops: Ops = { ...profileOf(url.hostname) }
@@ -310,12 +330,13 @@ export function initYouCloud(partitionName: string, h: Host): void {
     ytdlp.prepare()
     return { version: BRIDGE_VERSION, tokens: waitingTokens.splice(0) }
   })
-  // Звук YouTube: ссылку находит yt-dlp, с IP и входом этого браузера. fresh — прежняя не заиграла.
-  ipcMain.handle('yc:yt-stream', async (e, videoId: string, fresh?: boolean) => {
+  // Звук YouTube: ссылку находит yt-dlp, с IP и входом этого браузера. fresh — прежняя не заиграла;
+  // live — сайт знает, что это прямая трансляция.
+  ipcMain.handle('yc:yt-stream', async (e, videoId: string, fresh?: boolean, live?: boolean) => {
     if (!fromYouCloud(e)) return { error: 'not allowed' }
     if (fresh) ytdlp.forget(String(videoId))
     try {
-      return { value: await ytdlp.resolve(String(videoId), ses()) }
+      return { value: await ytdlp.resolve(String(videoId), ses(), !!live) }
     } catch (err) {
       return { error: String((err as Error)?.message ?? err) }
     }

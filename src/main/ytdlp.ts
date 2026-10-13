@@ -239,12 +239,31 @@ async function cookieFile(ses: Session): Promise<string | null> {
   return file
 }
 
+/** Звук ролика: ссылка для <audio> и когда она истекает (мс); live — плейлист HLS прямой трансляции. */
 interface Found {
   url: string
   expire: number
+  live?: boolean
 }
 
-function run(exe: string, videoId: string, proxy: string, cookies: string | null): Promise<Found> {
+// Что спрашивать у yt-dlp. Звук ролика — файлом по HTTPS: его <audio> играет сам, манифесты HLS/DASH
+// не нужны. У прямой трансляции есть только HLS: её плейлист только со звуком (itag 233, 234), иначе
+// целый с приличным звуком (93: 360p и AAC 128 кбит/с), иначе самый маленький. DASH трансляции yt-dlp
+// и сам пропускает без --live-from-start.
+const FILE_ARGS = ['-f', 'bestaudio[protocol=https]/bestaudio', '--extractor-args', 'youtube:skip=hls,dash']
+const LIVE_ARGS = ['-f', 'bestaudio[protocol^=m3u8]/234/233/93/worst[protocol^=m3u8]', '--extractor-args', 'youtube:skip=dash']
+
+/** Трансляцию спросили как файл: её живые форматы yt-dlp пропускает, и не остаётся ни одного. */
+const NO_FORMATS = /no video formats found|requested format is not available/i
+
+/** Когда ссылка истекает, мс: из expire — у плейлиста трансляции он в пути (/expire/1760400000/), а не в запросе. */
+function expiryOf(link: string): number {
+  const u = new URL(link)
+  const seconds = Number(u.searchParams.get('expire') ?? u.pathname.match(/\/expire\/(\d+)/)?.[1])
+  return seconds > 0 ? seconds * 1000 : Date.now() + 3_600_000
+}
+
+function run(exe: string, videoId: string, proxy: string, cookies: string | null, live: boolean): Promise<Found> {
   const args = [
     '--ignore-config',
     '--no-playlist',
@@ -252,11 +271,7 @@ function run(exe: string, videoId: string, proxy: string, cookies: string | null
     '--no-warnings',
     '--socket-timeout',
     '15',
-    // Только файлы по HTTPS: их <audio> играет сам, манифесты HLS/DASH не нужны.
-    '-f',
-    'bestaudio[protocol=https]/bestaudio',
-    '--extractor-args',
-    'youtube:skip=hls,dash',
+    ...(live ? LIVE_ARGS : FILE_ARGS),
     '--js-runtimes',
     `node:${process.execPath}`,
     '--cache-dir',
@@ -281,10 +296,9 @@ function run(exe: string, videoId: string, proxy: string, cookies: string | null
     child.on('close', (code) => {
       clearTimeout(timer)
       try {
-        const j = JSON.parse(out) as { url?: string }
+        const j = JSON.parse(out) as { url?: string; is_live?: boolean }
         if (!j.url) throw new Error('без ссылки')
-        const expire = Number(new URL(j.url).searchParams.get('expire')) * 1000
-        resolve({ url: j.url, expire: expire || Date.now() + 3_600_000 })
+        resolve({ url: j.url, expire: expiryOf(j.url), live: live || !!j.is_live })
       } catch {
         // «ERROR: [youtube] id: Sign in to confirm…» — причина в последней строке ERROR.
         const line = err.split('\n').reverse().find((l) => l.startsWith('ERROR')) ?? (code === null ? 'yt-dlp не ответил за минуту' : `yt-dlp завершился с кодом ${code}`)
@@ -294,15 +308,36 @@ function run(exe: string, videoId: string, proxy: string, cookies: string | null
   })
 }
 
-async function runWith(exe: string, videoId: string, ses: Session): Promise<Found> {
+/**
+ * Сначала без входа, при отказе — с входом этого браузера. live — сайт знает, что это трансляция. Ролик,
+ * у которого не нашлось файла, — трансляция, о которой сайт не знал: её спрашивают ещё раз как трансляцию,
+ * и дальше уже так.
+ */
+async function runWith(exe: string, videoId: string, ses: Session, live: boolean): Promise<Found> {
   const proxy = await relayFor(ses)
+  const attempt = async (cookies: string | null): Promise<Found> => {
+    try {
+      return await run(exe, videoId, proxy, cookies, live)
+    } catch (e) {
+      if (live || !NO_FORMATS.test((e as Error).message)) throw e
+      live = true
+      try {
+        return await run(exe, videoId, proxy, cookies, true)
+      } catch (again) {
+        if (!NO_FORMATS.test((again as Error).message)) throw again
+        // И не трансляция: причину говорит первый отказ.
+        live = false
+        throw e
+      }
+    }
+  }
   try {
-    return await run(exe, videoId, proxy, null)
+    return await attempt(null)
   } catch (anonymous) {
     const cookies = await cookieFile(ses)
     if (!cookies) throw anonymous
     try {
-      return await run(exe, videoId, proxy, cookies)
+      return await attempt(cookies)
     } finally {
       fs.rmSync(cookies, { force: true })
     }
@@ -313,8 +348,8 @@ const found = new Map<string, Found>()
 const inflight = new Map<string, Promise<Found>>()
 let lastForcedUpdate = 0
 
-/** Ссылка на звук ролика: из запаса, пока не истекает, иначе свежая от yt-dlp. */
-export function resolve(videoId: string, ses: Session): Promise<Found> {
+/** Ссылка на звук ролика: из запаса, пока не истекает, иначе свежая от yt-dlp. live — сайт знает, что это трансляция. */
+export function resolve(videoId: string, ses: Session, live = false): Promise<Found> {
   if (!/^[\w-]{11}$/.test(videoId)) return Promise.reject(new Error('неверный id ролика'))
   const kept = found.get(videoId)
   if (kept && kept.expire - Date.now() > 10 * 60_000) return Promise.resolve(kept)
@@ -323,7 +358,7 @@ export function resolve(videoId: string, ses: Session): Promise<Found> {
     p = (async () => {
       const exe = await ensure()
       try {
-        return await runWith(exe, videoId, ses)
+        return await runWith(exe, videoId, ses, live)
       } catch (e) {
         // YouTube мог измениться: yt-dlp обновляется и пробует ещё раз (не чаще раза в час).
         if (Date.now() - lastForcedUpdate < 60 * 60_000) throw e
@@ -331,7 +366,7 @@ export function resolve(videoId: string, ses: Session): Promise<Found> {
         const before = readState()?.sha256
         await updateOnce().catch(() => undefined)
         if (readState()?.sha256 === before) throw e
-        return runWith(exe, videoId, ses)
+        return runWith(exe, videoId, ses, live)
       }
     })()
       .then((f) => {
