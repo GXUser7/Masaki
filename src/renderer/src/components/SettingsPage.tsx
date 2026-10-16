@@ -14,6 +14,7 @@ import {
 } from '../../../shared/types'
 import { handmadeIds, handmadeNames, hueOf, seedFromHue, seedPresets, swatchOf } from '../lib/theme'
 import { useStore } from '../store'
+import { moveTiles, tileKeys, useReorder } from '../lib/reorder'
 import { Clock, clockStyles } from './Clock'
 import { Icon } from './Icon'
 import { PermissionList } from './Permissions'
@@ -70,19 +71,26 @@ function ShortcutEditor({
     setTitle('')
     setUrl('')
   }
+  const rd = useReorder(tileKeys(items), (from, to) => onChange(moveTiles(items, from, to)))
   return (
     <div className="sc-edit">
-      {items.map((it, i) => (
-        <div key={it.url + i} className="sc-item">
-          <span className="sc-item-t">
-            <b>{it.title}</b>
-            <small>{it.url}</small>
-          </span>
-          <button className="ib" aria-label={`Удалить «${it.title}»`} onClick={() => onChange(items.filter((_, j) => j !== i))}>
-            <Icon name="delete" />
-          </button>
-        </div>
-      ))}
+      <div ref={rd.box} className={'sc-list' + (rd.dragging !== null ? ' rd-on' : '')} {...rd.boxProps}>
+        {items.map((it, i) => {
+          const drag = rd.item(i, it.url)
+          return (
+            <div key={drag['data-rk']} {...drag} className={'sc-item' + (rd.dragging === i ? ' rd-drag' : '')} title="Тяните, чтобы переставить">
+              <Icon name="drag" />
+              <span className="sc-item-t">
+                <b>{it.title}</b>
+                <small>{it.url}</small>
+              </span>
+              <button className="ib" aria-label={`Удалить «${it.title}»`} onClick={() => onChange(items.filter((_, j) => j !== i))}>
+                <Icon name="delete" />
+              </button>
+            </div>
+          )
+        })}
+      </div>
       <div className="sc-add">
         <input placeholder="Название" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Название" />
         <input
@@ -491,6 +499,14 @@ export function SettingsPage(): React.JSX.Element {
 
         <section>
           <h2>Ярлыки новой вкладки</h2>
+          <p className="hint">Порядок меняется перетаскиванием — здесь или прямо на новой вкладке.</p>
+          <div className="set-row">
+            <span>
+              Плитки в цвете темы
+              <small>Все ярлыки — в цвете палитры Masaki, а не в цветах значков сайтов. Цвет, выбранный для плитки вручную, остаётся.</small>
+            </span>
+            <Switch label="Ярлыки в цвете темы" on={settings.scThemed} onChange={(scThemed) => set({ scThemed })} />
+          </div>
           <ShortcutEditor items={settings.shortcuts} onChange={(shortcuts) => set({ shortcuts })} addLabel="Добавить" />
         </section>
 
@@ -498,7 +514,8 @@ export function SettingsPage(): React.JSX.Element {
           <h2>Избранное в боковой панели</h2>
           <p className="hint">
             Звёздочка рядом с кнопками навигации добавляет текущую страницу. Если избранного много, в панели оно
-            раскрывается плиткой «+N», а в палитре ищется по названию.
+            раскрывается плиткой «+N», а в палитре ищется по названию. Порядок меняется перетаскиванием — здесь или
+            прямо в панели.
           </p>
           <div className="set-row">
             <span>

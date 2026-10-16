@@ -148,6 +148,59 @@ const steps = {
     await page.waitForTimeout(1500)
     await shot('01-newtab')
   },
+  async tileDrag() {
+    // Перестановка перетаскиванием: на новой вкладке и в избранном панели. Плитки, которые сдвинулись,
+    // забирают свою форму с собой; ярлыки «в цвете темы» — тональный цвет палитры.
+    const cur = await page.evaluate(() => window.masaki.settings.get())
+    const toUi = (s) => app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0].webContents.send('settings-changed', s), s)
+    const four = ['Альфа', 'Бета', 'Гамма', 'Дельта'].map((title, i) => ({ title, url: `https://tile-${i}.test/` }))
+    await toUi({ ...cur, scThemed: true, shortcuts: four, favorites: four })
+    await page.waitForTimeout(600)
+    const fills = await page.evaluate(() => [...document.querySelectorAll('.shortcuts .tile')].map((t) => t.style.getPropertyValue('--td')))
+    if (fills.length !== 4 || fills.some((f) => f !== 'var(--sc)')) throw new Error('ярлыки в цвете темы окрашены не так: ' + JSON.stringify(fills))
+    const saved = () => page.evaluate(() => window.masaki.settings.get())
+    const drag = async (from, to, name) => {
+      const a = await page.locator(from).boundingBox()
+      const b = await page.locator(to).boundingBox()
+      await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(a.x + a.width / 2 + 8, a.y + a.height / 2, { steps: 2 })
+      await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 8 })
+      // От быстрых шагов Playwright до страницы доходят не все dragover (настоящая мышь шлёт их всё время,
+      // пока тянут): в конечной точке подаём его сами — видно, как соседи расступились до отпускания.
+      await page.evaluate(([x, y]) => {
+        const el = document.elementFromPoint(x, y)
+        el?.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: new DataTransfer() }))
+      }, [b.x + b.width / 2, b.y + b.height / 2])
+      await page.waitForTimeout(600)
+      if (name) {
+        // Узлы стоят на месте — смотрим, где плитки на экране.
+        const mid = await page.evaluate(() =>
+          [...document.querySelectorAll('.shortcuts .sc[data-rk]')]
+            .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
+            .map((e) => e.querySelector('.sc-l').textContent)
+            .join()
+        )
+        if (mid !== 'Бета,Гамма,Альфа,Дельта') throw new Error('пока тянут, соседи не расступились: ' + mid)
+        await shot(name)
+      }
+      await page.mouse.up()
+      await page.waitForTimeout(500)
+    }
+    await drag('.shortcuts .sc >> nth=0', '.shortcuts .sc >> nth=2', '01a-shortcut-drag')
+    let s = await saved()
+    if (s.shortcuts.map((x) => x.title).join() !== 'Бета,Гамма,Альфа,Дельта') throw new Error('ярлык переставился не так: ' + s.shortcuts.map((x) => x.title))
+    if (s.shortcuts.map((x) => x.shape ?? '-').join() !== 'clover4,sunny8,cookie9,-') throw new Error('сдвинутые ярлыки не сохранили форму: ' + s.shortcuts.map((x) => x.shape))
+    const shown = await page.evaluate(() => [...document.querySelectorAll('.shortcuts .sc[data-rk] .sc-l')].map((e) => e.textContent).join())
+    if (shown !== 'Бета,Гамма,Альфа,Дельта') throw new Error('на новой вкладке порядок не тот: ' + shown)
+    await drag('.fvt >> nth=3', '.fvt >> nth=0')
+    s = await saved()
+    if (s.favorites.map((x) => x.title).join() !== 'Дельта,Альфа,Бета,Гамма') throw new Error('избранное переставилось не так: ' + s.favorites.map((x) => x.title))
+    await shot('01b-tiles-reordered')
+    await page.evaluate((s) => window.masaki.settings.set(s), cur)
+    await toUi(cur)
+    await page.waitForTimeout(300)
+  },
   async palette() {
     await page.click('.fakebox')
     await page.waitForSelector('.cmd')
@@ -929,6 +982,11 @@ const steps = {
     await page.waitForSelector('.settings')
     await page.waitForTimeout(1200)
     await shot('08-settings')
+    // Ярлыки и избранное: переключатели «в цвете темы» и ручки перетаскивания в списках.
+    await page.evaluate(() => [...document.querySelectorAll('.settings h2')].find((h) => h.textContent === 'Ярлыки новой вкладки')?.scrollIntoView({ block: 'start' }))
+    await page.waitForTimeout(500)
+    if ((await page.locator('.sc-list .sc-item[draggable="true"]').count()) < 2) throw new Error('в списках настроек нет перетаскиваемых строк')
+    await shot('08b-settings-tiles')
   },
   async looks() {
     // Готовая палитра по базовому цвету и свой цвет с ползунка

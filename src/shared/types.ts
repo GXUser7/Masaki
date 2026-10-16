@@ -219,6 +219,8 @@ export interface Settings {
   favorites: Shortcut[]
   /** Плитки избранного в цвете темы, а не в цветах значков сайтов (свой цвет плитки главнее). */
   favThemed: boolean
+  /** То же для ярлыков новой вкладки. */
+  scThemed: boolean
   addons: AddonSettings
   /** Через сколько часов неактивные вкладки уходят в архив; 0 — никогда. */
   archiveAfter: number
@@ -236,6 +238,7 @@ export const defaultSettings: Settings = {
   windowButtonsTucked: false,
   aiDefault: false,
   favThemed: false,
+  scThemed: false,
   archiveAfter: 0,
   aiControl: false,
   clock: { style: 'flex', color: 'auto', size: 'dynamic', rounded: true, thickness: 45 },

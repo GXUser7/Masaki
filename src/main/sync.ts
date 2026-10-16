@@ -169,6 +169,7 @@ const FIELDS: Record<string, Group> = {
   background: 'settings',
   aiDefault: 'settings',
   favThemed: 'settings',
+  scThemed: 'settings',
   clock: 'settings',
   'addons.glass': 'settings',
   'addons.adblock': 'settings'

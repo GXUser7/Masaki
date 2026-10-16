@@ -15,6 +15,7 @@ import {
 import { shapes } from '../lib/shapes'
 import QRCode from 'qrcode'
 import { hostOf } from '../lib/url'
+import { moveTiles, tileKeys, useReorder } from '../lib/reorder'
 import { siteCookieDomain } from '../../../shared/site'
 import type { DownloadInfo, ExtAction, ExtensionInfo, TabGroup, UpdateState } from '../../../shared/types'
 import { actionFor, actionIcon, badgeColor, pressAction, STORE_URL, togglePin, useExtensions } from '../lib/extensions'
@@ -512,6 +513,11 @@ export function Sidebar(): React.JSX.Element {
   const more = favorites.length > FAV_SHOWN
   const shownFavs = more && !allFavs ? favorites.slice(0, FAV_SHOWN - 1) : favorites
   const s = useStore.getState
+  // Тянуть можно среди видимых плиток; они — начало списка, так что номера те же, что в настройках.
+  const rd = useReorder(tileKeys(shownFavs), (from, to) => {
+    const all = s().settings.favorites
+    s().setSettings({ favorites: moveTiles(all.slice(0, shownFavs.length), from, to).concat(all.slice(shownFavs.length)) })
+  })
 
   return (
     <aside className="glass side" aria-label="Боковая панель">
@@ -534,22 +540,26 @@ export function Sidebar(): React.JSX.Element {
       <AddressBar where="side" />
 
       {favorites.length > 0 && (
-        <div className={'favs' + (allFavs ? ' all' : '')}>
-          {shownFavs.map((f, i) => (
-            <button
-              key={f.url + i}
-              className="fvt"
-              title={f.title}
-              aria-label={f.title}
-              onClick={() => openFavorite(f.url)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                openTileMenu(e.clientX, e.clientY, 'favorites', i)
-              }}
-            >
-              <ShapeTile item={f} index={i} themed={themed} />
-            </button>
-          ))}
+        <div ref={rd.box} className={'favs' + (allFavs ? ' all' : '') + (rd.dragging !== null ? ' rd-on' : '')} {...rd.boxProps}>
+          {shownFavs.map((f, i) => {
+            const drag = rd.item(i, f.url)
+            return (
+              <button
+                key={drag['data-rk']}
+                {...drag}
+                className={'fvt' + (rd.dragging === i ? ' rd-drag' : '')}
+                title={f.title}
+                aria-label={f.title}
+                onClick={() => openFavorite(f.url)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  openTileMenu(e.clientX, e.clientY, 'favorites', i)
+                }}
+              >
+                <ShapeTile item={f} index={i} themed={themed} />
+              </button>
+            )
+          })}
           {more && (
             <button
               className="fvt fvt-more"

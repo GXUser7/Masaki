@@ -2191,6 +2191,27 @@ input {
   border-radius: 16px;
   background: var(--hov);
 }
+.sc-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sc-list .sc-item {
+  padding-left: 6px;
+  cursor: grab;
+}
+.sc-list .sc-item > svg:first-child {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  fill: var(--on-sv);
+  opacity: 0.55;
+  transition: opacity 0.2s;
+}
+.sc-list .sc-item:hover > svg:first-child {
+  opacity: 1;
+}
 .sc-item-t {
   flex: 1;
   min-width: 0;
@@ -3948,7 +3969,8 @@ input {
   fill: var(--sc);
 }
 .dark .fvt:hover .tile.themed .tile-shape,
-.light .fvt:hover .tile.themed .tile-shape {
+.light .fvt:hover .tile.themed .tile-shape,
+.sc:hover .tile.themed .tile-shape {
   fill: var(--pc);
 }
 .fvt {
@@ -5938,4 +5960,32 @@ input {
 }
 .upd-notes {
   color: var(--primary);
+}
+
+/* ---------- Перестановка плиток перетаскиванием (lib/reorder.ts) ---------- */
+/* Ячейки ищутся по вёрстке (offsetLeft/Top) — от контейнера, поэтому он position: relative. */
+.favs,
+.shortcuts {
+  position: relative;
+}
+/* Пока тянут: место плитки — тихий «след» формы, соседи расступаются пружиной (FLIP в хуке). */
+/* Масштаб — у содержимого: transform самой ячейки занят её переездом. */
+.rd-drag {
+  opacity: 0.32;
+  transition: opacity 0.2s;
+}
+.fvt.rd-drag .tile,
+.sc.rd-drag .sc-shape {
+  transform: scale(0.86);
+  transition: transform 0.35s var(--spring);
+}
+.rd-on .fvt:hover svg,
+.rd-on .sc:hover .tile svg,
+.rd-on .sc:hover .sc-shape svg {
+  transform: none;
+}
+.sc-list .sc-item.rd-drag {
+  opacity: 0.4;
+  outline: 2px dashed var(--outline);
+  outline-offset: -2px;
 }

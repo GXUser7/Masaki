@@ -5,6 +5,7 @@ import { Clock } from './Clock'
 import { Icon } from './Icon'
 import { ShapeTile } from './parts'
 import { openTileMenu } from '../menus'
+import { moveTiles, tileKeys, useReorder } from '../lib/reorder'
 
 function useDateLabel(): string {
   const [d, setD] = useState(() => new Date())
@@ -32,8 +33,10 @@ export function NewTab(): React.JSX.Element {
   }, [])
   const clock = useStore((s) => s.settings.clock)
   const shortcuts = useStore((s) => s.settings.shortcuts)
+  const themed = useStore((s) => s.settings.scThemed)
   const date = useDateLabel()
   const s = useStore.getState
+  const rd = useReorder(tileKeys(shortcuts), (from, to) => s().setSettings({ shortcuts: moveTiles(s().settings.shortcuts, from, to) }))
   const compact = clock.size === 'small'
 
   return (
@@ -52,24 +55,28 @@ export function NewTab(): React.JSX.Element {
           AI Mode
         </button>
       </div>
-      <div className="shortcuts">
-        {shortcuts.map((sc, i) => (
-          <button
-            key={sc.url + i}
-            className="sc"
-            title={sc.url}
-            onClick={() => s().navigate(sc.url, { raw: true })}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              openTileMenu(e.clientX, e.clientY, 'shortcuts', i)
-            }}
-          >
-            <span className="sc-shape">
-              <ShapeTile item={sc} index={i} />
-            </span>
-            <span className="sc-l">{sc.title}</span>
-          </button>
-        ))}
+      <div ref={rd.box} className={'shortcuts' + (rd.dragging !== null ? ' rd-on' : '')} {...rd.boxProps}>
+        {shortcuts.map((sc, i) => {
+          const drag = rd.item(i, sc.url)
+          return (
+            <button
+              key={drag['data-rk']}
+              {...drag}
+              className={'sc' + (rd.dragging === i ? ' rd-drag' : '')}
+              title={sc.url}
+              onClick={() => s().navigate(sc.url, { raw: true })}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                openTileMenu(e.clientX, e.clientY, 'shortcuts', i)
+              }}
+            >
+              <span className="sc-shape">
+                <ShapeTile item={sc} index={i} themed={themed} />
+              </span>
+              <span className="sc-l">{sc.title}</span>
+            </button>
+          )
+        })}
         <button className="sc" onClick={() => s().openSettings()}>
           <span className="sc-shape add">
             <Icon name="add" />
