@@ -607,12 +607,15 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   Перед обновлением проверить `ExecutablePath` запущенного Masaki: одной пересборки `dist` для
   установленной копии недостаточно. После закрытия пользователя обновлены обе копии; прежние файлы
   сохранены в `dist/backups/`. Менять согласованно exe и app.asar (exe содержит hash целостности asar).
-- Пользователь запускает `dist/win-unpacked/Masaki.exe` — через ярлыки «Masaki» на рабочем столе и в меню
-  «Пуск» (указывают на этот путь; при переименовании папки проекта их нужно перенаправить). Запуск проекта
-  кнопкой в Claude стартует с отдельным чистым профилем — пустое окно там не значит, что данные пропали.
-  Если Masaki у него открыт, папку не перезаписать:
-  собирать в `dist/next` (`npx electron-builder --win dir -c.directories.output=dist/next`) и подменять
-  `dist/win-unpacked` после закрытия Masaki (можно фоновой задачей, ждущей закрытия процесса).
+- Пользователь запускает **установленную копию** `%LOCALAPPDATA%\Programs\Masaki\Masaki.exe` — на неё ведут
+  ярлыки «Masaki» на рабочем столе и в меню «Пуск» (на 2026-10-16). Она обновляется сама с выпусков GitHub;
+  «обнови установленный» — собрать установщик (`npx electron-builder --win nsis -c.directories.output=dist/installer`,
+  после `electron-vite build`) и запустить `dist/installer/Masaki-Setup-<версия>.exe /S`, когда Masaki закрыт
+  (проверить `Get-Process Masaki`). Регистрация браузером могла остаться на `dist/win-unpacked` — установленная
+  копия перепишет её сама при запуске (`refreshRegistration`). Запуск проекта кнопкой в Claude стартует с
+  отдельным чистым профилем — пустое окно там не значит, что данные пропали.
+  Старый путь — `dist/win-unpacked`: если Masaki открыт, собирать в `dist/next`
+  (`npx electron-builder --win dir -c.directories.output=dist/next`) и подменять после закрытия.
 - Перед выдачей: typecheck, smoke (и test:addons при необходимости), посмотреть снимки, собрать.
 - Релиз на GitHub (github.com/GXUser7/Masaki) — **через GitHub Actions** (`.github/workflows/release.yml`,
   с 0.4.0; `gh` на компьютере пользователя нет): поднять `version` в package.json, закоммитить, запушить, затем
