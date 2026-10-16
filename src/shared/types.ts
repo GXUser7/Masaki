@@ -330,6 +330,13 @@ export interface DownloadInfo {
   received: number
   total: number
   startedAt: number
+  /** Когда закончилась (готово, отменена, прервана). */
+  endedAt?: number
+  /** Хост страницы, с которой скачали; нет — скачано по прямой ссылке. */
+  page?: string
+  mime?: string
+  /** Файл ещё лежит на диске: приходит в списке истории и у только что завершённых. */
+  exists?: boolean
 }
 
 // ---------- Синхронизация через Google Диск ----------
@@ -626,6 +633,18 @@ export interface MasakiApi {
   }
   downloads: {
     onUpdate(cb: (d: DownloadInfo) => void): () => void
+    /** Вся история загрузок, свежие сверху; у завершённых — есть ли файл на диске сейчас. */
+    list(): Promise<DownloadInfo[]>
+    /** Убрать запись из списка (файл остаётся). Идущую загрузку убрать нельзя. */
+    remove(id: string): Promise<boolean>
+    /** Очистить список, кроме идущих загрузок. */
+    clear(): void
+    /** Скачать снова по той же ссылке; прежняя запись уходит. */
+    retry(id: string): Promise<boolean>
+    /** Миниатюра скачанной картинки (data:) или null. */
+    thumb(id: string): Promise<string | null>
+    /** Открыть папку загрузок в проводнике. */
+    openFolder(): void
     cancel(id: string): Promise<boolean>
     open(path: string): void
     showInFolder(path: string): void

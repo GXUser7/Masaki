@@ -201,6 +201,32 @@ const steps = {
     await toUi(cur)
     await page.waitForTimeout(300)
   },
+  async hoverFx() {
+    // Эффекты наведения: кнопка-значок морфит и подрастает, AI Mode светится ореолом,
+    // ярлык приподнимается, кнопка окна тянется за курсором (магнит).
+    const css = (sel, prop) => page.evaluate(([sel, prop]) => getComputedStyle(document.querySelector(sel))[prop], [sel, prop])
+    await page.hover('.side-bottom .ib[aria-label="История"]')
+    await page.waitForTimeout(450)
+    if ((await css('.side-bottom .ib[aria-label="История"]', 'transform')) === 'none') throw new Error('кнопка-значок не пружинит при наведении')
+    await shotRect('01c-hover-ib', '.side-bottom', 10)
+    await page.hover('.ntp .chip.halo')
+    await page.waitForTimeout(300)
+    if ((await css('.ntp .chip.halo', 'boxShadow')) === 'none') throw new Error('у AI Mode нет ореола при наведении')
+    await shotRect('01d-hover-halo', '.ntp .search', 30)
+    await page.hover('.shortcuts .sc >> nth=0')
+    await page.waitForTimeout(550)
+    if ((await css('.shortcuts .sc', 'translate')) === 'none') throw new Error('ярлык не приподнимается при наведении')
+    // Магнит: курсор у правого края кнопки — кнопка сдвигается к нему. Проверяем сразу: настоящий курсор
+    // Windows в тесте не над кнопкой, и сверка с ним вскоре вернёт её на место.
+    const b = await page.locator('.side-top .ib.wb >> nth=0').boundingBox()
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
+    await page.mouse.move(b.x + b.width - 2, b.y + b.height / 2, { steps: 2 })
+    await page.waitForTimeout(60)
+    const pulled = await page.evaluate(() => document.querySelector('.side-top .ib.wb').style.translate)
+    if (!pulled || !/^[1-9]/.test(pulled)) throw new Error('кнопка окна не тянется за курсором: ' + JSON.stringify(pulled))
+    await page.mouse.move(700, 420)
+    await page.waitForTimeout(300)
+  },
   async palette() {
     await page.click('.fakebox')
     await page.waitForSelector('.cmd')
@@ -966,6 +992,75 @@ const steps = {
     if (f2[1].at - f2[0].at < 400) throw new Error('док сменил размер раньше паузы: ' + (f2[1].at - f2[0].at) + ' мс')
     await command({ type: 'close-tab' })
     await page.waitForTimeout(500)
+  },
+  async dockDrag() {
+    // Вкладку дока тянут мышью: вверх из дока и отпустить — закрылась; вернуть — осталась;
+    // вдоль острова — переставилась. Обычный щелчок по-прежнему просто переключает вкладку.
+    // Тянем только свои две вкладки, чтобы порядок остальных не менялся для следующих шагов.
+    const wasActive = await page.evaluate(() => document.querySelector('.dk-t.on')?.dataset.id)
+    for (const name of ['Тянуть 1', 'Тянуть 2']) {
+      await command({ type: 'open-url', url: 'data:text/html;charset=utf-8,' + encodeURIComponent(`<meta charset="utf-8"><title>${name}</title><body>${name}</body>`) })
+      await page.waitForTimeout(400)
+    }
+    await page.waitForTimeout(800)
+    const idOf = (title) =>
+      page.evaluate((t) => [...document.querySelectorAll('.dk-t')].find((e) => e.querySelector('.dk-main')?.getAttribute('aria-label') === t)?.dataset.id, title)
+    const ids = () => page.evaluate(() => [...document.querySelectorAll('.dk-t')].map((e) => e.dataset.id))
+    // Вкладок может быть больше, чем влезает в док: остальные — в «+N».
+    const total = () => page.evaluate(() => document.querySelectorAll('.dk-t').length + Number(document.querySelector('.dk-more')?.textContent.replace('+', '') || 0))
+    const center = async (sel) => {
+      const b = await page.locator(sel).boundingBox()
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+    }
+    const pull = async (sel, to, shotName) => {
+      const a = await center(sel)
+      await page.mouse.move(a.x, a.y)
+      await page.mouse.down()
+      await page.mouse.move(a.x + 3, a.y - 3)
+      await page.mouse.move(to.x, to.y, { steps: 10 })
+      await page.waitForTimeout(450)
+      if (shotName) await shot(shotName)
+      return a
+    }
+    const victim = await idOf('Тянуть 1')
+    const keep = await idOf('Тянуть 2')
+    if (!victim || !keep) throw new Error('свои вкладки не видны в доке')
+    // 1. Вверх из дока — «отпустите — закроется», отпустили — вкладки нет.
+    const count = await total()
+    const a = await pull(`.dk-t[data-id="${victim}"]`, { x: (await center(`.dk-t[data-id="${victim}"]`)).x + 40, y: 180 }, '04e-dock-drag-out')
+    if (!(await page.$('.dk-ghost.out'))) throw new Error('над страницей значок не показал «отпустите — закроется»')
+    await page.mouse.up()
+    await page.waitForTimeout(600)
+    if ((await ids()).includes(victim) || (await total()) !== count - 1) throw new Error('утащенная из дока вкладка не закрылась')
+    if (await page.$('.dk-ghost')) throw new Error('призрак вкладки остался после закрытия')
+    // 2. Утащили и вернули на место — вкладка осталась, порядок тот же.
+    let before = await ids()
+    const back = await pull(`.dk-t[data-id="${keep}"]`, { x: a.x, y: 200 })
+    await page.mouse.move(back.x, back.y, { steps: 8 })
+    await page.waitForTimeout(250)
+    await page.mouse.up()
+    await page.waitForTimeout(600)
+    let after = await ids()
+    if (after.join() !== before.join()) throw new Error('вкладка, которую вернули в док, пропала или переехала: ' + JSON.stringify({ before, after }))
+    // 3. Вдоль острова перед первой видимой вкладкой — переставилась туда.
+    before = await ids()
+    const first = await center(`.dk-t[data-id="${before[0]}"]`)
+    await pull(`.dk-t[data-id="${keep}"]`, { x: first.x - 16, y: first.y }, '04f-dock-drag-reorder')
+    if (!(await page.$('.dk-tabs.dropping .dk-t.gap-before'))) throw new Error('над доком не раскрылся зазор для вкладки')
+    await page.mouse.up()
+    await page.waitForTimeout(600)
+    after = await ids()
+    if (after[0] !== keep) throw new Error('вкладка не переставилась: ' + JSON.stringify({ before, after }))
+    // 4. Щелчок без жеста переключает вкладку.
+    const other = after.find((id) => id !== keep)
+    await page.click(`.dk-t[data-id="${other}"] .dk-main`)
+    await page.waitForTimeout(300)
+    if (!(await page.$(`.dk-t.on[data-id="${other}"]`))) throw new Error('щелчок по вкладке дока перестал её выбирать')
+    // Убираем свою вкладку и возвращаем прежнюю активную.
+    await page.click(`.dk-t[data-id="${keep}"] .dk-main`, { button: 'middle' })
+    await page.waitForTimeout(400)
+    if (wasActive && (await page.$(`.dk-t[data-id="${wasActive}"]`))) await page.click(`.dk-t[data-id="${wasActive}"] .dk-main`)
+    await page.waitForTimeout(300)
   },
   async small() {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 600))

@@ -50,7 +50,7 @@ export function NewTab(): React.JSX.Element {
           <Icon name="search" />
           <span className="fb-t">Поиск в Google или адрес сайта</span>
         </button>
-        <button className="chip" title="Спросить AI Mode" onClick={aiButton}>
+        <button className="chip halo" title="Спросить AI Mode" onClick={aiButton}>
           <Icon name="sparkle" />
           AI Mode
         </button>

@@ -97,6 +97,13 @@ const paths = {
   // Закрепить (Material Symbols «keep»).
   pin: 'M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z',
   edit: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
+  folderOpen: 'M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z',
+  doc: 'M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z',
+  archive:
+    'M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z',
+  movie: 'M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z',
+  calendar:
+    'M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V9h14v11zM7 11h5v5H7z',
   // Ручка перетаскивания (Material Symbols «drag_indicator»).
   drag:
     'M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z'
@@ -104,10 +111,34 @@ const paths = {
 
 export type IconName = keyof typeof paths
 
+/** Значки из частей — для «живых значков»: при наведении на кнопку детали двигаются по-своему
+ *  (стрелка загрузки падает в лоток, точки меню подпрыгивают, перегородка панели сдвигается). */
+const parts: Partial<Record<IconName, React.JSX.Element>> = {
+  download: (
+    <>
+      <path className="ic-arrow" d="M19 9h-4V3H9v6H5l7 7 7-7z" />
+      <path d="M5 18v2h14v-2H5z" />
+    </>
+  ),
+  more: (
+    <>
+      <circle className="ic-dot" cx="12" cy="6" r="2" />
+      <circle className="ic-dot" cx="12" cy="12" r="2" />
+      <circle className="ic-dot" cx="12" cy="18" r="2" />
+    </>
+  ),
+  sidebar: (
+    <>
+      <path d="M3 5c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v14c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V5zm2 0v14h14V5H5z" />
+      <rect className="ic-bar" x="9" y="5" width="2" height="14" />
+    </>
+  )
+}
+
 export function Icon({ name, className }: { name: IconName; className?: string }): React.JSX.Element {
   return (
-    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
-      <path d={paths[name]} />
+    <svg viewBox="0 0 24 24" className={className} data-ic={name} aria-hidden="true">
+      {parts[name] ?? <path d={paths[name]} />}
     </svg>
   )
 }

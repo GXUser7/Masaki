@@ -147,7 +147,7 @@ function commands(): PaletteCommand[] {
     { title: 'QR-код страницы', sub: 'Открыть на телефоне', icon: 'qr', run: () => S().showQr(t.url), hidden: !web },
     { title: 'Поиск по вкладкам', sub: 'Ctrl+Shift+A', icon: 'search', run: () => S().openTabSearch() },
     { title: 'Пароли', sub: 'Менеджер паролей', icon: 'key', run: () => S().openPasswords() },
-    { title: 'Загрузки', sub: 'Скачанные файлы', icon: 'download', run: () => S().setPopover('downloads') },
+    { title: 'Загрузки', sub: 'Все скачанные файлы · Ctrl+J', icon: 'download', run: () => S().openDownloads() },
     { title: 'Аддоны', sub: 'Прозрачные сайты, блокировщик, расширения', icon: 'extension', run: () => S().openAddons() },
     { title: 'Настройки', sub: 'Ctrl+,', icon: 'settings', run: () => S().openSettings() },
     s.update?.status === 'ready'

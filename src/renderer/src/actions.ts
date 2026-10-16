@@ -249,8 +249,10 @@ export function handleCommand(c: Command): void {
       // Как кнопка «История» в панели: палитра без запроса, показывает историю.
       s.openPalette(false)
       break
+    // Как в Chrome: Ctrl+J — страница загрузок; короткий список — кнопкой загрузок.
     case 'downloads':
-      s.setPopover(s.popover === 'downloads' ? null : 'downloads')
+      s.setPopover(null)
+      s.openDownloads()
       break
     case 'menu':
       s.setPopover(s.popover === 'menu' ? null : 'menu')

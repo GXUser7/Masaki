@@ -76,6 +76,12 @@ const api: MasakiApi = {
   },
   downloads: {
     onUpdate: (cb) => listen<DownloadInfo>('download', cb),
+    list: () => ipcRenderer.invoke('dl:list'),
+    remove: (id) => ipcRenderer.invoke('dl:remove', id),
+    clear: () => ipcRenderer.send('dl:clear'),
+    retry: (id) => ipcRenderer.invoke('dl:retry', id),
+    thumb: (id) => ipcRenderer.invoke('dl:thumb', id),
+    openFolder: () => ipcRenderer.send('dl:folder'),
     cancel: (id) => ipcRenderer.invoke('dl:cancel', id),
     open: (p) => ipcRenderer.send('dl:open', p),
     showInFolder: (p) => ipcRenderer.send('dl:show', p),

@@ -217,7 +217,7 @@ npm run dist       # установщик dist/Masaki-Setup-*.exe
 npm run typecheck
 npm run smoke           # основной сценарий, снимки окна в test-output/
 npm run test:addons     # аддоны и функции Chrome в контекстном меню
-npm run test:downloads  # отмена загрузки и целостность скачанного файла
+npm run test:downloads  # отмена загрузки, целостность файла, страница загрузок и история после перезапуска
 npm run test:site-data  # очистка кук текущего сайта и изоляция остальных данных
 npm run test:permissions # разрешения сайтов: камера и микрофон отдельно, http и https независимы
 npm run test:store      # надёжная запись файлов профиля (без запуска браузера)

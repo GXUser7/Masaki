@@ -33,6 +33,7 @@ import { defaultBrowserState, makeDefault, refreshRegistration } from './default
 import { parseTrack, setDiscordEnabled, setDiscordTrack } from './discord'
 import * as profiles from './profiles'
 import * as updater from './updater'
+import { cancelDownload, clearDownloads, downloadThumb, flushDownloads, initDownloads, isDownloadedFile, listDownloads, removeDownload, retryDownload, trackDownload } from './downloads'
 import { pathToFileURL } from 'url'
 import { commandFor } from '../shared/shortcuts'
 import { siteCookieDomain } from '../shared/site'
@@ -41,7 +42,6 @@ import {
   defaultSettings,
   type ChromeImportResult,
   type Command,
-  type DownloadInfo,
   type ExtensionInfo,
   type GoogleAccount,
   type HistoryEntry,
@@ -131,6 +131,9 @@ const aiPort = ((): number => {
 })()
 if (aiPort) app.commandLine.appendSwitch('remote-debugging-port', String(aiPort))
 if (testFakeMedia) app.commandLine.appendSwitch('use-fake-device-for-media-stream')
+// Автотесты играют ролики и шум (мини-плеер, YouCloud) — в колонки пользователя звук не идёт.
+// Послушать при отладке: MASAKI_TEST_SOUND=1.
+if (testFakeMedia && process.env.MASAKI_TEST_SOUND !== '1') app.commandLine.appendSwitch('mute-audio')
 
 /** Открыл ли порт именно этот Masaki: его мог занять другой браузер с отладкой. */
 async function aiControlState(): Promise<{ port: number; listening: boolean }> {
@@ -506,10 +509,6 @@ async function loadSavedExtensions(): Promise<void> {
 
 // ---------- Сессия вкладок: права, загрузки ----------
 
-/** Завершённые загрузки этого запуска: не открываем недокачанные и отменённые файлы. */
-const downloadedFiles = new Set<string>()
-/** interrupted бывает и до done: пока объект жив, загрузку ещё можно отменить. */
-const activeDownloads = new Map<string, Electron.DownloadItem>()
 const alwaysAllowed = new Set(['fullscreen', 'clipboard-sanitized-write', 'pointerLock', 'keyboardLock'])
 const permissionsFile = new JsonFile<Record<string, boolean>>('permissions.json')
 /** Решения «origin|право». Камера и микрофон — разные права: разрешённый микрофон не открывает камеру. */
@@ -603,14 +602,6 @@ function describePermission(permission: string, asked: string[]): Omit<Permissio
   }
 }
 
-function uniquePath(dir: string, name: string): string {
-  const ext = path.extname(name)
-  const base = path.basename(name, ext)
-  let candidate = path.join(dir, name)
-  for (let i = 1; fs.existsSync(candidate); i++) candidate = path.join(dir, `${base} (${i})${ext}`)
-  return candidate
-}
-
 function setupBrowsingSession(): void {
   const ses = session.fromPartition(PARTITION)
   ses.setUserAgent(chromeUserAgent())
@@ -679,30 +670,7 @@ function setupBrowsingSession(): void {
     if (wc && !wc.isDestroyed() && wc.getType() === 'webview' && (!wc.getURL() || wc.getURL() === 'about:blank')) {
       send({ type: 'close-empty-tab', wcId: wc.id })
     }
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const target = uniquePath(app.getPath('downloads'), item.getFilename())
-    item.setSavePath(target)
-    activeDownloads.set(id, item)
-    const info = (state = item.getState()): DownloadInfo => ({
-      id,
-      filename: path.basename(item.getSavePath() || target),
-      url: item.getURL(),
-      path: item.getSavePath() || target,
-      state,
-      canCancel: activeDownloads.has(id),
-      received: item.getReceivedBytes(),
-      total: item.getTotalBytes(),
-      startedAt: item.getStartTime() * 1000
-    })
-    win?.webContents.send('download', info())
-    item.on('updated', (_ev, state) => win?.webContents.send('download', info(state)))
-    item.once('done', (_ev, state) => {
-      activeDownloads.delete(id)
-      if (state === 'completed') downloadedFiles.add(item.getSavePath() || target)
-      win?.webContents.send('download', info(state))
-      // Экспорт паролей (passwords.google.com, Chrome) — предложить перенести в Masaki и удалить файл.
-      if (state === 'completed' && passwords.isPasswordExport(item.getSavePath())) passwords.csvDownloaded(item.getSavePath())
-    })
+    trackDownload(item, wc)
   })
 }
 
@@ -1230,15 +1198,17 @@ function registerIpc(): void {
   const downloadUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
     !!win && e.sender === win.webContents && e.senderFrame === win.webContents.mainFrame
   const completedDownload = (e: Electron.IpcMainEvent, p: unknown): p is string =>
-    downloadUi(e) && typeof p === 'string' && downloadedFiles.has(p) && fs.existsSync(p)
-  ipcMain.handle('dl:cancel', (e, id: unknown) => {
-    if (!downloadUi(e) || typeof id !== 'string') return false
-    const item = activeDownloads.get(id)
-    if (!item) return false
-    const state = item.getState()
-    if (state !== 'progressing' && state !== 'interrupted') return false
-    item.cancel()
-    return true
+    downloadUi(e) && typeof p === 'string' && isDownloadedFile(p) && fs.existsSync(p)
+  ipcMain.handle('dl:cancel', (e, id: unknown) => downloadUi(e) && typeof id === 'string' && cancelDownload(id))
+  ipcMain.handle('dl:list', (e) => (downloadUi(e) ? listDownloads() : []))
+  ipcMain.handle('dl:remove', (e, id: unknown) => downloadUi(e) && typeof id === 'string' && removeDownload(id))
+  ipcMain.handle('dl:retry', (e, id: unknown) => downloadUi(e) && typeof id === 'string' && retryDownload(id, session.fromPartition(PARTITION)))
+  ipcMain.handle('dl:thumb', (e, id: unknown) => (downloadUi(e) && typeof id === 'string' ? downloadThumb(id) : null))
+  ipcMain.on('dl:clear', (e) => {
+    if (downloadUi(e)) clearDownloads()
+  })
+  ipcMain.on('dl:folder', (e) => {
+    if (downloadUi(e)) void shell.openPath(app.getPath('downloads'))
   })
   ipcMain.on('dl:open', (e, p: unknown) => {
     if (completedDownload(e, p)) void shell.openPath(p)
@@ -1676,6 +1646,13 @@ if (!app.requestSingleInstanceLock()) {
       backedUp: () => sync.getState().vault === 'ready'
     })
     await startSync()
+    await initDownloads({
+      send: (d) => win?.webContents.send('download', d),
+      // Экспорт паролей (passwords.google.com, Chrome) — предложить перенести в Masaki и удалить файл.
+      completed: (p) => {
+        if (passwords.isPasswordExport(p)) passwords.csvDownloaded(p)
+      }
+    })
     initYouCloud(PARTITION, {
       openUrl: (url) => send({ type: 'open-url', url }),
       closeTab: (wcId, then) => send({ type: 'close-wc', wcId, then })
@@ -1699,6 +1676,7 @@ if (!app.requestSingleInstanceLock()) {
     sync.flushSync()
     passwords.flushPasswords()
     passkeys.flushPasskeys()
+    flushDownloads()
   })
 
   app.on('window-all-closed', () => app.quit())

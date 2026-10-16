@@ -8,7 +8,7 @@ import { Icon } from './Icon'
 
 /** Матовое зерно поверх стекла. */
 
-const internalIcon = { settings: 'settings', addons: 'extension', passwords: 'key' } as const
+const internalIcon = { settings: 'settings', addons: 'extension', passwords: 'key', downloads: 'download' } as const
 
 export function Grain(): React.JSX.Element {
   return (
@@ -179,7 +179,7 @@ export function Fav({
 }
 
 export function TabFav({ tab, className }: { tab: Tab; className?: string }): React.JSX.Element {
-  if (tab.kind === 'settings' || tab.kind === 'addons' || tab.kind === 'passwords') {
+  if (tab.kind === 'settings' || tab.kind === 'addons' || tab.kind === 'passwords' || tab.kind === 'downloads') {
     return (
       <span className={`fav fv4 ${className ?? ''}`}>
         <Icon name={internalIcon[tab.kind]} />
@@ -226,7 +226,7 @@ export function useHoverOverPage(): [React.RefObject<HTMLDivElement | null>, boo
 
 /** Содержимое адресной строки: значок безопасности + адрес, запрос или подсказка. */
 export function AddressLabel({ tab }: { tab: Tab }): React.JSX.Element {
-  if (tab.kind === 'settings' || tab.kind === 'addons' || tab.kind === 'passwords') {
+  if (tab.kind === 'settings' || tab.kind === 'addons' || tab.kind === 'passwords' || tab.kind === 'downloads') {
     return (
       <>
         <Icon name={internalIcon[tab.kind]} />

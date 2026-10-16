@@ -9,6 +9,8 @@ import { Dock, ErrorView, FindBar, Popover, Sidebar } from './Chrome'
 import { ContextMenu } from './Menu'
 import { AddonsPage } from './AddonsPage'
 import { PasswordsPage } from './PasswordsPage'
+import { DownloadsPage } from './DownloadsPage'
+import { startMagnet } from '../lib/magnet'
 import { AutofillMenu, PasskeySheet, PasswordBar } from './PasswordUi'
 import { ExtInstallSheet } from './ExtInstall'
 import { matchesPanel, syncGlassAll } from '../lib/glass'
@@ -92,6 +94,7 @@ export function App(): React.JSX.Element {
         window.masaki.history.list()
       ])
       useStore.getState().boot(s, session, history)
+      void useStore.getState().loadDownloads()
       // Ссылка, с которой Masaki запустили (он — браузер по умолчанию): поверх восстановленных вкладок.
       const launch = await window.masaki.system.launchUrl()
       if (launch) useStore.getState().newTab(launch)
@@ -127,6 +130,7 @@ export function App(): React.JSX.Element {
       window.masaki.permissions.onDismiss((id) => useStore.getState().dropPermission(id)),
       () => window.removeEventListener('keydown', onKey),
       startDiscordPresence(),
+      startMagnet(),
       () => window.removeEventListener('mouseup', onMouseUp),
       window.masaki.onCommand(handleCommand),
       window.masaki.downloads.onUpdate((d) => useStore.getState().upsertDownload(d)),
@@ -305,6 +309,7 @@ export function App(): React.JSX.Element {
             {active.kind === 'settings' && <SettingsPage />}
             {active.kind === 'addons' && <AddonsPage />}
             {active.kind === 'passwords' && <PasswordsPage />}
+            {active.kind === 'downloads' && <DownloadsPage />}
             {active.kind === 'web' && active.error && <ErrorView tab={active} />}
           </main>
           <SwipeArrow />

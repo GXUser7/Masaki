@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   closeFind,
   findInPage,
@@ -15,6 +16,7 @@ import {
 import { shapes } from '../lib/shapes'
 import QRCode from 'qrcode'
 import { hostOf } from '../lib/url'
+import { formatBytes } from '../lib/format'
 import { moveTiles, tileKeys, useReorder } from '../lib/reorder'
 import { siteCookieDomain } from '../../../shared/site'
 import type { DownloadInfo, ExtAction, ExtensionInfo, TabGroup, UpdateState } from '../../../shared/types'
@@ -576,7 +578,7 @@ export function Sidebar(): React.JSX.Element {
 
       <div className="lbl-row">
         <span className="lbl">Вкладки · {tabs.length}</span>
-        <button className="lbl-add" aria-label="Новая вкладка" title="Новая вкладка · Ctrl+T" onClick={() => s().newTab()}>
+        <button className="lbl-add halo" aria-label="Новая вкладка" title="Новая вкладка · Ctrl+T" onClick={() => s().newTab()}>
           <Icon name="add" />
         </button>
       </div>
@@ -608,10 +610,33 @@ const DK_TITLED_MIN = 150
 /** В сжатом доке (страницу листают вниз): значки 22 px через 6 px, без «+». */
 const DK_TINY_STEP = 28
 
+/** Тянуть вкладку дока: выше этого (над верхом острова) — «вне дока», отпустили — вкладка закрылась. */
+const DK_OUT = 14
+/** Сдвиг до начала жеста: щелчок с дрожью руки остаётся щелчком. */
+const DK_DRAG_FROM = 6
+
+interface DockDrag {
+  id: string
+  tab: Tab
+  /** Где курсор и куда относительно него стоит значок (схватили не обязательно за центр). */
+  x: number
+  y: number
+  dx: number
+  dy: number
+  /** Ширина ячейки — такой зазор раскрывается между соседями. */
+  w: number
+  out: boolean
+  /** Новое место среди остальных видимых вкладок; null — место прежнее. */
+  at: number | null
+  phase: 'drag' | 'land' | 'poof'
+  land?: { x: number; y: number }
+}
+
 /**
  * Вкладки дока — слева от капсулы, в свободном месте, а не над страницей. Сколько влезает, решает
  * ширина колонки: просторно — с названиями, тесно — значками, совсем тесно — значки вокруг активной
  * и «ещё N» со списком всех вкладок. Колесо над островом сдвигает видимое окно.
+ * Значок можно взять и утащить: вверх из дока — вкладка закроется, вдоль острова — переставится.
  */
 function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Element {
   const tabs = useStore((s) => s.tabs)
@@ -620,10 +645,13 @@ function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Ele
   const listOpen = useStore((s) => s.popover === 'tabs')
   const s = useStore.getState
   const box = useRef<HTMLDivElement>(null)
+  const island = useRef<HTMLDivElement>(null)
   const hover = useRef<number | undefined>(undefined)
   const wheel = useRef(0)
   const [room, setRoom] = useState(0)
   const [start, setStart] = useState(0)
+  const [drag, setDrag] = useState<DockDrag | null>(null)
+  const swallowClick = useRef(false)
 
   useLayoutEffect(() => {
     const el = box.current
@@ -657,11 +685,133 @@ function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Ele
   }, [hot])
 
   const shown = all ? tabs : tabs.slice(from, from + fit)
+
+  // Вернули значок в док: призрак долетает до его ячейки на новом месте, потом ячейка проявляется.
+  useLayoutEffect(() => {
+    if (drag?.phase !== 'land' || drag.land) return
+    const cell = island.current?.querySelector<HTMLElement>(`.dk-t[data-id="${drag.id}"]`)
+    const r = cell?.getBoundingClientRect()
+    setDrag(r ? { ...drag, land: { x: r.left + r.width / 2, y: r.top + r.height / 2 } } : { ...drag, phase: 'poof' })
+  }, [drag])
+  useEffect(() => {
+    if (!drag || drag.phase === 'drag') return
+    const t = window.setTimeout(() => setDrag(null), drag.phase === 'land' ? 320 : 240)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag?.phase])
+
+  /** Нажали на вкладку: жест начнётся, только если курсор уйдёт дальше DK_DRAG_FROM — иначе это щелчок. */
+  const press = (e: React.PointerEvent<HTMLDivElement>, tab: Tab): void => {
+    if (e.button !== 0 || tiny || drag || (e.target as Element).closest('.dk-x')) return
+    const el = e.currentTarget
+    const pointerId = e.pointerId
+    const x0 = e.clientX
+    const y0 = e.clientY
+    const cell = el.getBoundingClientRect()
+    // Места остальных видимых вкладок — по раскладке до начала жеста: раскрывшийся зазор
+    // не сдвигает границы, и порядок не качается туда-сюда.
+    const others = shown.filter((t) => t.id !== tab.id)
+    const centers = others.map((t) => {
+      const r = island.current?.querySelector(`.dk-t[data-id="${t.id}"]`)?.getBoundingClientRect()
+      return r ? r.left + r.width / 2 : 0
+    })
+    const own = shown.findIndex((t) => t.id === tab.id)
+    let live: DockDrag | null = null
+    const place = (base: DockDrag, x: number, y: number): DockDrag => {
+      const isl = island.current?.getBoundingClientRect()
+      const out = !!isl && y < isl.top - DK_OUT
+      const over = !!isl && !out && x >= isl.left - 24 && x <= isl.right + 24
+      const at = over ? centers.filter((c) => c < x).length : null
+      return { ...base, x, y, out, at: at === own ? null : at }
+    }
+    const move = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return
+      if (!live) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < DK_DRAG_FROM) return
+        try {
+          el.setPointerCapture(pointerId)
+        } catch {
+          // указатель уже отпущен — жест не начнётся
+        }
+        window.clearTimeout(hover.current)
+        // Страницы под курсором не должны забирать движение мыши, пока тянут.
+        document.querySelector('.app')?.classList.add('tab-dragging')
+        useStore.setState({ preview: null, dockDrag: true })
+        live = {
+          id: tab.id,
+          tab,
+          x: ev.clientX,
+          y: ev.clientY,
+          dx: cell.left + cell.width / 2 - x0,
+          dy: cell.top + cell.height / 2 - y0,
+          w: cell.width + 4,
+          out: false,
+          at: null,
+          phase: 'drag'
+        }
+      }
+      live = place(live, ev.clientX, ev.clientY)
+      setDrag(live)
+    }
+    const finish = (commit: boolean): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
+      window.removeEventListener('keydown', key, true)
+      if (!live) return
+      swallowClick.current = true
+      window.setTimeout(() => (swallowClick.current = false))
+      document.querySelector('.app')?.classList.remove('tab-dragging')
+      useStore.setState({ dockDrag: false })
+      const d = live
+      live = null
+      if (commit && d.out) {
+        setDrag({ ...d, phase: 'poof' })
+        s().closeTab(d.id)
+        return
+      }
+      if (commit && d.at !== null) {
+        const target = others[d.at]
+        const last = others[others.length - 1]
+        const idx = target ? s().tabs.findIndex((t) => t.id === target.id) : last ? s().tabs.findIndex((t) => t.id === last.id) + 1 : -1
+        if (idx >= 0) s().moveTab(d.id, idx)
+      }
+      setDrag({ ...d, out: false, at: null, phase: 'land' })
+    }
+    const up = (ev: PointerEvent): void => {
+      if (ev.pointerId === pointerId) finish(true)
+    }
+    const cancel = (): void => finish(false)
+    const key = (ev: KeyboardEvent): void => {
+      if (ev.key !== 'Escape' || !live) return
+      ev.preventDefault()
+      ev.stopPropagation()
+      finish(false)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
+    window.addEventListener('keydown', key, true)
+  }
+
+  // Зазор там, куда встанет вкладка; её прежняя ячейка схлопывается, если она уходит с места.
+  const dragging = drag?.phase === 'drag' ? drag : null
+  const rest = dragging ? shown.filter((t) => t.id !== dragging.id) : shown
+  const moved = !!dragging && (dragging.out || dragging.at !== null)
+  const gapBefore = dragging && dragging.at !== null && dragging.at < rest.length ? rest[dragging.at].id : null
+  const gapAfter = dragging && dragging.at !== null && dragging.at >= rest.length ? rest[rest.length - 1]?.id : null
+
   return (
     <div className="dk-left" ref={box}>
       <div
-        className={'glass dk-tabs' + (titled ? ' titled' : '')}
-        style={titled ? ({ '--dk-tw': Math.min(220, titledW) + 'px' } as React.CSSProperties) : undefined}
+        ref={island}
+        className={'glass dk-tabs' + (titled ? ' titled' : '') + (dragging && !dragging.out ? ' dropping' : '')}
+        style={
+          {
+            ...(titled ? { '--dk-tw': Math.min(220, titledW) + 'px' } : {}),
+            ...(drag ? { '--dk-gap': drag.w + 'px' } : {})
+          } as React.CSSProperties
+        }
         role="tablist"
         aria-label="Вкладки"
         onWheel={(e) => {
@@ -678,13 +828,29 @@ function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Ele
         {shown.map((tab) => {
           const g = tab.group ? groups.find((x) => x.id === tab.group) : undefined
           const name = tab.title || hostOf(tab.url)
+          const lifted = drag?.id === tab.id
           return (
             <div
               key={tab.id}
-              className={'dk-t' + (tab.id === activeId ? ' on' : '')}
+              data-id={tab.id}
+              className={
+                'dk-t' +
+                (tab.id === activeId ? ' on' : '') +
+                (lifted ? ' lifted' : '') +
+                (lifted && moved ? ' folded' : '') +
+                (tab.id === gapBefore ? ' gap-before' : '') +
+                (tab.id === gapAfter ? ' gap-after' : '')
+              }
               style={g ? ({ '--gc': g.color } as React.CSSProperties) : undefined}
               role="tab"
               aria-selected={tab.id === activeId}
+              onPointerDown={(e) => press(e, tab)}
+              onClickCapture={(e) => {
+                // Отпустили после жеста — это не щелчок по вкладке.
+                if (!swallowClick.current) return
+                e.preventDefault()
+                e.stopPropagation()
+              }}
               onAuxClick={(e) => e.button === 1 && s().closeTab(tab.id)}
               onContextMenu={(e) => {
                 e.preventDefault()
@@ -693,7 +859,7 @@ function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Ele
               }}
               onMouseEnter={(e) => {
                 window.clearTimeout(hover.current)
-                if (tiny || tab.id === activeId || tab.kind !== 'web') return
+                if (tiny || drag || tab.id === activeId || tab.kind !== 'web') return
                 const r = e.currentTarget.getBoundingClientRect()
                 hover.current = window.setTimeout(
                   () => useStore.setState({ preview: { tabId: tab.id, x: r.left + r.width / 2, y: r.top, above: true } }),
@@ -705,7 +871,12 @@ function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Ele
                 if (useStore.getState().preview) useStore.setState({ preview: null })
               }}
             >
-              <button className="dk-main" title={name} aria-label={name} onClick={() => s().activate(tab.id)}>
+              <button
+                className="dk-main"
+                title={tiny ? name : `${name}\nТяните вверх из дока — закрыть, вдоль — переставить`}
+                aria-label={name}
+                onClick={() => s().activate(tab.id)}
+              >
                 <TabFav tab={tab} />
                 {titled && <span className="dk-tt">{name}</span>}
               </button>
@@ -733,6 +904,25 @@ function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Ele
           <Icon name="add" />
         </button>
       </div>
+      {drag &&
+        // Вне дока: position: fixed внутри трансформированного дока считалась бы от него. В .app, а не в body:
+        // там цвета темы и пружины.
+        createPortal(
+          <div
+            className={'dk-ghost' + (drag.out ? ' out' : '') + (drag.phase !== 'drag' ? ' ' + drag.phase : '')}
+            style={drag.land ? { left: drag.land.x, top: drag.land.y } : { left: drag.x + drag.dx, top: drag.y + drag.dy }}
+            aria-hidden="true"
+          >
+            <span className="dk-ghost-b">
+              <TabFav tab={drag.tab} />
+            </span>
+            <i className="dk-ghost-x">
+              <Icon name="close" />
+            </i>
+            <span className="dk-ghost-l">Отпустите — вкладка закроется</span>
+          </div>,
+          document.querySelector('.app') ?? document.body
+        )}
     </div>
   )
 }
@@ -763,7 +953,8 @@ export function Dock(): React.JSX.Element {
   const small = useStore((st) => st.capsuleSmall)
   const [ref, hot, enter] = useHoverOverPage()
   const s = useStore.getState
-  const tiny = small && !hot
+  const dockDrag = useStore((st) => st.dockDrag)
+  const tiny = small && !hot && !dockDrag
   const morph = useMorph(tiny)
   const intent = useRef<number | undefined>(undefined)
   const calm = (): void => {
@@ -906,12 +1097,8 @@ function SiteCookiesButton({ tab }: { tab: Tab }): React.JSX.Element | null {
   )
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return n + ' Б'
-  if (n < 1024 ** 2) return (n / 1024).toFixed(0) + ' КБ'
-  if (n < 1024 ** 3) return (n / 1024 ** 2).toFixed(1) + ' МБ'
-  return (n / 1024 ** 3).toFixed(2) + ' ГБ'
-}
+/** Во всплывающем списке — только свежие; остальное на странице загрузок. */
+const POP_DOWNLOADS = 6
 
 export function Popover(): React.JSX.Element | null {
   const popover = useStore((s) => s.popover)
@@ -925,6 +1112,10 @@ export function Popover(): React.JSX.Element | null {
   // Место считается один раз при открытии: прогресс загрузок перерисовывает окно, а оно не должно прыгать.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const dlStyle = useMemo(() => (popover === 'downloads' ? dlPopStyle() : undefined), [popover])
+  // Файл могли удалить, пока окно было закрыто: «Открыть» для него не должно быть доступно.
+  useEffect(() => {
+    if (popover === 'downloads') void useStore.getState().loadDownloads()
+  }, [popover])
   if (!popover) return null
   const close = (): void => s().setPopover(null)
   const run = (fn: () => void) => () => {
@@ -1005,7 +1196,7 @@ export function Popover(): React.JSX.Element | null {
           <>
             <div className="pop-h">Загрузки</div>
             {downloads.length === 0 && <div className="pop-empty">Пока ничего не скачано</div>}
-            {downloads.map((d) => (
+            {downloads.slice(0, POP_DOWNLOADS).map((d) => (
               <div
                 key={d.id}
                 className="dl"
@@ -1017,13 +1208,13 @@ export function Popover(): React.JSX.Element | null {
                   window.masaki.downloads.drag(d.path)
                 }}
               >
-                <button className="dl-main" disabled={d.state !== 'completed'} onClick={() => window.masaki.downloads.open(d.path)}>
+                <button className="dl-main" disabled={d.state !== 'completed' || d.exists === false} onClick={() => window.masaki.downloads.open(d.path)}>
                   <span className="dl-name">{d.filename}</span>
                   <span className="dl-sub">
                     {d.state === 'progressing'
                       ? `${formatBytes(d.received)}${d.total ? ' из ' + formatBytes(d.total) : ''}`
                       : d.state === 'completed'
-                        ? formatBytes(d.total || d.received) + ' · готово'
+                        ? formatBytes(d.total || d.received) + (d.exists === false ? ' · удалён с диска' : ' · готово')
                         : d.state === 'cancelled'
                           ? 'Отменено'
                           : 'Прервано'}
@@ -1039,13 +1230,16 @@ export function Popover(): React.JSX.Element | null {
                     <Icon name="close" />
                   </button>
                 )}
-                {d.state === 'completed' && (
+                {d.state === 'completed' && d.exists !== false && (
                   <button className="ib" aria-label="Показать в папке" onClick={() => window.masaki.downloads.showInFolder(d.path)}>
                     <Icon name="folder" />
                   </button>
                 )}
               </div>
             ))}
+            <button className="mi dl-all" onClick={run(() => s().openDownloads())}>
+              <Icon name="history" /> Все загрузки <span className="kbd">Ctrl J</span>
+            </button>
           </>
         ) : (
           <>
@@ -1077,7 +1271,7 @@ export function Popover(): React.JSX.Element | null {
                 <Icon name="zoomIn" />
               </button>
             </div>
-            <button className="mi" onClick={run(() => openDownloads())}>
+            <button className="mi" onClick={run(() => s().openDownloads())}>
               <Icon name="download" /> Загрузки <span className="kbd">Ctrl J</span>
             </button>
             <SiteCookiesButton key={t.id + t.url} tab={t} />

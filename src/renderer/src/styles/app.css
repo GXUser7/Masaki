@@ -78,6 +78,11 @@ input {
   --tip-fg: #f4eff4;
   /* Плотнее обычного стекла: меню и палитра читаются и поверх яркой страницы. */
   --glass-pop: rgba(250, 248, 252, 0.84);
+  /* Тень «подъёма» строк и карточек при наведении. */
+  --lift-row: 0 12px 26px -12px rgba(40, 24, 64, 0.3);
+  /* Контейнер ошибки M3: «удалён с диска», «прервано». */
+  --bad-c: #ffdad6;
+  --on-bad-c: #410002;
 }
 .dark {
   --glass: rgba(22, 20, 28, 0.5);
@@ -92,6 +97,9 @@ input {
   --tip-bg: #e6e0e9;
   --tip-fg: #1d1b20;
   --glass-pop: rgba(30, 28, 36, 0.88);
+  --lift-row: 0 12px 26px -10px rgba(0, 0, 0, 0.55);
+  --bad-c: #93000a;
+  --on-bad-c: #ffdad6;
 }
 .blur-s {
   --blur: 12px;
@@ -280,10 +288,14 @@ input {
 .ib:not(:disabled):hover {
   background: var(--hov);
   color: var(--on-surface);
+  /* Морф и пружина (эффект наведения, 2026-10-16): круг → скруглённый квадрат и чуть крупнее с перелётом. */
+  border-radius: 34%;
+  transform: scale(1.07);
 }
 .ib:not(:disabled):active {
-  border-radius: 10px;
-  transform: scale(0.9);
+  border-radius: 26%;
+  transform: scale(0.86);
+  transition-duration: 0.12s;
 }
 .ib svg {
   width: 22px;
@@ -2190,6 +2202,9 @@ input {
   padding: 6px 6px 6px 14px;
   border-radius: 16px;
   background: var(--hov);
+  transition:
+    translate 0.45s var(--spring),
+    box-shadow 0.3s;
 }
 .sc-list {
   position: relative;
@@ -2976,7 +2991,9 @@ input {
 
 /* ---------- Страница аддонов ---------- */
 .addon {
-  transition: box-shadow 0.3s;
+  transition:
+    box-shadow 0.3s,
+    translate 0.5s var(--spring);
 }
 .addon.on {
   box-shadow: 0 0 0 2px var(--primary);
@@ -3554,6 +3571,9 @@ input {
   align-items: center;
   gap: 12px;
   background: var(--hov);
+  transition:
+    translate 0.45s var(--spring),
+    box-shadow 0.3s;
 }
 .pw-t {
   flex: 1;
@@ -5988,4 +6008,727 @@ input {
   opacity: 0.4;
   outline: 2px dashed var(--outline);
   outline-offset: -2px;
+}
+
+/* ---------- Страница загрузок (masaki://downloads, вариант A — лента по дням) ---------- */
+.dlp .set-inner {
+  gap: 0;
+}
+.dlp-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.dlp-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dlp-title h1 {
+  margin: 0;
+}
+.dlp-title .hint {
+  margin: 0;
+}
+.dlp-fab {
+  height: 56px;
+  flex: none;
+  border: 0;
+  padding: 0 22px 0 18px;
+  border-radius: 18px;
+  background: var(--pc);
+  color: var(--on-pc);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    border-radius 0.5s var(--spring),
+    transform 0.45s var(--snap),
+    box-shadow 0.4s;
+}
+.dlp-fab svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+  transition: transform 0.5s var(--snap);
+}
+.dlp-fab:hover {
+  border-radius: 28px;
+}
+.dlp-fab:hover svg {
+  transform: rotate(-8deg) scale(1.12);
+}
+.dlp-fab:active {
+  transform: scale(0.94);
+}
+.dlp-more {
+  width: 48px;
+  height: 48px;
+  border-radius: 24px;
+  background: var(--glass-hi);
+}
+.dlp-search {
+  margin-top: 24px;
+  height: 56px;
+  border-radius: 28px;
+  background: var(--glass-hi);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 18px;
+  transition: box-shadow 0.2s;
+}
+.dlp-search:focus-within {
+  box-shadow: 0 0 0 2px var(--primary);
+}
+.dlp-search > svg {
+  width: 22px;
+  height: 22px;
+  fill: var(--on-sv);
+  flex: none;
+}
+.dlp-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  font-size: 16px;
+  color: var(--on-surface);
+}
+.dlp-search input::placeholder {
+  color: var(--on-sv);
+}
+.dlp-date {
+  height: 40px;
+  flex: none;
+  border: 0;
+  padding: 0 10px 0 14px;
+  border-radius: 20px;
+  background: var(--hov);
+  color: var(--on-surface);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-radius 0.45s var(--spring),
+    background-color 0.2s;
+}
+.dlp-date svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+.dlp-date:hover {
+  border-radius: 12px;
+}
+.dlp-date.on {
+  background: var(--sc);
+  color: var(--on-sc);
+}
+.dlp-chips {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.dlp-chip {
+  height: 36px;
+  border: 1px solid var(--outline);
+  padding: 0 14px;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--on-surface);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-radius 0.45s var(--spring),
+    background-color 0.2s;
+}
+.dlp-chip svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+.dlp-chip i {
+  font-style: normal;
+  font-weight: 500;
+  opacity: 0.7;
+}
+.dlp-chip:hover {
+  border-radius: 18px;
+  background: var(--hov);
+}
+.dlp-chip.on {
+  background: var(--sc);
+  color: var(--on-sc);
+  border-color: transparent;
+  border-radius: 18px;
+}
+.dlp-sep {
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
+  background: var(--glass-line);
+}
+.dlp-group {
+  margin-top: 22px;
+}
+.dlp-day {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 8px 14px;
+}
+.dlp-day b {
+  font-size: 15px;
+}
+.dlp-day span {
+  font-size: 13px;
+  color: var(--on-sv);
+}
+.dlp-card {
+  border-radius: 28px;
+  padding: 6px;
+  background: var(--glass-hi);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dlp-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 64px;
+  padding: 0 6px 0 0;
+  border-radius: 22px;
+  transition:
+    background-color 0.2s,
+    border-radius 0.45s var(--spring),
+    translate 0.45s var(--spring),
+    box-shadow 0.3s;
+}
+.dlp-row:hover,
+.dlp-row:focus-within {
+  background: var(--hov);
+  border-radius: 16px;
+}
+.dlp-main {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  border: 0;
+  padding: 0 0 0 10px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-radius: inherit;
+  cursor: pointer;
+}
+.dlp-main:disabled {
+  cursor: default;
+}
+.dlp-tile {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.dlp-tile > svg:first-child {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: var(--sc);
+  transition: transform 0.6s var(--snap);
+}
+.dlp-row:hover .dlp-tile > svg:first-child {
+  transform: rotate(30deg) scale(1.06);
+}
+.dlp-tile > svg:last-child {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  fill: var(--on-sc);
+}
+.dlp-tile.k-doc > svg:first-child,
+.dlp-tile.k-archive > svg:first-child {
+  fill: var(--tc);
+}
+.dlp-tile.k-doc > svg:last-child,
+.dlp-tile.k-archive > svg:last-child {
+  fill: var(--on-tc);
+}
+.dlp-tile.k-app > svg:first-child,
+.dlp-tile.k-image > svg:first-child {
+  fill: var(--pc);
+}
+.dlp-tile.k-app > svg:last-child,
+.dlp-tile.k-image > svg:last-child {
+  fill: var(--on-pc);
+}
+/* Файла нет на диске — пустой контур формы, как «место, где он был». */
+.dlp-tile.off > svg:first-child {
+  fill: none;
+  stroke: var(--outline);
+  stroke-width: 5;
+  stroke-dasharray: 12 10;
+}
+.dlp-tile.off > svg:last-child {
+  fill: var(--on-sv);
+}
+.dlp-thumb {
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: 14px;
+  object-fit: cover;
+  box-shadow: inset 0 0 0 1px var(--glass-line);
+  transition: border-radius 0.45s var(--spring);
+}
+.dlp-row:hover .dlp-thumb {
+  border-radius: 23px;
+}
+.pring.dlp-ring {
+  width: 46px;
+  height: 46px;
+}
+.pring.dlp-ring > svg:not(.pring-svg) {
+  width: 20px;
+  height: 20px;
+}
+.dlp-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dlp-name {
+  font-size: 15px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dlp-meta {
+  font-size: 13px;
+  color: var(--on-sv);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dlp-row.gone .dlp-name {
+  color: var(--on-sv);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--on-sv) 60%, transparent);
+}
+.dlp-pill {
+  height: 28px;
+  flex: none;
+  padding: 0 10px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bad-c) 72%, transparent);
+  color: var(--on-bad-c);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.dlp-pill.soft {
+  background: var(--hov);
+  color: var(--on-sv);
+}
+.dlp-row.failed .dlp-name {
+  color: var(--on-sv);
+}
+.dlp-pill svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+.tonal.dlp-again {
+  height: 40px;
+  padding: 0 16px 0 12px;
+}
+.tonal.dlp-again svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+/* Действия строки — по наведению или фокусу, чтобы список оставался спокойным. */
+.dlp-acts {
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transform: translateX(8px);
+  transition:
+    opacity 0.2s,
+    transform 0.45s var(--spring);
+}
+.dlp-row:hover .dlp-acts,
+.dlp-row:focus-within .dlp-acts {
+  opacity: 1;
+  transform: none;
+}
+.dlp-empty {
+  margin-top: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+.dlp-empty b {
+  font-size: 17px;
+}
+.dlp-empty > span:not(.dlp-empty-art) {
+  max-width: 420px;
+  color: var(--on-sv);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.dlp-empty .tonal {
+  margin-top: 8px;
+}
+.dlp-empty-art {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 6px;
+}
+.dlp-empty-art > svg:first-child {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: var(--sc);
+  animation: dlp-turn 18s linear infinite;
+}
+.dlp-empty-art > svg:last-child {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  fill: var(--on-sc);
+}
+@keyframes dlp-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+.pop .mi.dl-all {
+  margin-top: 4px;
+}
+
+/* ---------- Док: вкладку можно утащить — вверх из дока закрыть, вдоль острова переставить ---------- */
+/* Страница под курсором не забирает движение мыши, пока тянут. */
+.app.tab-dragging .wv {
+  pointer-events: none;
+}
+.app.tab-dragging,
+.app.tab-dragging * {
+  cursor: grabbing !important;
+}
+.dk-t {
+  transition:
+    background-color 0.2s,
+    border-radius 0.45s var(--spring),
+    width 0.4s var(--spring),
+    margin 0.4s var(--spring),
+    opacity 0.2s;
+}
+/* Ячейка взятой вкладки остаётся пустым местом; ушла с него — место схлопывается. */
+.dk-t.lifted {
+  opacity: 0;
+}
+.dk-t.folded {
+  width: 0;
+  margin-right: -4px;
+}
+.dk-t.gap-before {
+  margin-left: var(--dk-gap);
+}
+.dk-t.gap-after {
+  margin-right: var(--dk-gap);
+}
+.dk-tabs {
+  transition: box-shadow 0.25s;
+}
+.dk-tabs.dropping {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 45%, transparent);
+}
+.dk-ghost {
+  position: fixed;
+  z-index: 90;
+  width: 48px;
+  height: 48px;
+  margin: -24px 0 0 -24px;
+  pointer-events: none;
+  animation: dk-ghost-in 0.3s var(--snap);
+}
+@keyframes dk-ghost-in {
+  from {
+    transform: scale(0.84);
+  }
+}
+/* Сам значок наклоняется и краснеет; подсказка над ним остаётся ровной. */
+.dk-ghost-b {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--glass-pop);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    0 14px 32px rgba(0, 0, 0, 0.36),
+    inset 0 0 0 1px var(--glass-line);
+  transform: scale(1.08) rotate(-4deg);
+  transition:
+    transform 0.35s var(--snap),
+    background-color 0.2s,
+    border-radius 0.4s var(--spring);
+}
+.dk-ghost .fav {
+  width: 30px;
+  height: 30px;
+}
+.dk-ghost.out .dk-ghost-b {
+  background: var(--bad-c);
+  border-radius: 24px;
+  transform: scale(0.96) rotate(6deg);
+}
+.dk-ghost-x {
+  position: absolute;
+  right: -6px;
+  top: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--bad-c);
+  color: var(--on-bad-c);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 0 0 2px var(--glass-pop);
+  transform: scale(0);
+  transition: transform 0.4s var(--snap);
+}
+.dk-ghost.out .dk-ghost-x {
+  transform: none;
+}
+.dk-ghost-x svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+.dk-ghost-l {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 14px);
+  padding: 7px 12px;
+  border-radius: 14px;
+  background: var(--glass-pop);
+  color: var(--on-surface);
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transform: translate(-50%, 6px);
+  transition:
+    opacity 0.2s,
+    transform 0.35s var(--spring);
+}
+.dk-ghost.out .dk-ghost-l {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.dk-ghost.poof {
+  opacity: 0;
+  transform: scale(0.2) rotate(30deg);
+  transition:
+    transform 0.24s ease-in,
+    opacity 0.22s;
+}
+.dk-ghost.poof .dk-ghost-l {
+  opacity: 0;
+}
+/* Вернули в док: долетает до своей ячейки и становится ею (48 → 40 px). */
+.dk-ghost.land .dk-ghost-b {
+  transform: none;
+}
+.dk-ghost.land {
+  transform: scale(0.84);
+  transition:
+    left 0.3s var(--spring),
+    top 0.3s var(--spring),
+    transform 0.3s var(--spring);
+}
+
+/* ---------- Эффекты наведения (выбраны пользователем 2026-10-16) ----------
+   Кнопки-значки — морф и пружина (.ib) плюс «живой значок»; кнопки окна и капсулы дока — ещё и магнит
+   (lib/magnet.ts); главные действия — ореол (.halo); строки списков и карточки — подъём. */
+
+/* Живые значки: у каждого своё движение, только пока курсор на кнопке. */
+svg[data-ic] > * {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.5s var(--snap);
+}
+/* У часов и шестерёнки контур несимметричен — вращаем вокруг центра циферблата, а не рамки контура. */
+svg:is([data-ic='history'], [data-ic='reload'], [data-ic='settings']) > path {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+}
+svg[data-ic='history'] > path {
+  transform-origin: 13px 12px;
+}
+:is(.ib, .lbl-add):not(:disabled):hover svg[data-ic='download'] > .ic-arrow {
+  animation: ic-drop 0.7s var(--spring);
+}
+@keyframes ic-drop {
+  35% {
+    transform: translateY(3.5px);
+  }
+  62% {
+    transform: translateY(-1.5px);
+  }
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='reload'] > path {
+  transform: rotate(180deg);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='history'] > path {
+  transform: rotate(-360deg);
+  transition-duration: 0.8s;
+  transition-timing-function: var(--spring);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='more'] > .ic-dot {
+  animation: ic-hop 0.55s var(--spring) both;
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='more'] > .ic-dot:nth-child(2) {
+  animation-delay: 0.07s;
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='more'] > .ic-dot:nth-child(3) {
+  animation-delay: 0.14s;
+}
+@keyframes ic-hop {
+  40% {
+    transform: translateX(-2.5px) scale(1.18);
+  }
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='sidebar'] > .ic-bar {
+  transform: translateX(3px);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg:is([data-ic='close'], [data-ic='add']) > path {
+  transform: rotate(90deg);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg:is([data-ic='star'], [data-ic='starFilled']) > path {
+  transform: rotate(72deg) scale(1.12);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='settings'] > path {
+  transform: rotate(60deg);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='back'] > path {
+  transform: translateX(-2.5px);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='forward'] > path {
+  transform: translateX(2.5px);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='search'] > path {
+  transform: rotate(-14deg) scale(1.1);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg[data-ic='minimize'] > path {
+  transform: translateY(2.5px);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg:is([data-ic='maximize'], [data-ic='restore']) > path {
+  transform: scale(1.14);
+}
+:is(.ib, .lbl-add):not(:disabled):hover > svg:is([data-ic='folder'], [data-ic='folderOpen'], [data-ic='link'], [data-ic='delete']) > path {
+  animation: ic-wiggle 0.6s var(--spring);
+}
+@keyframes ic-wiggle {
+  30% {
+    transform: rotate(-12deg);
+  }
+  65% {
+    transform: rotate(6deg);
+  }
+}
+
+/* Ореол темы: главное действие светится цветом темы, на входе курсора однажды расходится кольцо. */
+.halo:not(:disabled):hover {
+  box-shadow: 0 0 26px color-mix(in srgb, var(--primary) 42%, transparent);
+  animation: halo 1.3s ease-out;
+}
+@keyframes halo {
+  from {
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--primary) 60%, transparent),
+      0 0 26px color-mix(in srgb, var(--primary) 42%, transparent);
+  }
+  to {
+    box-shadow:
+      0 0 0 16px color-mix(in srgb, var(--primary) 0%, transparent),
+      0 0 26px color-mix(in srgb, var(--primary) 42%, transparent);
+  }
+}
+
+/* Подъём: строки списков и карточки приподнимаются на пружине, тень густеет. */
+:is(.dlp-row, .sc-item, .pw-row):hover {
+  translate: 0 -2px;
+  box-shadow: var(--lift-row);
+}
+.addon:hover {
+  translate: 0 -3px;
+  box-shadow: var(--lift-row);
+}
+.addon.on:hover {
+  box-shadow:
+    0 0 0 2px var(--primary),
+    var(--lift-row);
+}
+.sc {
+  transition: translate 0.45s var(--spring);
+}
+.sc:hover {
+  translate: 0 -3px;
+}
+.rd-on :is(.sc, .sc-item):hover {
+  translate: none;
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  svg[data-ic] > * {
+    transition: none !important;
+    animation: none !important;
+  }
+  .halo:hover {
+    animation: none;
+  }
 }

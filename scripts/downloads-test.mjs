@@ -70,7 +70,7 @@ async function shot(name) {
   fs.writeFileSync(path.join(out, name + '.png'), Buffer.from(b64, 'base64'))
 }
 
-try {
+async function launch() {
   app = await electron.launch({
     args: [root],
     cwd: root,
@@ -82,6 +82,12 @@ try {
   win.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`))
   win.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`))
   await win.waitForSelector('.stage', { timeout: 30000 })
+}
+const command = (c) => app.evaluate(({ BrowserWindow }, c) => BrowserWindow.getAllWindows()[0].webContents.send('command', c), c)
+const pageRow = (filename) => win.locator('.dlp-row').filter({ has: win.getByText(filename, { exact: true }) })
+
+try {
+  await launch()
   await win.evaluate(() => {
     window.__downloadEvents = []
     window.masaki.downloads.onUpdate((d) => window.__downloadEvents.push(d))
@@ -205,6 +211,47 @@ try {
   for (const name of ['slow-a.bin', 'slow-b.bin']) await win.evaluate((id) => window.masaki.downloads.cancel(id), (await latest(name)).id)
   await waitFor(async () => (await win.$$('.dk-right .dk-dl')).length === 0, 'остров загрузки уходит, когда загрузок нет')
   console.log('ok — в доке кнопка загрузок, загрузка на месте плеера, список и окно над своей кнопкой')
+
+  // Страница загрузок (Ctrl+J): вся история, файлы, удалённые с диска, поиск, фильтры, «скачать снова».
+  await command({ type: 'downloads' })
+  await win.waitForSelector('.dlp')
+  await pageRow('complete.bin').waitFor()
+  assert.equal(await pageRow('cancel.bin').getByText('Отменено').count(), 1)
+  assert.equal(await pageRow('complete.bin').locator('.dlp-main').isDisabled(), false)
+  fs.rmSync(completed.path)
+  // Вернулись в окно после проводника — отметка обновляется сама.
+  await win.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await pageRow('complete.bin').getByText('Удалён с диска').waitFor()
+  assert.equal(await pageRow('complete.bin').locator('.dlp-main').isDisabled(), true)
+  await shot('downloads-06-page')
+  await win.fill('.dlp-search input', 'complete')
+  await waitFor(async () => (await win.locator('.dlp-row').count()) === 1, 'поиск по названию')
+  await win.fill('.dlp-search input', 'нет-такого')
+  await win.waitForSelector('.dlp-empty')
+  await win.fill('.dlp-search input', '')
+  await win.click('.dlp-chip:has-text("Удалённые")')
+  await waitFor(async () => (await win.locator('.dlp-row').count()) === 1, 'фильтр «Удалённые»')
+  await win.click('.dlp-chip:has-text("Все")')
+  console.log('ok — страница загрузок: удалённый файл помечен, поиск и фильтры работают')
+  await pageRow('complete.bin').getByRole('button', { name: 'Скачать снова' }).click()
+  await waitFor(async () => {
+    const d = await latest('complete.bin')
+    return d?.state === 'completed' && d.id !== completed.id
+  }, 'повторная загрузка')
+  await pageRow('complete.bin').locator('.dlp-main:not([disabled])').waitFor()
+  assert.equal(await pageRow('complete.bin').count(), 1, 'прежняя запись должна уступить место новой')
+  assert.equal(fs.readFileSync(path.join(downloads, 'complete.bin')).length, 2 * 1024 * 1024)
+  console.log('ok — «Скачать снова» скачивает файл заново на прежнее место')
+
+  // История — в профиле: после перезапуска список тот же.
+  await app.close()
+  await launch()
+  await command({ type: 'downloads' })
+  await win.waitForSelector('.dlp')
+  for (const name of ['complete.bin', 'cancel.bin', 'slow-a.bin', 'interrupted.bin']) await pageRow(name).waitFor()
+  assert.equal(await pageRow('complete.bin').locator('.dlp-main').isDisabled(), false)
+  await shot('downloads-07-page-after-restart')
+  console.log('ok — история загрузок переживает перезапуск')
 } catch (e) {
   process.exitCode = 1
   console.error(e)

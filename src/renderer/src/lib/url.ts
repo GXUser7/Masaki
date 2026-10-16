@@ -4,6 +4,7 @@ export const NEWTAB_URL = 'masaki://newtab'
 export const SETTINGS_URL = 'masaki://settings'
 export const ADDONS_URL = 'masaki://addons'
 export const PASSWORDS_URL = 'masaki://passwords'
+export const DOWNLOADS_URL = 'masaki://downloads'
 
 export function searchUrl(q: string): string {
   return 'https://www.google.com/search?q=' + encodeURIComponent(q)

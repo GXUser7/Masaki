@@ -19,15 +19,16 @@ import type {
 } from '../../shared/types'
 import type { MenuEntry } from './components/Menu'
 import { defaultSettings } from '../../shared/types'
-import { ADDONS_URL, hostOf, NEWTAB_URL, PASSWORDS_URL, resolveInput, SETTINGS_URL } from './lib/url'
+import { ADDONS_URL, DOWNLOADS_URL, hostOf, NEWTAB_URL, PASSWORDS_URL, resolveInput, SETTINGS_URL } from './lib/url'
 
-export type TabKind = 'newtab' | 'web' | 'settings' | 'addons' | 'passwords'
+export type TabKind = 'newtab' | 'web' | 'settings' | 'addons' | 'passwords' | 'downloads'
 
 /** Внутренние страницы Masaki: React-компоненты вместо webview. */
-export const internalPages: Record<'settings' | 'addons' | 'passwords', { url: string; title: string }> = {
+export const internalPages: Record<'settings' | 'addons' | 'passwords' | 'downloads', { url: string; title: string }> = {
   settings: { url: SETTINGS_URL, title: 'Настройки' },
   addons: { url: ADDONS_URL, title: 'Аддоны' },
-  passwords: { url: PASSWORDS_URL, title: 'Пароли' }
+  passwords: { url: PASSWORDS_URL, title: 'Пароли' },
+  downloads: { url: DOWNLOADS_URL, title: 'Загрузки' }
 }
 const internalKind = (url: string): keyof typeof internalPages | null =>
   (Object.keys(internalPages) as (keyof typeof internalPages)[]).find((k) => url.startsWith(internalPages[k].url)) ?? null
@@ -246,6 +247,8 @@ interface Store {
   /** Превью вкладки при наведении в панели. */
   /** above — превью над вкладкой дока (x — середина вкладки), иначе справа от вкладки панели. */
   preview: { tabId: string; x: number; y: number; above?: boolean } | null
+  /** Вкладку дока тянут: док не худеет и не прячется, пока жест не кончился. */
+  dockDrag: boolean
   /** Снимки вкладок, сделанные, когда их оставляли, — для превью. */
   thumbs: Record<string, string>
   /** «Взгляд»: ссылка открыта карточкой поверх страницы (Alt+клик). */
@@ -277,6 +280,8 @@ interface Store {
   openSettings(): void
   openAddons(): void
   openPasswords(): void
+  /** Страница загрузок (Ctrl+J): вся история, с поиском и папкой. */
+  openDownloads(): void
   /** Поиск по открытым вкладкам и архиву (Ctrl+Shift+A). */
   openTabSearch(): void
   /** Добавить вкладку в группу: id группы или 'new' — новая группа. */
@@ -293,6 +298,9 @@ interface Store {
   setFind(patch: Partial<FindState>): void
   addHistory(url: string, title: string): void
   upsertDownload(d: DownloadInfo): void
+  /** История загрузок из главного процесса (с отметкой, лежит ли файл на диске). */
+  loadDownloads(): Promise<void>
+  dropDownload(id: string): void
   setPopover(p: Store['popover']): void
   openMenu(x: number, y: number, entries: MenuEntry[]): void
   closeMenu(): void
@@ -338,6 +346,7 @@ export const useStore = create<Store>((set, get) => ({
   archive: [],
   snap: null,
   preview: null,
+  dockDrag: false,
   thumbs: {},
   glance: null,
   split: null,
@@ -538,6 +547,13 @@ export const useStore = create<Store>((set, get) => ({
     else get().newTab(PASSWORDS_URL)
   },
 
+  openDownloads() {
+    const s = get()
+    const existing = s.tabs.find((t) => t.kind === 'downloads')
+    if (existing) get().activate(existing.id)
+    else get().newTab(DOWNLOADS_URL)
+  },
+
   openTabSearch() {
     const anchor: PaletteAnchor = get().active().kind === 'newtab' ? 'ntp' : get().settings.sidebarCollapsed ? 'dock' : 'side'
     set({ palette: { open: true, anchor, text: '', select: false, target: 'current', mode: 'tabs' }, popover: null, ai: false })
@@ -638,11 +654,29 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => {
       const i = s.downloads.findIndex((x) => x.id === d.id)
       // Окно загрузок само не выскакивает (мешало, просьба пользователя): прогресс видно на кнопке и в доке.
-      if (i < 0) return { downloads: [d, ...s.downloads].slice(0, 30) }
+      if (i < 0) return { downloads: [d, ...s.downloads].slice(0, 1000) }
       const downloads = s.downloads.slice()
       downloads[i] = d
       return { downloads }
     })
+  },
+
+  async loadDownloads() {
+    const list = await window.masaki.downloads.list()
+    set((s) => {
+      // Пока шёл запрос, события загрузок могли обогнать снимок: идущие и новые берём из состояния.
+      const live = new Map(s.downloads.map((d) => [d.id, d]))
+      const ids = new Set(list.map((d) => d.id))
+      const merged = list.map((d) => {
+        const l = live.get(d.id)
+        return l && (l.state === 'progressing' || l.canCancel) ? l : d
+      })
+      return { downloads: [...s.downloads.filter((d) => !ids.has(d.id)), ...merged] }
+    })
+  },
+
+  dropDownload(id) {
+    set((s) => ({ downloads: s.downloads.filter((d) => d.id !== id) }))
   },
 
   setPopover(p) {
