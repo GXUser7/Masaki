@@ -6,6 +6,7 @@ import type {
   GoogleAccount,
   HistoryEntry,
   PasskeyPrompt,
+  JsDialog,
   PasswordCsv,
   PasswordOffer,
   PermissionPrompt,
@@ -230,11 +231,14 @@ interface Store {
   /** Скачанные файлы экспорта паролей, которые можно перенести. */
   pwCsv: PasswordCsv[]
   /** Список аккаунтов у поля входа во вкладке. */
-  autofill: { tabId: string; wcId: number; req: AutofillRequest } | null
+  /** sel — строка, выбранная стрелками в поле страницы (её ведёт guest.ts). */
+  autofill: { tabId: string; wcId: number; req: AutofillRequest; sel?: number } | null
   /** Растёт, когда меняется список паролей, — страница паролей перечитывает его. */
   pwRev: number
   /** Сайты просят создать ключ доступа или войти по нему — ждут ответа пользователя. */
   pkPrompts: PasskeyPrompt[]
+  /** Окна страниц (alert / confirm / prompt) — страница стоит, пока не ответят. */
+  jsDialogs: JsDialog[]
   groups: TabGroup[]
   archive: ArchivedTab[]
   /** Свои раскладки окна у кнопки «развернуть»: где показать. */
@@ -329,6 +333,7 @@ export const useStore = create<Store>((set, get) => ({
   autofill: null,
   pwRev: 0,
   pkPrompts: [],
+  jsDialogs: [],
   groups: [],
   archive: [],
   snap: null,

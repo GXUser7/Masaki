@@ -13,7 +13,7 @@ import { AutofillMenu, PasskeySheet, PasswordBar } from './PasswordUi'
 import { ExtInstallSheet } from './ExtInstall'
 import { matchesPanel, syncGlassAll } from '../lib/glass'
 import { Grain } from './parts'
-import { PermissionBar } from './Permissions'
+import { PageDialog, PermissionBar } from './Permissions'
 import { openInputMenu, openPageMenu } from '../menus'
 import { NewTab } from './NewTab'
 import { Palette } from './Palette'
@@ -146,7 +146,9 @@ export function App(): React.JSX.Element {
       window.masaki.passwords.onChanged(() => useStore.setState((st) => ({ pwRev: st.pwRev + 1 }))),
       window.masaki.passkeys.onChanged(() => useStore.setState((st) => ({ pwRev: st.pwRev + 1 }))),
       window.masaki.passkeys.onPrompt((p) => useStore.setState((st) => ({ pkPrompts: [...st.pkPrompts.filter((x) => x.id !== p.id), p] }))),
-      window.masaki.passkeys.onPromptClose((id) => useStore.setState((st) => ({ pkPrompts: st.pkPrompts.filter((x) => x.id !== id) })))
+      window.masaki.passkeys.onPromptClose((id) => useStore.setState((st) => ({ pkPrompts: st.pkPrompts.filter((x) => x.id !== id) }))),
+      window.masaki.jsDialogs.onShow((d) => useStore.setState((st) => ({ jsDialogs: [...st.jsDialogs.filter((x) => x.id !== d.id), d] }))),
+      window.masaki.jsDialogs.onClose((id) => useStore.setState((st) => ({ jsDialogs: st.jsDialogs.filter((x) => x.id !== id) })))
     ]
     return () => offs.forEach((off) => off())
   }, [])
@@ -310,6 +312,7 @@ export function App(): React.JSX.Element {
           <PermissionBar />
           <PasswordBar />
           <PasskeySheet />
+          <PageDialog />
           <ExtInstallSheet />
           <Dock />
         </div>

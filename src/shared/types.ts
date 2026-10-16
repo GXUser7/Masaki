@@ -39,6 +39,18 @@ export interface Shortcut {
 }
 
 /** Запрос сайта на доступ (геопозиция, камера, уведомления…), который показывает интерфейс. */
+/** Окно страницы (alert / confirm / prompt): страница ждёт ответа, пока его не дадут в Masaki. */
+export interface JsDialog {
+  id: string
+  wcId: number
+  type: 'alert' | 'confirm' | 'prompt'
+  message: string
+  /** Значение по умолчанию у prompt. */
+  value?: string
+  /** Чей вопрос: хост у https, иначе со схемой. */
+  origin: string
+}
+
 export interface PermissionPrompt {
   id: string
   origin: string
@@ -745,6 +757,12 @@ export interface MasakiApi {
     answer(id: string, allow: boolean, remember: boolean): void
     list(): Promise<SitePermission[]>
     forget(origin: string, permission: string): void
+  }
+  /** Окна страниц вместо системных: показать, снять, ответить (mute — больше не показывать до перехода). */
+  jsDialogs: {
+    onShow(cb: (d: JsDialog) => void): () => void
+    onClose(cb: (id: string) => void): () => void
+    answer(id: string, ok: boolean, value?: string, mute?: boolean): void
   }
   pageAction(wcId: number, a: PageAction): void
   uiEdit(cmd: 'cut' | 'copy' | 'paste' | 'selectAll' | 'undo' | 'redo'): void

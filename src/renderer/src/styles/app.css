@@ -3404,9 +3404,16 @@ input {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  box-sizing: border-box;
+  /* Высоту ограничивает AutofillMenu (место до края страницы) — остальное прокручивается. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--glass-pop);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
   animation: pop 0.4s var(--spring);
+}
+.af-menu > * {
+  flex: none;
 }
 .af-row {
   border: 0;
@@ -3424,7 +3431,8 @@ input {
     background-color 0.15s,
     border-radius 0.4s var(--spring);
 }
-.af-row:hover {
+.af-row:hover,
+.af-row.on {
   background: var(--pc);
   color: var(--on-pc);
   border-radius: 24px;
@@ -5635,6 +5643,57 @@ input {
   align-items: center;
   gap: 6px;
   margin-top: 8px;
+}
+/* Окно страницы (PageDialog: alert / confirm / prompt) — как окно ключа доступа; текст сайта — слева,
+   с его переносами строк, длинный прокручивается. */
+.pd-title {
+  font-size: 19px;
+}
+.pd-msg {
+  align-self: stretch;
+  margin: 2px 6px 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.45;
+}
+.pd-input {
+  align-self: stretch;
+  height: 48px;
+  margin-top: 4px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 16px;
+  padding: 0 16px;
+  background: var(--glass-hi);
+  color: var(--on-surface);
+  font: inherit;
+  font-size: 15px;
+  outline: 2px solid transparent;
+  transition:
+    outline-color 0.2s,
+    border-radius 0.4s var(--spring);
+}
+.pd-input:focus {
+  outline-color: var(--primary);
+  border-radius: 12px;
+}
+.pd-mute {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 6px 0;
+  font-size: 13px;
+  color: var(--on-sv);
+  text-align: left;
+  cursor: pointer;
+}
+.pd-mute input {
+  accent-color: var(--primary);
 }
 .pk-sp {
   flex: 1;

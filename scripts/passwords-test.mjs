@@ -3,7 +3,7 @@
 // паролей между двумя профилями через подставной Google. Все пароли тут выдуманные.
 // Запуск: npm run test:passwords. Снимки — test-output/pw-*.png.
 import { _electron as electron } from 'playwright'
-import { clickGuest as clickGuestInput } from './electron-input.mjs'
+import { clickGuest as clickGuestInput, guestKeys } from './electron-input.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -261,6 +261,52 @@ try {
   check((await inTab(A, 'document.querySelector("#user").value')) === 'bob@example.com', 'логин вписан')
   check((await inTab(A, 'document.body.dataset.pass')) === 'B0b-Secret!', 'страница получила событие input (React-формы увидят значение)')
   check((await A.win.locator('.af-menu').count()) === 0, 'список закрылся после выбора')
+
+  // Стрелки и Enter: строку ведёт страница (фокус остаётся в поле), Enter подставляет её и форму не отправляет.
+  await open(A, `${SITE}/login`)
+  await clickIn(A, '#user')
+  await A.win.waitForSelector('.af-menu')
+  const wcA = await A.win.evaluate(() => document.querySelector('webview.wv.on').getWebContentsId())
+  // Порядок — по свежести использования (bob только что подставляли), поэтому берём его из самого списка.
+  const order = await A.win.locator('.af-row[role=option] b').allInnerTexts()
+  const secrets = { 'alice@example.com': 'Al1ce-Secret!', 'bob@example.com': 'B0b-Secret!' }
+  await guestKeys(A.app, wcA, ['ArrowDown'])
+  await A.win.waitForSelector(`.af-row.on:has-text("${order[0]}")`, { timeout: 5000 })
+  // Вниз до конца и по кругу, затем вверх — вторая строка.
+  await guestKeys(A.app, wcA, ['ArrowDown', 'ArrowDown', 'ArrowUp'])
+  await A.win.waitForSelector(`.af-row.on:has-text("${order[1]}")`, { timeout: 5000 })
+  await shot(A.app, 'pw-03b-keyboard')
+  await guestKeys(A.app, wcA, ['Enter'])
+  await waitFor(async () => (await inTab(A, 'document.querySelector("#pass").value')) === secrets[order[1]], 'пароль вписан по Enter')
+  check((await inTab(A, 'location.pathname')) === '/login', 'Enter на выбранной строке не отправил форму')
+  check((await A.win.locator('.af-menu').count()) === 0, 'список закрылся после Enter')
+
+  // Длинный список у поля внизу: открывается вверх, не уходит за край страницы (под док) и прокручивается.
+  const fake = (channel, args) =>
+    A.win.evaluate(([channel, args]) => document.querySelector('webview.wv.on').dispatchEvent(Object.assign(new Event('ipc-message'), { channel, args })), [channel, args])
+  const wvH = await A.win.evaluate(() => document.querySelector('webview.wv.on').getBoundingClientRect().height)
+  const dpr = await A.win.evaluate(() => devicePixelRatio)
+  await fake('pw:show', [{ rect: { x: 40, y: wvH - 200, w: 320, h: 40 }, dpr, role: 'username', items: Array.from({ length: 14 }, (_, i) => ({ id: 'fake-' + i, username: `user${i}@example.com`, host: 'example.com' })) }])
+  await A.win.waitForSelector('.af-menu')
+  const box = await A.win.evaluate(() => {
+    const m = document.querySelector('.af-menu')
+    const w = document.querySelector('webview.wv.on').getBoundingClientRect()
+    const r = m.getBoundingClientRect()
+    return { top: r.top, bottom: r.bottom, pageTop: w.top, pageBottom: w.bottom, scrolls: m.scrollHeight > m.clientHeight + 4 }
+  })
+  check(box.top >= box.pageTop - 1 && box.bottom <= box.pageBottom + 1 && box.scrolls, 'длинный список в пределах страницы и прокручивается: ' + JSON.stringify(box))
+  await fake('pw:sel', [13])
+  await A.win.waitForTimeout(250)
+  check(
+    await A.win.evaluate(() => {
+      const m = document.querySelector('.af-menu').getBoundingClientRect()
+      const r = document.querySelector('.af-row.on').getBoundingClientRect()
+      return r.top >= m.top - 1 && r.bottom <= m.bottom + 1
+    }),
+    'строка, выбранная стрелками, прокручена в вид'
+  )
+  await shot(A.app, 'pw-03c-long-list')
+  await fake('pw:hide', [])
 
   // Чужой сайт: даже прямой запрос интерфейса не вписывает пароль.
   await open(A, `${OTHER}/login`)

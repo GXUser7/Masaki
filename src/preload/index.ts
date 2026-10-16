@@ -10,6 +10,7 @@ import type {
   PasswordCsv,
   PasswordOffer,
   PermissionPrompt,
+  JsDialog,
   Settings,
   SyncState,
   UpdateState,
@@ -186,6 +187,11 @@ const api: MasakiApi = {
     answer: (id, allow, remember) => ipcRenderer.send('permission:answer', id, allow, remember),
     list: () => ipcRenderer.invoke('permission:list'),
     forget: (origin, permission) => ipcRenderer.send('permission:forget', origin, permission)
+  },
+  jsDialogs: {
+    onShow: (cb) => listen<JsDialog>('js-dialog', cb),
+    onClose: (cb) => listen<string>('js-dialog-close', cb),
+    answer: (id, ok, value, mute) => ipcRenderer.send('js:answer', id, ok, value, mute)
   },
   pageAction: (wcId, a) => ipcRenderer.send('page:action', wcId, a),
   uiEdit: (cmd) => ipcRenderer.send('ui:edit', cmd),

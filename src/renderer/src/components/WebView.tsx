@@ -1,6 +1,7 @@
 import { createElement, useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { AutofillRequest } from '../../../shared/types'
 import { finishSwipe } from './Extras'
+import { pickAutofill } from './PasswordUi'
 import { hostOf } from '../lib/url'
 import { captureThumb, markReady, registerWebview, unregisterWebview, useStore, type Tab } from '../store'
 import { syncGlass } from '../lib/glass'
@@ -85,6 +86,13 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
               break
             case 'pw:hide':
               if (st.autofill?.tabId === id) useStore.setState({ autofill: null })
+              break
+            case 'pw:sel':
+              // Стрелки в поле страницы: строку ведёт guest.ts, здесь только подсветка.
+              if (st.autofill?.tabId === id && Number.isInteger(e.args[0])) useStore.setState({ autofill: { ...st.autofill, sel: e.args[0] as number } })
+              break
+            case 'pw:pick':
+              if (st.autofill?.tabId === id && Number.isInteger(e.args[0])) pickAutofill(e.args[0] as number)
               break
             case 'glance': {
               // Alt+клик по ссылке: карточка поверх страницы вместо новой вкладки.

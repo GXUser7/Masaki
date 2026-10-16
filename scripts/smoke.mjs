@@ -178,6 +178,40 @@ const steps = {
     await page.waitForTimeout(300)
     await page.keyboard.press('Control+KeyW')
   },
+  async pageDialogs() {
+    // alert / confirm / prompt — окном Masaki, а не системным окном Windows; код страницы ждёт ответа.
+    const f = path.join(out, 'dialog-test.html')
+    fs.writeFileSync(f, '<meta charset="utf-8"><title>Окна страницы</title><body style="font:20px sans-serif;padding:40px">Окна страницы</body>')
+    await command({ type: 'open-url', url: fileUrl(f) })
+    await waitLoaded()
+    // inTab ответит, только когда окно закроют: страница стоит на confirm/prompt/alert.
+    let pending = inTab(`confirm('Удалить запись?\\nЭто действие нельзя отменить.')`)
+    await page.waitForSelector('.pd-card', { timeout: 8000 })
+    await page.waitForTimeout(500)
+    await shot('03a2-page-confirm')
+    if (!(await page.locator('.pd-title').innerText()).includes('спрашивает')) throw new Error('у confirm не тот заголовок')
+    await page.click('.pd-card .perm-btn.tonal-b')
+    if ((await pending) !== false) throw new Error('confirm: «Отмена» должна вернуть false')
+
+    pending = inTab(`prompt('Как назвать вкладку?', 'Masaki')`)
+    await page.waitForSelector('.pd-input')
+    if ((await page.inputValue('.pd-input')) !== 'Masaki') throw new Error('prompt: нет значения по умолчанию')
+    await page.fill('.pd-input', 'Новое имя')
+    await page.keyboard.press('Enter')
+    if ((await pending) !== 'Новое имя') throw new Error('prompt: Enter должен вернуть введённое')
+
+    // Третье окно страницы — можно запретить остальные; Esc у alert — просто «ОК».
+    pending = inTab(`alert('Сохранено'); 'после alert'`)
+    await page.waitForSelector('.pd-mute')
+    await page.check('.pd-mute input')
+    await page.keyboard.press('Escape')
+    if ((await pending) !== 'после alert') throw new Error('alert: код страницы не продолжился после окна')
+    // Запрещено до следующего перехода: confirm сразу false, окна нет.
+    if ((await inTab(`confirm('Ещё раз?')`)) !== false) throw new Error('после запрета confirm должен сразу вернуть false')
+    if (await page.$('.pd-card')) throw new Error('после запрета окно страницы всё равно показалось')
+    await command({ type: 'close-tab' })
+    await page.waitForTimeout(400)
+  },
   async pageMenu() {
     await page.waitForTimeout(800)
     const box = await page.locator('webview.wv.on').boundingBox()

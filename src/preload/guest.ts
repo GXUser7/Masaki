@@ -143,6 +143,10 @@ function hide(): void {
   ipcRenderer.sendToHost('pw:hide')
 }
 
+/** Сколько строк в показанном списке и какая выбрана стрелками (-1 — ни одной). */
+let shownCount = 0
+let picked = -1
+
 function show(f: Fields, list: Item[]): void {
   // Пока печатают логин — только подходящие аккаунты, как в Chrome.
   const typed = f.focus === f.user ? f.focus.value.trim().toLowerCase() : ''
@@ -152,6 +156,8 @@ function show(f: Fields, list: Item[]): void {
   clearTimeout(hideTimer)
   const r = f.focus.getBoundingClientRect()
   shown = true
+  shownCount = fit.length
+  picked = -1
   ipcRenderer.sendToHost('pw:show', {
     rect: { x: r.left, y: r.top, w: r.width, h: r.height },
     dpr: window.devicePixelRatio,
@@ -248,6 +254,31 @@ document.addEventListener(
   (e) => {
     const b = (e.target as Element | null)?.closest?.('button, input[type=submit], input[type=button], [role=button]')
     if (b) collect(b)
+  },
+  true
+)
+// Список аккаунтов у поля — стрелками и Enter, как в Chrome. Фокус остаётся в поле страницы, поэтому клавиши
+// ловим здесь, раньше страницы (окно, перехват): пока список открыт, они его, а не формы и не сайта.
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (!shown || !active || e.target !== active.focus || e.altKey || e.ctrlKey || e.metaKey) return
+    const own = (): void => {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      own()
+      picked = e.key === 'ArrowDown' ? (picked + 1) % shownCount : picked <= 0 ? shownCount - 1 : picked - 1
+      ipcRenderer.sendToHost('pw:sel', picked)
+    } else if (e.key === 'Enter' && picked >= 0) {
+      // Выбранный аккаунт подставляем, а форму не отправляем — как в Chrome.
+      own()
+      ipcRenderer.sendToHost('pw:pick', picked)
+    } else if (e.key === 'Escape') {
+      own()
+      hide()
+    }
   },
   true
 )
@@ -414,6 +445,30 @@ window.addEventListener('mouseup', (e) => {
   setTimeout(() => {
     if (!e.defaultPrevented) ipcRenderer.send('nav:mouse', dir)
   })
+})
+
+// 6б. Окна страницы — alert / confirm / prompt — окном Masaki, а не системным окном Windows. Как и настоящие,
+// они останавливают код страницы до ответа: вопрос уходит в main синхронно (sendSync). Ответ null — main
+// отказался (не главный фрейм и т. п.): тогда обычное окно браузера.
+type JsAnswer = { ok: boolean; value?: string } | null
+contextBridge.executeInMainWorld({
+  func: (ask: (type: string, message: string, value?: string) => JsAnswer) => {
+    const native = { alert: window.alert, confirm: window.confirm, prompt: window.prompt }
+    const text = (m: unknown): string => (m === undefined ? '' : String(m))
+    window.alert = function alert(message?: unknown): void {
+      if (ask('alert', text(message)) === null) native.alert.call(window, message)
+    }
+    window.confirm = function confirm(message?: unknown): boolean {
+      const r = ask('confirm', text(message))
+      return r === null ? native.confirm.call(window, text(message)) : r.ok
+    }
+    window.prompt = function prompt(message?: unknown, value?: unknown): string | null {
+      const r = ask('prompt', text(message), text(value))
+      if (r === null) return native.prompt.call(window, text(message), text(value))
+      return r.ok ? (r.value ?? '') : null
+    }
+  },
+  args: [(type: string, message: string, value?: string): JsAnswer => ipcRenderer.sendSync('js:dialog', { type, message, value }) as JsAnswer]
 })
 
 // 7. Что играет: Media Session сайта — в мини-плеер Masaki (обложка, название, «следующий»).

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { shapes } from '../lib/shapes'
 import { tabIdOfWebContents, useStore } from '../store'
 import { Icon } from './Icon'
@@ -135,9 +135,28 @@ export function PasswordBar(): React.JSX.Element | null {
 }
 
 /** Список аккаунтов под полем входа во вкладке. Рисуем поверх страницы, страница его не видит. */
+/** Подставить аккаунт из списка у поля: щелчком или Enter после стрелок (номер строки — из guest.ts). */
+export function pickAutofill(index: number): void {
+  const af = useStore.getState().autofill
+  const it = af?.req.items[index]
+  if (!af || !it) return
+  if (it.passkey) window.masaki.passkeys.useConditional(af.wcId, it.id)
+  else window.masaki.passwords.fill(af.wcId, it.id)
+  useStore.setState({ autofill: null })
+}
+
 export function AutofillMenu(): React.JSX.Element | null {
   const af = useStore((s) => s.autofill)
   const paletteOpen = useStore((s) => s.palette.open)
+  const list = useRef<HTMLDivElement>(null)
+  // Строку, выбранную стрелками, держим на виду: список прокручивается сам.
+  useEffect(() => {
+    const box = list.current
+    const row = box?.querySelector<HTMLElement>('.af-row.on')
+    if (!box || !row) return
+    if (row.offsetTop < box.scrollTop) box.scrollTop = row.offsetTop - 6
+    else if (row.offsetTop + row.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row.offsetTop + row.offsetHeight - box.clientHeight + 6
+  }, [af?.sel])
   if (!af || paletteOpen) return null
   const el = document.querySelector(`webview[data-tab="${af.tabId}"]`)
   if (!el) return null
@@ -149,24 +168,42 @@ export function AutofillMenu(): React.JSX.Element | null {
   const left = Math.min(wr.left + r.x * k, window.innerWidth - width - 8)
   const fieldTop = wr.top + r.y * k
   const fieldBottom = wr.top + (r.y + r.h) * k
-  const estimate = 58 * Math.min(af.req.items.length, 5) + 64
-  const style: React.CSSProperties =
-    fieldBottom + estimate < window.innerHeight - 8
-      ? { left, top: fieldBottom + 6, width }
-      : { left, bottom: window.innerHeight - fieldTop + 6, width }
+  // Место считаем в пределах страницы, а не окна: внизу может быть док. Не влезает — список
+  // прокручивается; сверху места больше — открывается вверх, как в Chrome.
+  const want = 58 * af.req.items.length + 70
+  const below = wr.bottom - fieldBottom - 14
+  const above = fieldTop - wr.top - 14
+  const down = below >= Math.min(want, 240) || below >= above
+  const maxHeight = Math.max(120, Math.min(want, down ? below : above))
+  const style: React.CSSProperties = down
+    ? { left, top: fieldBottom + 6, width, maxHeight }
+    : { left, bottom: window.innerHeight - fieldTop + 6, width, maxHeight }
 
-  const pick = (it: (typeof af.req.items)[number]) => (e: React.MouseEvent) => {
+  const pick = (index: number) => (e: React.MouseEvent) => {
     // mousedown, а не click: клик уводит фокус со страницы, и она прячет список раньше, чем он сработает.
     e.preventDefault()
-    if (it.passkey) window.masaki.passkeys.useConditional(af.wcId, it.id)
-    else window.masaki.passwords.fill(af.wcId, it.id)
-    useStore.setState({ autofill: null })
+    pickAutofill(index)
   }
   return (
-    <div className="glass af-menu" style={style} role="listbox" aria-label="Пароли и ключи доступа" onMouseDown={(e) => e.preventDefault()}>
+    <div
+      ref={list}
+      className="glass af-menu"
+      style={style}
+      role="listbox"
+      aria-label="Пароли и ключи доступа"
+      aria-activedescendant={af.sel !== undefined && af.sel >= 0 ? `af-${af.sel}` : undefined}
+      onMouseDown={(e) => e.preventDefault()}
+    >
       <Grain />
-      {af.req.items.slice(0, 8).map((it) => (
-        <button key={it.id} className={'af-row' + (it.passkey ? ' af-pk' : '')} role="option" aria-selected={false} onMouseDown={pick(it)}>
+      {af.req.items.map((it, i) => (
+        <button
+          key={it.id}
+          id={`af-${i}`}
+          className={'af-row' + (it.passkey ? ' af-pk' : '') + (af.sel === i ? ' on' : '')}
+          role="option"
+          aria-selected={af.sel === i}
+          onMouseDown={pick(i)}
+        >
           <span className="af-ic">
             <Icon name={it.passkey ? 'passkey' : 'key'} />
           </span>

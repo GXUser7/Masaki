@@ -858,6 +858,58 @@ function runSelfTest(): void {
   })
 }
 
+// ---------- Окна страницы: alert / confirm / prompt ----------
+// Вместо системного окна Windows — окно Masaki поверх вкладки. Как и настоящие, они останавливают страницу:
+// guest.ts спрашивает синхронно (sendSync), и поток страницы ждёт, пока здесь не поставят returnValue.
+type JsAnswer = { ok: boolean; value?: string }
+const jsDialogs = new Map<string, { wcId: number; reply: (a: JsAnswer) => void }>()
+/** Вкладки, которым запретили окна («больше не показывать»), — до следующего перехода, как в Chrome. */
+const mutedDialogs = new Set<number>()
+
+function askJsDialog(e: Electron.IpcMainEvent, d: unknown): void {
+  const wc = e.sender
+  const x = d as { type?: unknown; message?: unknown; value?: unknown } | null
+  const type = x?.type === 'confirm' || x?.type === 'prompt' ? x.type : x?.type === 'alert' ? 'alert' : null
+  // Не наша вкладка или нечего показать — пусть страница получит обычное системное окно.
+  if (!type || !win || wc.getType() !== 'webview' || e.senderFrame !== wc.mainFrame) {
+    e.returnValue = null
+    return
+  }
+  if (mutedDialogs.has(wc.id)) {
+    e.returnValue = { ok: type === 'alert' }
+    return
+  }
+  const id = randomUUID()
+  let done = false
+  const cancel = (): void => reply({ ok: false })
+  const away = (ev: { isMainFrame: boolean; isSameDocument: boolean }): void => {
+    if (ev.isMainFrame && !ev.isSameDocument) cancel()
+  }
+  const reply = (a: JsAnswer): void => {
+    if (done) return
+    done = true
+    jsDialogs.delete(id)
+    e.returnValue = a
+    win?.webContents.send('js-dialog-close', id)
+    if (!wc.isDestroyed()) {
+      wc.off('destroyed', cancel)
+      wc.off('did-start-navigation', away)
+    }
+  }
+  jsDialogs.set(id, { wcId: wc.id, reply })
+  wc.once('destroyed', cancel)
+  // Ушли со страницы кнопкой «назад» или адресом — вопрос больше не к кому задавать.
+  wc.on('did-start-navigation', away)
+  win.webContents.send('js-dialog', {
+    id,
+    wcId: wc.id,
+    type,
+    message: String(x?.message ?? '').slice(0, 10_000),
+    value: type === 'prompt' ? String(x?.value ?? '').slice(0, 10_000) : undefined,
+    origin: originLabel(originOf(wc.getURL()))
+  })
+}
+
 // ---------- AI Mode с картинкой ----------
 // Адресом картинку в AI Mode не передать. Путь как у «Найти через Google Lens» в Chrome: картинка уходит
 // POST'ом в Lens прямо во вкладке (её куки, её прокси), Google отвечает переходом на результаты Lens
@@ -937,7 +989,11 @@ app.on('web-contents-created', (_e, contents) => {
   }
   contents.on('will-redirect', toAiMode)
   contents.on('will-navigate', toAiMode)
-  contents.once('destroyed', () => lensAsks.delete(contents.id))
+  contents.on('did-navigate', () => mutedDialogs.delete(contents.id))
+  contents.once('destroyed', () => {
+    lensAsks.delete(contents.id)
+    mutedDialogs.delete(contents.id)
+  })
   // Ctrl+колесо над страницей: Electron масштаб сам не меняет, а только сообщает направление.
   // Применяет интерфейс (как Ctrl+=, с запоминанием в tab.zoom) в той вкладке, над которой крутили.
   contents.on('zoom-changed', (_ev, dir) => send({ type: 'zoom', delta: dir === 'in' ? 1 : -1, wcId: contents.id }))
@@ -1232,6 +1288,15 @@ function registerIpc(): void {
     } finally {
       if (!contents.isDestroyed()) contents.removeListener('did-start-navigation', onNavigation)
     }
+  })
+  ipcMain.on('js:dialog', askJsDialog)
+  // Ответ на окно страницы — только из интерфейса Masaki, не из самой страницы.
+  ipcMain.on('js:answer', (e, id: unknown, ok: unknown, value: unknown, mute: unknown) => {
+    if (!downloadUi(e) || typeof id !== 'string') return
+    const d = jsDialogs.get(id)
+    if (!d) return
+    if (mute === true) mutedDialogs.add(d.wcId)
+    d.reply({ ok: ok === true, value: typeof value === 'string' ? value.slice(0, 10_000) : undefined })
   })
   // AI Mode с картинкой из палитры: только окно интерфейса, только вкладка этого окна.
   ipcMain.handle('ai:image', (e, wcId: unknown, query: unknown, image: unknown) => {
