@@ -3,14 +3,86 @@
 // паролей между двумя профилями через подставной Google. Все пароли тут выдуманные.
 // Запуск: npm run test:passwords. Снимки — test-output/pw-*.png.
 import { _electron as electron } from 'playwright'
+import { clickGuest as clickGuestInput } from './electron-input.mjs'
+import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import vm from 'node:vm'
+import { transformWithEsbuild } from 'vite'
 import { startMockGoogle } from './mock-google.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+/** Проверяем настоящий модуль без сети и профиля: Electron и хранилище заменены только на границе. */
+async function testAutofillBoundaries() {
+  const require = createRequire(import.meta.url)
+  const filename = path.join(root, 'src/main/passwords.ts')
+  const source = (await transformWithEsbuild(fs.readFileSync(filename, 'utf8'), filename, { format: 'cjs', target: 'es2022' })).code
+  const cases = [
+    ['https://login.example.com', 'https://app.example.com', true, 'поддомены одного сайта'],
+    ['https://example.co.uk', 'https://accounts.example.co.uk', true, 'многочастный публичный суффикс'],
+    ['https://alice.github.io', 'https://bob.github.io', false, 'разные сайты github.io'],
+    ['https://alice.github.io', 'https://login.alice.github.io', true, 'поддомен своего сайта github.io'],
+    ['https://alice.blogspot.com', 'https://bob.blogspot.com', false, 'разные сайты blogspot.com'],
+    ['https://alice.pages.dev', 'https://bob.pages.dev', false, 'разные сайты pages.dev'],
+    ['https://a.co.uk', 'https://b.co.uk', false, 'разные домены co.uk'],
+    ['https://example.com', 'http://example.com', false, 'HTTPS-пароль на HTTP того же хоста'],
+    ['https://login.example.com', 'http://app.example.com', false, 'HTTPS-пароль на HTTP поддомена'],
+    ['http://login.example.com', 'https://app.example.com', true, 'HTTP-пароль после перехода на HTTPS'],
+    ['http://login.example.com', 'http://app.example.com', true, 'HTTP-пароль на поддомене своего сайта'],
+    ['https://example.com', 'https://attackerexample.com', false, 'похожее имя чужого домена'],
+    ['https://example.com', 'https://example.com.attacker.test', false, 'домен сайта в чужом поддомене'],
+    ['http://localhost:1000', 'http://localhost:1000', true, 'точный origin localhost'],
+    ['http://localhost:1000', 'http://localhost:2000', false, 'разные порты localhost'],
+    ['http://a.localhost:1000', 'http://b.localhost:1000', false, 'разные локальные хосты'],
+    ['http://a.localhost:1000', 'http://login.a.localhost:1000', false, 'локальные поддомены независимы'],
+    ['http://127.0.0.1:1000', 'http://127.0.0.1:1000', true, 'точный origin IPv4'],
+    ['http://127.0.0.1:1000', 'http://127.0.0.1:2000', false, 'разные порты IPv4'],
+    ['http://127.0.0.1:1000', 'http://127.0.0.2:1000', false, 'разные адреса IPv4'],
+    ['http://[::1]:1000', 'http://[::1]:1000', true, 'точный origin IPv6'],
+    ['http://[::1]:1000', 'http://[::1]:2000', false, 'разные порты IPv6'],
+    ['http://intranet:1000', 'http://intranet:2000', false, 'разные локальные службы без домена']
+  ]
+  for (const [saved, target, allowed, label] of cases) {
+    const module = { exports: {} }
+    vm.runInNewContext(source, {
+      module,
+      exports: module.exports,
+      Buffer,
+      URL,
+      setTimeout,
+      clearTimeout,
+      require: (id) => {
+        if (id === 'electron') return {
+          safeStorage: { isEncryptionAvailable: () => true, encryptString: (s) => Buffer.from(s), decryptString: (b) => b.toString() },
+          webContents: { getAllWebContents: () => [] },
+          clipboard: {}
+        }
+        if (id === './store') return { JsonFile: class { async read() { return null } write() {} flushSync() {} } }
+        return require(id)
+      }
+    }, { filename })
+    const passwords = module.exports
+    await passwords.initPasswords({ ui() {}, changed() {} })
+    assert.equal(passwords.save({ url: saved, username: 'boundary-user', password: 'Boundary-Test-Only!' }).ok, true, label)
+    const id = passwords.list()[0].id
+    assert.equal(passwords.matchesFor(target).some((item) => item.id === id), allowed, `предложение: ${label}`)
+    const messages = []
+    passwords.fill({ isDestroyed: () => false, mainFrame: { origin: target }, send: (...args) => messages.push(args) }, id)
+    assert.equal(messages.length, allowed ? 1 : 0, `отправка пароля: ${label}`)
+    if (allowed) assert.equal(messages[0][1].password, 'Boundary-Test-Only!', label)
+  }
+  console.log(`  ok — границы автозаполнения: ${cases.length} сценария, проверены список и отправка пароля`)
+}
+
+await testAutofillBoundaries()
+// Быстрый отдельный запуск без Electron: node scripts/passwords-test.mjs --boundaries-only.
+if (process.argv.includes('--boundaries-only')) process.exit(0)
+
 const out = path.join(root, 'test-output')
 fs.mkdirSync(out, { recursive: true })
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p))
@@ -72,7 +144,7 @@ async function launch(profile, tag) {
   const app = await electron.launch({
     args: [root],
     cwd: root,
-    env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url, MASAKI_DOWNLOADS: downloads },
+    env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url, MASAKI_DOWNLOADS: downloads },
     timeout: 60000
   })
   const win = await app.firstWindow()
@@ -116,8 +188,8 @@ async function open(m, url) {
 /** Настоящий клик мышью по элементу внутри вкладки. */
 async function clickIn(m, selector) {
   const r = await inTab(m, `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
-  const box = await m.win.locator('webview.wv.on').boundingBox()
-  await m.win.mouse.click(box.x + r.x, box.y + r.y)
+  const wcId = await m.win.evaluate(() => document.querySelector('webview.wv.on').getWebContentsId())
+  await clickGuestInput(m.app, wcId, r.x, r.y)
 }
 
 const list = (m) => m.win.evaluate(() => window.masaki.passwords.list())

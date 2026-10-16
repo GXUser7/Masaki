@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { askAiWithImage } from '../actions'
 import { shapes } from '../lib/shapes'
 import { hostOf, looksLikeAddress, resolveInput } from '../lib/url'
 import { toggleGlass } from '../lib/glass'
@@ -179,6 +180,26 @@ export function Palette(): React.JSX.Element {
   const [suggestions, setSuggestions] = useState<string[]>([])
   const input = useRef<HTMLInputElement>(null)
   const [place, setPlace] = useState<CSSProperties | null>(null)
+  // Картинка для AI Mode (data:image/…): вставка Ctrl+V, перетаскивание или кнопка. С ней палитра — в AI Mode.
+  const [image, setImage] = useState<string | null>(null)
+  const picker = useRef<HTMLInputElement>(null)
+  const attach = (file: File | null | undefined): boolean => {
+    if (!file || !file.type.startsWith('image/') || file.size > 20 * 1024 * 1024) return false
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') return
+      setImage(reader.result)
+      useStore.getState().setAi(true)
+      setSel(0)
+      input.current?.focus()
+    }
+    reader.readAsDataURL(file)
+    return true
+  }
+  const imageIn = (data: DataTransfer | null): File | null => {
+    for (const item of data?.items ?? []) if (item.kind === 'file' && item.type.startsWith('image/')) return item.getAsFile()
+    return null
+  }
 
   // Палитра всегда по центру страницы, откуда бы её ни вызвали; поле-источник на это время прячется.
   useLayoutEffect(() => {
@@ -234,6 +255,11 @@ export function Palette(): React.JSX.Element {
       for (const a of archive.filter((a) => !low || has(a.title) || has(a.url)).slice(0, 8)) {
         out.push({ kind: 'arch', title: a.title || hostOf(a.url), sub: 'Из архива · ' + hostOf(a.url), url: a.url, favicon: a.favicon })
       }
+      return out
+    }
+    // С картинкой — один путь: спросить о ней AI Mode (адрес или поиск картинку бы потеряли).
+    if (image && !q.startsWith('>')) {
+      out.push({ kind: 'ai', title: 'Спросить AI Mode о картинке', sub: q ? `«${q}»` : 'Можно дописать вопрос или сразу нажать Enter' })
       return out
     }
     // Команды: «>» в начале.
@@ -298,7 +324,7 @@ export function Palette(): React.JSX.Element {
       out.push({ kind: 'arch', title: a.title || hostOf(a.url), sub: 'Из архива · ' + hostOf(a.url), url: a.url, favicon: a.favicon })
     }
     return out
-  }, [text, ai, tabs, activeId, history, favorites, suggestions, devices, archive, palette.mode])
+  }, [text, ai, tabs, activeId, history, favorites, suggestions, devices, archive, palette.mode, image])
 
   const current = Math.min(sel, rows.length - 1)
 
@@ -308,7 +334,8 @@ export function Palette(): React.JSX.Element {
     if (!row) return
     switch (row.kind) {
       case 'ai':
-        s.navigate(text, { ai: true, target })
+        if (image) void askAiWithImage(text.trim(), image, target)
+        else s.navigate(text, { ai: true, target })
         break
       case 'search':
         s.navigate(row.title, { ai: false, target })
@@ -355,6 +382,10 @@ export function Palette(): React.JSX.Element {
     } else if (e.key === 'Escape') {
       e.preventDefault()
       useStore.getState().closePalette()
+    } else if (e.key === 'Backspace' && image && !text) {
+      // Как у вложений в чатах: стереть «назад» из пустого поля — убрать картинку.
+      e.preventDefault()
+      setImage(null)
     }
   }
 
@@ -366,21 +397,68 @@ export function Palette(): React.JSX.Element {
         style={place ?? undefined}
         role="dialog"
         aria-label="Адрес, поиск и AI Mode"
+        onDragOver={(e) => {
+          if (palette.mode !== 'tabs' && [...e.dataTransfer.items].some((i) => i.kind === 'file' && i.type.startsWith('image/'))) e.preventDefault()
+        }}
+        onDrop={(e) => {
+          if (palette.mode !== 'tabs' && attach(imageIn(e.dataTransfer))) e.preventDefault()
+        }}
       >
         <Grain />
         <div className={'cmd-in' + (ai ? ' ai' : '')}>
           <Icon name={ai ? 'sparkle' : 'search'} />
+          {image && (
+            <span className="pal-pic">
+              <img src={image} alt="Картинка для AI Mode" />
+              <button className="pal-pic-x" aria-label="Убрать картинку" title="Убрать картинку" onClick={() => {
+                setImage(null)
+                input.current?.focus()
+              }}>
+                <Icon name="close" />
+              </button>
+            </span>
+          )}
           <input
             ref={input}
             value={text}
             spellCheck={false}
-            placeholder={palette.mode === 'tabs' ? 'Поиск по вкладкам и архиву' : ai ? 'Спросите AI Mode о чём угодно…' : 'Адрес, поиск или вопрос · «>» — команды'}
+            placeholder={
+              palette.mode === 'tabs'
+                ? 'Поиск по вкладкам и архиву'
+                : image
+                  ? 'Что спросить о картинке?'
+                  : ai
+                    ? 'Спросите AI Mode о чём угодно…'
+                    : 'Адрес, поиск или вопрос · «>» — команды'
+            }
             aria-label="Адрес, поиск или вопрос"
             onChange={(e) => {
               setText(e.target.value)
               setSel(0)
             }}
             onKeyDown={onKey}
+            onPaste={(e) => {
+              if (palette.mode !== 'tabs' && attach(imageIn(e.clipboardData))) e.preventDefault()
+            }}
+          />
+          <button
+            hidden={palette.mode === 'tabs'}
+            className="ib pal-pic-add"
+            aria-label="Добавить картинку для AI Mode"
+            title="Картинка для AI Mode — или вставьте её (Ctrl+V) и перетащите сюда"
+            onClick={() => picker.current?.click()}
+          >
+            <Icon name="image" />
+          </button>
+          <input
+            ref={picker}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => {
+              attach(e.target.files?.[0])
+              e.target.value = ''
+            }}
           />
           <button
             hidden={palette.mode === 'tabs'}

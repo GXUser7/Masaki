@@ -75,11 +75,13 @@ const api: MasakiApi = {
   },
   downloads: {
     onUpdate: (cb) => listen<DownloadInfo>('download', cb),
+    cancel: (id) => ipcRenderer.invoke('dl:cancel', id),
     open: (p) => ipcRenderer.send('dl:open', p),
     showInFolder: (p) => ipcRenderer.send('dl:show', p),
     drag: (p) => ipcRenderer.send('dl:drag', p)
   },
   site: {
+    clearCookies: (wcId, expectedOrigin) => ipcRenderer.invoke('site:clear-cookies', wcId, expectedOrigin),
     clearData: (origin) => ipcRenderer.invoke('site:clear-data', origin),
     clearCache: () => ipcRenderer.invoke('site:clear-cache')
   },
@@ -113,6 +115,8 @@ const api: MasakiApi = {
   },
   captureTab: (wcId) => ipcRenderer.invoke('tab:capture', wcId),
   favicon: (url) => ipcRenderer.invoke('favicon', url),
+  faviconData: (iconUrl) => ipcRenderer.invoke('favicon:data', iconUrl),
+  aiImage: (wcId, query, image) => ipcRenderer.invoke('ai:image', wcId, query, image),
   learnFavicon: (pageUrl, iconUrl) => ipcRenderer.send('favicon:learn', pageUrl, iconUrl),
   onFaviconUpdated: (cb) => listen<string>('favicon-updated', cb),
   google: {

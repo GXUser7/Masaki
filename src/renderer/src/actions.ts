@@ -112,15 +112,51 @@ export function aiButton(): void {
   S().openPalette(false, 'current', undefined, true)
 }
 
-export function toggleFavorite(): void {
+/** Есть ли страница вкладки в избранном или среди ярлыков новой вкладки. */
+export function isSaved(list: 'favorites' | 'shortcuts', tab: Tab): boolean {
+  return tab.kind === 'web' && S().settings[list].some((f) => f.url === tab.url)
+}
+
+/** Страница вкладки в избранное или ярлыком на новую вкладку; уже есть — убирает. Список не обрезаем:
+ *  избранного, перенесённого из Chrome, бывает больше восьми, и старое не должно молча пропадать. */
+export function toggleSaved(list: 'favorites' | 'shortcuts', tab: Tab): void {
+  if (tab.kind !== 'web') return
   const s = S()
-  const t = s.active()
-  if (t.kind !== 'web') return
-  const favs = s.settings.favorites
-  const has = favs.some((f) => f.url === t.url)
-  s.setSettings({
-    favorites: has ? favs.filter((f) => f.url !== t.url) : [...favs, { title: t.title || t.url, url: t.url }].slice(-8)
-  })
+  const items = s.settings[list]
+  const next = isSaved(list, tab) ? items.filter((f) => f.url !== tab.url) : [...items, { title: tab.title || tab.url, url: tab.url }]
+  s.setSettings(list === 'favorites' ? { favorites: next } : { shortcuts: next })
+}
+
+export function toggleFavorite(): void {
+  toggleSaved('favorites', S().active())
+}
+
+/**
+ * AI Mode о картинке. Картинку main отправляет в Google Lens прямо во вкладке, а ответ Lens переводит в AI Mode
+ * с вопросом. Вкладке нужен готовый webview: пустая новая вкладка (React-страница) сначала становится обычной.
+ */
+export async function askAiWithImage(query: string, image: string, target: 'current' | 'new'): Promise<boolean> {
+  const s = S()
+  s.closePalette()
+  const active = s.active()
+  let id: string
+  if (target === 'new') id = s.newTab('about:blank')
+  else if (active.kind === 'web') id = active.id
+  else {
+    s.navigate('about:blank', { raw: true })
+    id = active.id
+  }
+  for (let i = 0; i < 160 && !wv(id); i++) await new Promise((r) => setTimeout(r, 50))
+  const el = wv(id)
+  if (!el) return false
+  S().updateTab(id, { loading: true, title: query || 'AI Mode' })
+  return window.masaki.aiImage(el.getWebContentsId(), query, image)
+}
+
+/** Избранное открывается новой вкладкой, а не вместо текущей страницы; пустую новую вкладку просто занимает. */
+export function openFavorite(url: string): void {
+  const s = S()
+  s.navigate(url, { raw: true, target: s.active().kind === 'newtab' ? 'current' : 'new' })
 }
 
 export function handleCommand(c: Command): void {

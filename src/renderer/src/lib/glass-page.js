@@ -79,7 +79,16 @@
       const c = rgba(getComputedStyle(el).backgroundColor)
       if (c && c.a > 0.85) return c.rgb
     }
-    return matchMedia('(prefers-color-scheme: dark)').matches ? [24, 24, 28] : [255, 255, 255]
+    // prefers-color-scheme — предпочтение пользователя, а не тема сайта. У многих светлых
+    // сайтов (например, Antigravity) html/body прозрачны даже в тёмном браузере: их подложка —
+    // обычный светлый Canvas. Системный CSS-цвет учитывает именно color-scheme документа,
+    // включая normal, dark и light dark, а также повышенную контрастность Windows.
+    const probe = document.createElement('span')
+    probe.style.cssText = 'display:none!important;background-color:Canvas!important;color-scheme:inherit!important'
+    document.documentElement.appendChild(probe)
+    const canvas = rgba(getComputedStyle(probe).backgroundColor)
+    probe.remove()
+    return canvas ? canvas.rgb : [255, 255, 255]
   }
 
   // Где лежит элемент сам по себе: в обычной вёрстке, в «полосе» (шапка или боковое меню,
@@ -231,7 +240,9 @@
               } else clear(el)
             }
           } else if (c.a >= 0.85 && cs.boxShadow === 'none' && !playerBox(el, r)) {
-            const hit = strong ? near(c.rgb, 22) || large(r) : near(c.rgb, 6) && large(r)
+            // Размер сам по себе не делает секцию фоном сайта: на светлых лендингах бывают
+            // большие тёмные блоки с белым текстом (и наоборот). Их собственный фон сохраняем.
+            const hit = near(c.rgb, strong ? 22 : 6) && (strong || large(r))
             if (hit) clear(el)
           }
         }

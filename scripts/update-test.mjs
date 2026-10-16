@@ -133,7 +133,7 @@ const feed = `http://127.0.0.1:${server.address().port}/`
 const env = {
   ...process.env,
   MASAKI_PROFILE: profile,
-  MASAKI_TEST_INACTIVE: '1',
+  MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1',
   MASAKI_UPDATE_URL: feed,
   MASAKI_UPDATE_DELAY: '1500',
   MASAKI_UPDATE_NO_RELAUNCH: '1'

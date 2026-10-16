@@ -77,6 +77,7 @@ export function App(): React.JSX.Element {
   const htmlFullscreen = useStore((s) => s.htmlFullscreen)
   const maximized = useStore((s) => s.winMaximized)
   const split = useStore((s) => s.split)
+  // Страница меняет высоту вместе с началом перетекания дока, а не после него (так просил пользователь).
   const capSmall = useStore((s) => s.capsuleSmall)
   const systemDark = useSystemDark()
   const dark = settings.scheme === 'dark' || (settings.scheme === 'system' && systemDark)

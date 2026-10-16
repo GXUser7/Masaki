@@ -17,10 +17,12 @@ import {
   type ContextMenuParams,
   type WebContents
 } from 'electron'
+import { randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { ElectronBlocker } from '@ghostery/adblocker-electron'
 import { JsonFile } from './store'
+import { keepTestWindowHidden, testFakeMedia, testHeadless } from './testMode'
 import { chromeBookmarks, chromeHistory, chromeProfiles, chromeShortcuts } from './chromeImport'
 import * as sync from './sync'
 import * as passwords from './passwords'
@@ -33,6 +35,7 @@ import * as profiles from './profiles'
 import * as updater from './updater'
 import { pathToFileURL } from 'url'
 import { commandFor } from '../shared/shortcuts'
+import { siteCookieDomain } from '../shared/site'
 import {
   AI_PORT,
   defaultSettings,
@@ -63,6 +66,7 @@ let favicons: Record<string, string> = {}
 const windowFile = new JsonFile<{ bounds: Electron.Rectangle; maximized: boolean }>('window.json')
 
 let win: BrowserWindow | null = null
+if (testHeadless) app.on('browser-window-created', (_event, window) => keepTestWindowHidden(window))
 let history: HistoryEntry[] = []
 let settings: Settings = defaultSettings
 /** Последние сохранённые вкладки — их видят другие устройства в синхронизации. */
@@ -126,6 +130,7 @@ const aiPort = ((): number => {
   }
 })()
 if (aiPort) app.commandLine.appendSwitch('remote-debugging-port', String(aiPort))
+if (testFakeMedia) app.commandLine.appendSwitch('use-fake-device-for-media-stream')
 
 /** Открыл ли порт именно этот Masaki: его мог занять другой браузер с отладкой. */
 async function aiControlState(): Promise<{ port: number; listening: boolean }> {
@@ -501,24 +506,74 @@ async function loadSavedExtensions(): Promise<void> {
 
 // ---------- Сессия вкладок: права, загрузки ----------
 
-/** Файлы, скачанные в этом запуске: только их можно перетаскивать из списка загрузок. */
+/** Завершённые загрузки этого запуска: не открываем недокачанные и отменённые файлы. */
 const downloadedFiles = new Set<string>()
+/** interrupted бывает и до done: пока объект жив, загрузку ещё можно отменить. */
+const activeDownloads = new Map<string, Electron.DownloadItem>()
 const alwaysAllowed = new Set(['fullscreen', 'clipboard-sanitized-write', 'pointerLock', 'keyboardLock'])
 const permissionsFile = new JsonFile<Record<string, boolean>>('permissions.json')
+/** Решения «origin|право». Камера и микрофон — разные права: разрешённый микрофон не открывает камеру. */
 let decisions: Record<string, boolean> = {}
 const pendingPermissions = new Map<string, (allow: boolean, remember: boolean) => void>()
 
+/** Полный origin: http и https одного хоста, как и разные порты, — разные сайты. */
 function originOf(url: string): string {
   try {
-    return new URL(url).host || 'Этот файл'
+    const u = new URL(url)
+    // У file: origin непрозрачный — все локальные файлы делят одно решение, как и раньше.
+    if (u.protocol === 'file:') return 'file://'
+    return u.origin === 'null' ? url : u.origin
   } catch {
     return url
   }
 }
 
+/** Как показать origin человеку: https — просто хост, остальное — со схемой, как в Chrome. */
+function originLabel(origin: string): string {
+  if (origin === 'file://') return 'Этот файл'
+  return origin.startsWith('https://') ? origin.slice('https://'.length) : origin
+}
+
+/** Какие права нужны запросу media. Без типов не угадываем: нужны оба. */
+function mediaPermissions(types: readonly string[]): string[] {
+  const needs = [...(types.includes('video') ? ['camera'] : []), ...(types.includes('audio') ? ['microphone'] : [])]
+  return needs.length ? needs : ['camera', 'microphone']
+}
+
+/** Старые решения (по 0.5.1) хранились по хосту без схемы, а камера с микрофоном — одним правом media. */
+function migratePermissions(saved: Record<string, unknown>): Record<string, boolean> {
+  const result: Record<string, boolean> = {}
+  let changed = false
+  for (const [key, allow] of Object.entries(saved)) {
+    const cut = key.lastIndexOf('|')
+    const origin = key.slice(0, cut)
+    const permission = key.slice(cut + 1)
+    if (cut <= 0 || typeof allow !== 'boolean') {
+      changed = true
+    } else if (origin.includes('://')) {
+      result[key] = allow
+    } else {
+      changed = true
+      // Неизвестно, что разрешали — камеру или микрофон: пусть сайт спросит снова.
+      if (permission !== 'media') result[legacyOrigin(origin) + '|' + permission] = allow
+    }
+  }
+  if (changed) permissionsFile.write(result, 0)
+  return result
+}
+
+/** Такие права Chromium даёт только защищённым страницам: вне localhost решение принималось для https. */
+function legacyOrigin(host: string): string {
+  if (host === 'Этот файл') return 'file://'
+  const name = host.replace(/:\d+$/, '').replace(/^\[(.*)\]$/, '$1')
+  const local = name === 'localhost' || name.endsWith('.localhost') || name.startsWith('127.') || name === '::1'
+  return (local ? 'http://' : 'https://') + host
+}
+
 const permissionLabels: Record<string, string> = {
   geolocation: 'Местоположение',
-  media: 'Камера и микрофон',
+  camera: 'Камера',
+  microphone: 'Микрофон',
   notifications: 'Уведомления',
   'clipboard-read': 'Буфер обмена',
   midi: 'MIDI-устройства',
@@ -528,14 +583,15 @@ const permissionLabels: Record<string, string> = {
   'top-level-storage-access': 'Хранилище других сайтов'
 }
 
-function describePermission(permission: string, details: { mediaTypes?: string[] }): Omit<PermissionPrompt, 'id' | 'origin'> | null {
+/** asked — права, о которых спрашиваем (у media — только ещё не решённые camera/microphone). */
+function describePermission(permission: string, asked: string[]): Omit<PermissionPrompt, 'id' | 'origin'> | null {
   switch (permission) {
     case 'geolocation':
       return { kind: 'location', text: 'хочет знать, где вы находитесь' }
     case 'media': {
-      const types = details.mediaTypes ?? []
-      if (types.includes('video') && types.includes('audio')) return { kind: 'media', text: 'хочет использовать камеру и микрофон' }
-      if (types.includes('video')) return { kind: 'camera', text: 'хочет использовать камеру' }
+      const camera = asked.includes('camera')
+      if (camera && asked.includes('microphone')) return { kind: 'media', text: 'хочет использовать камеру и микрофон' }
+      if (camera) return { kind: 'camera', text: 'хочет использовать камеру' }
       return { kind: 'mic', text: 'хочет использовать микрофон' }
     }
     case 'notifications':
@@ -577,24 +633,31 @@ function setupBrowsingSession(): void {
     // На некоторых системах список языков задаёт сама ОС.
   }
 
-  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
+  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => {
     if (alwaysAllowed.has(permission)) return true
-    const known = decisions[originOf(requestingOrigin) + '|' + permission]
-    return known === true
+    const origin = originOf(requestingOrigin)
+    const type = details.mediaType
+    const asked = permission === 'media' ? mediaPermissions(type && type !== 'unknown' ? [type] : []) : [permission]
+    return asked.every((p) => decisions[origin + '|' + p] === true)
   })
 
   // Вопрос задаёт интерфейс Masaki (стеклянная плашка), а не системное окно Windows.
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
     if (alwaysAllowed.has(permission)) return callback(true)
-    const prompt = describePermission(permission, details as { mediaTypes?: string[] })
-    if (!prompt || !win) return callback(false)
+    if (!win) return callback(false)
     const origin = originOf(details.requestingUrl)
-    const key = origin + '|' + permission
-    if (key in decisions) return callback(decisions[key])
+    const needs = permission === 'media' ? mediaPermissions((details as Electron.MediaAccessPermissionRequest).mediaTypes ?? []) : [permission]
+    const known = needs.map((p) => decisions[origin + '|' + p] as boolean | undefined)
+    // Половину запроса Chromium выдать не умеет: запрещённая камера отклоняет и «камеру с микрофоном».
+    if (known.includes(false)) return callback(false)
+    const asked = needs.filter((_p, i) => known[i] === undefined)
+    if (!asked.length) return callback(true)
+    const prompt = describePermission(permission, asked)
+    if (!prompt) return callback(false)
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     pendingPermissions.set(id, (allow, remember) => {
       if (remember) {
-        decisions[key] = allow
+        for (const p of asked) decisions[origin + '|' + p] = allow
         permissionsFile.write(decisions, 300)
       }
       callback(allow)
@@ -608,7 +671,7 @@ function setupBrowsingSession(): void {
     }
     wc.once('destroyed', drop)
     wc.once('did-start-navigation', drop)
-    win.webContents.send('permission', { id, origin, ...prompt })
+    win.webContents.send('permission', { id, origin: originLabel(origin), ...prompt })
   })
 
   ses.on('will-download', (_e, item, wc) => {
@@ -619,21 +682,24 @@ function setupBrowsingSession(): void {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const target = uniquePath(app.getPath('downloads'), item.getFilename())
     item.setSavePath(target)
-    downloadedFiles.add(target)
-    const info = (): DownloadInfo => ({
+    activeDownloads.set(id, item)
+    const info = (state = item.getState()): DownloadInfo => ({
       id,
       filename: path.basename(item.getSavePath() || target),
       url: item.getURL(),
       path: item.getSavePath() || target,
-      state: item.getState(),
+      state,
+      canCancel: activeDownloads.has(id),
       received: item.getReceivedBytes(),
       total: item.getTotalBytes(),
       startedAt: item.getStartTime() * 1000
     })
     win?.webContents.send('download', info())
-    item.on('updated', () => win?.webContents.send('download', info()))
+    item.on('updated', (_ev, state) => win?.webContents.send('download', info(state)))
     item.once('done', (_ev, state) => {
-      win?.webContents.send('download', info())
+      activeDownloads.delete(id)
+      if (state === 'completed') downloadedFiles.add(item.getSavePath() || target)
+      win?.webContents.send('download', info(state))
       // Экспорт паролей (passwords.google.com, Chrome) — предложить перенести в Masaki и удалить файл.
       if (state === 'completed' && passwords.isPasswordExport(item.getSavePath())) passwords.csvDownloaded(item.getSavePath())
     })
@@ -665,12 +731,15 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     // на Windows — окно без рамки и свои кнопки окна.
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 24, y: 31 } } : { frame: false }),
     show: false,
+    skipTaskbar: testHeadless,
     title: 'Masaki',
     icon: app.isPackaged ? undefined : path.join(__dirname, '../../build/icon.png'),
     backgroundColor: dark ? '#0D1513' : '#E3F1EE',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       webviewTag: true,
+      backgroundThrottling: !testHeadless,
+      offscreen: testHeadless,
       sandbox: true,
       spellcheck: true
     }
@@ -678,6 +747,7 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
 
   macTrafficLights()
   win.once('ready-to-show', () => {
+    if (testHeadless) return
     if (onScreen && saved.maximized) win?.maximize()
     // Автотесты не забирают фокус: иначе то, что пользователь печатает, уходит в тестовое окно.
     if (process.env.MASAKI_TEST_INACTIVE) win?.showInactive()
@@ -752,6 +822,7 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     prefs.nodeIntegration = false
     prefs.contextIsolation = true
     prefs.sandbox = true
+    if (testHeadless) prefs.backgroundThrottling = false
     params.partition = PARTITION
   })
 
@@ -787,11 +858,86 @@ function runSelfTest(): void {
   })
 }
 
+// ---------- AI Mode с картинкой ----------
+// Адресом картинку в AI Mode не передать. Путь как у «Найти через Google Lens» в Chrome: картинка уходит
+// POST'ом в Lens прямо во вкладке (её куки, её прокси), Google отвечает переходом на результаты Lens
+// (`/search?vsrid=…&udm=26`), а у них есть вкладка AI Mode — тот же адрес с `udm=50` и вопросом в `q`.
+// Этот переход перехватываем и сразу открываем AI Mode. Капчу Google, если будет, проходят во вкладке.
+const LENS_UPLOAD = 'https://lens.google.com/v3/upload'
+/** Вкладки, ждущие ответа Lens, — с вопросом для AI Mode. */
+const lensAsks = new Map<number, { query: string; until: number }>()
+
+function aiModeFromLens(url: string, query: string): string | null {
+  try {
+    const u = new URL(url)
+    if (!/(^|\.)google\.[a-z.]+$/.test(u.hostname) || u.pathname !== '/search' || !u.searchParams.get('vsrid')) return null
+    u.searchParams.set('udm', '50')
+    u.searchParams.set('q', query)
+    if (!u.searchParams.has('aep')) u.searchParams.set('aep', '1')
+    return u.toString()
+  } catch {
+    return null
+  }
+}
+
+/** multipart/form-data с одним полем encoded_image, как у формы Lens. Большие снимки — не больше 1600 px. */
+function lensBody(image: string): { body: Buffer; boundary: string } | null {
+  const m = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(image)
+  if (!m) return null
+  let type = m[1]
+  let bytes: Buffer = Buffer.from(m[2], 'base64')
+  if (!bytes.length || bytes.length > 25 * 1024 * 1024) return null
+  const img = nativeImage.createFromBuffer(bytes)
+  if (!img.isEmpty()) {
+    const { width, height } = img.getSize()
+    const scale = 1600 / Math.max(width, height)
+    if (scale < 1) {
+      bytes = img.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'best' }).toJPEG(90)
+      type = 'image/jpeg'
+    }
+  }
+  const boundary = '----MasakiLens' + randomUUID().replace(/-/g, '')
+  const ext = type.split('/')[1].replace('jpeg', 'jpg')
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="encoded_image"; filename="image.${ext}"\r\nContent-Type: ${type}\r\n\r\n`),
+    bytes,
+    Buffer.from(`\r\n--${boundary}--\r\n`)
+  ])
+  return { body, boundary }
+}
+
+/** Отправить картинку в Lens во вкладке; ответ Lens вкладка сама переведёт в AI Mode. */
+function askLens(contents: WebContents, query: string, image: string): boolean {
+  const form = lensBody(image)
+  if (!form) return false
+  lensAsks.set(contents.id, { query, until: Date.now() + 60_000 })
+  const url = `${LENS_UPLOAD}?hl=${encodeURIComponent(app.getLocale() || 'ru')}&re=df&st=${Date.now()}&ep=gisbubb`
+  // Обещание отклонится, когда переход на результаты заменим AI Mode, — это не ошибка.
+  void contents
+    .loadURL(url, { postData: [{ type: 'rawData', bytes: form.body }], extraHeaders: `Content-Type: multipart/form-data; boundary=${form.boundary}` })
+    .catch(() => undefined)
+  return true
+}
+
 app.on('web-contents-created', (_e, contents) => {
   if (contents.getType() !== 'webview') return
   attachShortcuts(contents, true)
   watchWebview(contents)
   extensions.trackTab(contents)
+  // Ответ Lens на картинку для AI Mode: результаты Lens сразу заменяем на AI Mode с вопросом.
+  const toAiMode = (e: Electron.Event, url: string): void => {
+    const ask = lensAsks.get(contents.id)
+    if (!ask) return
+    if (Date.now() > ask.until) return void lensAsks.delete(contents.id)
+    const ai = aiModeFromLens(url, ask.query)
+    if (!ai) return
+    e.preventDefault()
+    lensAsks.delete(contents.id)
+    void contents.loadURL(ai).catch(() => undefined)
+  }
+  contents.on('will-redirect', toAiMode)
+  contents.on('will-navigate', toAiMode)
+  contents.once('destroyed', () => lensAsks.delete(contents.id))
   // Ctrl+колесо над страницей: Electron масштаб сам не меняет, а только сообщает направление.
   // Применяет интерфейс (как Ctrl+=, с запоминанием в tab.zoom) в той вкладке, над которой крутили.
   contents.on('zoom-changed', (_ev, dir) => send({ type: 'zoom', delta: dir === 'in' ? 1 : -1, wcId: contents.id }))
@@ -808,7 +954,7 @@ app.on('web-contents-created', (_e, contents) => {
     if (disposition === 'new-window' && features) {
       return {
         action: 'allow',
-        overrideBrowserWindowOptions: { width: 520, height: 700, autoHideMenuBar: true, backgroundColor: '#ffffff' }
+        overrideBrowserWindowOptions: { width: 520, height: 700, show: !testHeadless, autoHideMenuBar: true, backgroundColor: '#ffffff' }
       }
     }
     send({ type: 'open-url', url, background: disposition === 'background-tab' })
@@ -1025,13 +1171,74 @@ function registerIpc(): void {
     sync.onHistoryCleared()
   })
 
-  ipcMain.on('dl:open', (_e, p: string) => void shell.openPath(p))
-  ipcMain.on('dl:show', (_e, p: string) => shell.showItemInFolder(p))
+  const downloadUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
+    !!win && e.sender === win.webContents && e.senderFrame === win.webContents.mainFrame
+  const completedDownload = (e: Electron.IpcMainEvent, p: unknown): p is string =>
+    downloadUi(e) && typeof p === 'string' && downloadedFiles.has(p) && fs.existsSync(p)
+  ipcMain.handle('dl:cancel', (e, id: unknown) => {
+    if (!downloadUi(e) || typeof id !== 'string') return false
+    const item = activeDownloads.get(id)
+    if (!item) return false
+    const state = item.getState()
+    if (state !== 'progressing' && state !== 'interrupted') return false
+    item.cancel()
+    return true
+  })
+  ipcMain.on('dl:open', (e, p: unknown) => {
+    if (completedDownload(e, p)) void shell.openPath(p)
+  })
+  ipcMain.on('dl:show', (e, p: unknown) => {
+    if (completedDownload(e, p)) shell.showItemInFolder(p)
+  })
   // Перетащить скачанный файл в проводник или на сайт — только файлы из своего списка загрузок.
-  ipcMain.on('dl:drag', async (e, p: string) => {
-    if (!downloadedFiles.has(p) || !fs.existsSync(p)) return
+  ipcMain.on('dl:drag', async (e, p: unknown) => {
+    if (!completedDownload(e, p)) return
     const icon = await app.getFileIcon(p, { size: 'normal' })
     e.sender.startDrag({ file: p, icon })
+  })
+  ipcMain.handle('site:clear-cookies', async (e, wcId: unknown, expectedOrigin: unknown) => {
+    if (!downloadUi(e) || typeof wcId !== 'number' || !Number.isSafeInteger(wcId)) {
+      return { ok: false, error: 'Очистка доступна только из меню Masaki.' }
+    }
+    const contents = webContents.fromId(wcId)
+    const tabSession = session.fromPartition(PARTITION)
+    if (!contents || contents.isDestroyed() || contents.getType() !== 'webview' ||
+        contents.hostWebContents !== win?.webContents || contents.session !== tabSession) {
+      return { ok: false, error: 'Вкладка уже закрыта или недоступна.' }
+    }
+    const address = contents.getURL()
+    const site = siteCookieDomain(address)
+    if (!site) return { ok: false, error: 'Откройте обычный сайт для очистки кук.' }
+    const origin = new URL(address).origin
+    if (expectedOrigin !== origin || contents.mainFrame.origin !== origin) {
+      return { ok: false, error: 'Страница изменилась. Откройте меню заново и повторите.' }
+    }
+    let navigated = false
+    const onNavigation = (_event: Electron.Event, _url: string, isInPlace: boolean, isMainFrame: boolean): void => {
+      if (isMainFrame && !isInPlace) navigated = true
+    }
+    contents.on('did-start-navigation', onNavigation)
+    try {
+      // Фильтр Chromium учитывает родительские домены, пути, HttpOnly и разделённые куки.
+      // Только cookies: localStorage, IndexedDB, кэш и данные сторонних сайтов сохраняются.
+      await tabSession.clearData({ dataTypes: ['cookies'], origins: [origin], originMatchingMode: 'origin-in-all-contexts' })
+      await tabSession.cookies.flushStore()
+      // За время очистки пользователь мог перейти на другой сайт: его перезагружать не нужно.
+      const reloaded = !navigated && !contents.isDestroyed() && contents.mainFrame.origin === origin
+      if (reloaded) contents.reload()
+      return { ok: true, site, reloaded }
+    } catch {
+      return { ok: false, error: 'Не удалось очистить куки. Попробуйте ещё раз.' }
+    } finally {
+      if (!contents.isDestroyed()) contents.removeListener('did-start-navigation', onNavigation)
+    }
+  })
+  // AI Mode с картинкой из палитры: только окно интерфейса, только вкладка этого окна.
+  ipcMain.handle('ai:image', (e, wcId: unknown, query: unknown, image: unknown) => {
+    if (!downloadUi(e) || typeof wcId !== 'number' || typeof query !== 'string' || typeof image !== 'string') return false
+    const contents = webContents.fromId(wcId)
+    if (!contents || contents.isDestroyed() || contents.getType() !== 'webview' || contents.hostWebContents !== win?.webContents) return false
+    return askLens(contents, query.trim().slice(0, 2000), image)
   })
   ipcMain.handle('site:clear-data', (_e, origin: string) => {
     if (!/^https?:\/\/[^/]+$/.test(String(origin))) return
@@ -1062,6 +1269,19 @@ function registerIpc(): void {
     if (favicons[host]) return favicons[host]
     const data = await fetchAsDataUrl(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`)
     if (data) rememberFavicon(host, data)
+    return data
+  })
+  // Значок вкладки копией data: — интерфейсу нужно разобрать его пиксели (светлый глиф на белом кружке).
+  // Только окну интерфейса и только http(s); ответы держим в памяти, адреса значков повторяются.
+  const iconData = new Map<string, Promise<string | null>>()
+  ipcMain.handle('favicon:data', (e, iconUrl: unknown) => {
+    if (e.sender !== win?.webContents || typeof iconUrl !== 'string' || !/^https?:/i.test(iconUrl)) return null
+    let data = iconData.get(iconUrl)
+    if (!data) {
+      if (iconData.size >= 300) iconData.clear()
+      data = fetchAsDataUrl(iconUrl, 100_000)
+      iconData.set(iconUrl, data)
+    }
     return data
   })
   ipcMain.on('favicon:learn', async (_e, pageUrl: string, iconUrl: string) => {
@@ -1198,11 +1418,14 @@ function registerIpc(): void {
   })
   ipcMain.handle('permission:list', () =>
     Object.entries(decisions).map(([key, allow]) => {
-      const [origin, permission] = key.split('|')
-      return { origin, permission, label: permissionLabels[permission] ?? permission, allow }
+      const cut = key.lastIndexOf('|')
+      const origin = key.slice(0, cut)
+      const permission = key.slice(cut + 1)
+      return { origin, site: originLabel(origin), permission, label: permissionLabels[permission] ?? permission, allow }
     })
   )
-  ipcMain.on('permission:forget', (_e, origin: string, permission: string) => {
+  ipcMain.on('permission:forget', (_e, origin: unknown, permission: unknown) => {
+    if (typeof origin !== 'string' || typeof permission !== 'string') return
     delete decisions[origin + '|' + permission]
     permissionsFile.write(decisions, 0)
   })
@@ -1367,7 +1590,7 @@ if (!app.requestSingleInstanceLock()) {
     setDiscordEnabled(settings.addons.discord.enabled)
     history = (await historyFile.read()) ?? []
     favicons = (await faviconFile.read()) ?? {}
-    decisions = (await permissionsFile.read()) ?? {}
+    decisions = migratePermissions((await permissionsFile.read()) ?? {})
     lastTabs = (await sessionFile.read())?.tabs ?? []
     nativeTheme.themeSource = settings.scheme
     // Mac без меню «Правка» не копирует и не вставляет в полях (Cmd+C/V идут через него). Меню

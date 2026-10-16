@@ -8,6 +8,7 @@ import { clipboard, safeStorage, webContents, type WebContents } from 'electron'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
+import { getDomain } from 'tldts'
 import { JsonFile } from './store'
 import type { AutofillRequest, PasswordCsv, PasswordImportResult, PasswordItem, PasswordOffer } from '../shared/types'
 
@@ -86,20 +87,17 @@ export function originOf(url: string): string | null {
   }
 }
 
-/** Регистрируемый домен по-простому: github.com для gist.github.com, example.co.uk для www.example.co.uk. */
+/** Сайт для поддоменов: частные суффиксы (github.io и т. п.) разделяют независимые аккаунты. */
 function siteOf(origin: string): string {
-  let host: string
   try {
-    host = new URL(origin).hostname
+    const u = new URL(origin)
+    const host = u.hostname
+    // Локальные службы, IP и имена без домена независимы, в том числе на разных портах.
+    if (host === 'localhost' || host.endsWith('.localhost')) return u.origin
+    return getDomain(host, { allowPrivateDomains: true }) ?? u.origin
   } catch {
     return origin
   }
-  if (/^[\d.]+$/.test(host) || host.startsWith('[') || !host.includes('.')) return host
-  const parts = host.split('.')
-  const tld = parts[parts.length - 1]
-  const sld = parts[parts.length - 2]
-  const n = parts.length > 2 && tld.length === 2 && /^(co|com|net|org|gov|edu|ac|or|ne|go|msk|spb)$/.test(sld) ? 3 : 2
-  return parts.slice(-n).join('.')
 }
 
 const hostOf = (origin: string): string => {
@@ -336,7 +334,8 @@ export function matchesFor(origin: string | undefined): AutofillRequest['items']
   const site = siteOf(origin)
   const secure = origin.startsWith('https:')
   const exact = live().filter((l) => l.origin === origin)
-  const related = live().filter((l) => l.origin !== origin && (!secure || l.origin.startsWith('https:')) && siteOf(l.origin) === site)
+  // HTTPS-пароль нельзя раскрывать через HTTP, даже если домен тот же; обратный переход безопасен.
+  const related = live().filter((l) => l.origin !== origin && (secure || !l.origin.startsWith('https:')) && siteOf(l.origin) === site)
   return [...exact, ...related]
     .sort((a, b) => (a.origin === origin ? 0 : 1) - (b.origin === origin ? 0 : 1) || b.used - a.used)
     .slice(0, 12)

@@ -500,6 +500,13 @@ export function SettingsPage(): React.JSX.Element {
             Звёздочка рядом с кнопками навигации добавляет текущую страницу. Если избранного много, в панели оно
             раскрывается плиткой «+N», а в палитре ищется по названию.
           </p>
+          <div className="set-row">
+            <span>
+              Плитки в цвете темы
+              <small>Все плитки избранного — в цвете палитры Masaki, а не в цветах значков сайтов. Цвет, выбранный для плитки вручную, остаётся.</small>
+            </span>
+            <Switch label="Плитки в цвете темы" on={settings.favThemed} onChange={(favThemed) => set({ favThemed })} />
+          </div>
           <ShortcutEditor items={settings.favorites} onChange={(favorites) => set({ favorites })} addLabel="Добавить" />
         </section>
 

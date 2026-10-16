@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 const root = process.cwd()
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'masaki-perf-'))
-const app = await electron.launch({ args: [root], cwd: root, env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile }, timeout: 60000 })
+const app = await electron.launch({ args: [root], cwd: root, env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile }, timeout: 60000 })
 const page = await app.firstWindow()
 await page.waitForSelector('.ntp', { timeout: 30000 })
 const where = process.argv[2] || 'site'

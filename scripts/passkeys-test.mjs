@@ -4,6 +4,7 @@
 // чужой RP ID и синхронизация ключа на второй профиль через шифрованный сейф подставного Google.
 // Запуск: npm run test:passkeys. Снимки — test-output/pk-*.png.
 import { _electron as electron } from 'playwright'
+import { clickGuest as clickGuestInput } from './electron-input.mjs'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -151,7 +152,7 @@ async function launch(profile, tag) {
   const app = await electron.launch({
     args: [root],
     cwd: root,
-    env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url },
+    env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url },
     timeout: 60000
   })
   const win = await app.firstWindow()
@@ -193,8 +194,8 @@ async function open(m, url) {
 
 async function clickIn(m, selector) {
   const r = await inTab(m, `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
-  const box = await m.win.locator('webview.wv.on').boundingBox()
-  await m.win.mouse.click(box.x + r.x, box.y + r.y)
+  const wcId = await m.win.evaluate(() => document.querySelector('webview.wv.on').getWebContentsId())
+  await clickGuestInput(m.app, wcId, r.x, r.y)
 }
 
 const start = (m, op, o) => inTab(m, `start(${JSON.stringify(op)}, ${JSON.stringify(o)})`)

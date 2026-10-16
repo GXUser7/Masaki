@@ -18,7 +18,7 @@ const dev = SITE.startsWith('http://localhost')
 const app = await electron.launch({
   args: [root],
   cwd: root,
-  env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile },
+  env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile },
   timeout: 60000
 })
 const page = await app.firstWindow()

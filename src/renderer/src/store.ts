@@ -632,7 +632,8 @@ export const useStore = create<Store>((set, get) => ({
   upsertDownload(d) {
     set((s) => {
       const i = s.downloads.findIndex((x) => x.id === d.id)
-      if (i < 0) return { downloads: [d, ...s.downloads].slice(0, 30), popover: 'downloads' }
+      // Окно загрузок само не выскакивает (мешало, просьба пользователя): прогресс видно на кнопке и в доке.
+      if (i < 0) return { downloads: [d, ...s.downloads].slice(0, 30) }
       const downloads = s.downloads.slice()
       downloads[i] = d
       return { downloads }

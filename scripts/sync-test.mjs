@@ -31,7 +31,7 @@ async function launch(profile, tag, env = {}) {
   const app = await electron.launch({
     args: [root],
     cwd: root,
-    env: { ...process.env, MASAKI_SYNC_CLIENT: '', ...env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url },
+    env: { ...process.env, MASAKI_SYNC_CLIENT: '', ...env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url },
     timeout: 60000
   })
   const page = await app.firstWindow()

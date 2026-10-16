@@ -4,6 +4,35 @@ import { installPasskeys } from './passkey-page'
 
 // Скрипт для страниц во вкладках (изолированный мир: сама страница его не видит).
 
+// Прозрачный документ опирается на Canvas браузера, а не на тему интерфейса Masaki.
+// Сообщаем цвет подложки отдельно: фоны html/body не переписываем, чтобы сохранить CSS сайта.
+let canvasColor = ''
+let canvasFrame = 0
+function sendCanvas(): void {
+  canvasFrame = 0
+  const root = document.documentElement
+  if (!root) return
+  const probe = document.createElement('span')
+  probe.style.cssText = 'display:none!important;background-color:Canvas!important;color-scheme:inherit!important'
+  root.appendChild(probe)
+  const color = getComputedStyle(probe).backgroundColor
+  probe.remove()
+  if (color === canvasColor) return
+  canvasColor = color
+  ipcRenderer.sendToHost('page:canvas', color)
+}
+const scheduleCanvas = (): void => {
+  if (!canvasFrame) canvasFrame = requestAnimationFrame(sendCanvas)
+}
+window.addEventListener('DOMContentLoaded', () => {
+  sendCanvas()
+  new MutationObserver(scheduleCanvas).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
+  // meta color-scheme и поздно загруженные стили тоже могут менять системный Canvas.
+  if (document.head) new MutationObserver(scheduleCanvas).observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['content', 'media', 'disabled'] })
+})
+window.addEventListener('load', scheduleCanvas, true)
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', scheduleCanvas)
+
 // 1. На странице входа Google прячем признаки Chromium, чтобы вход не упирался в «Возможно, этот браузер
 // или приложение небезопасны». Заголовки и user agent для этого адреса подменяет главный процесс (Firefox ESR).
 if (location.hostname === 'accounts.google.com') {
@@ -246,15 +275,28 @@ document.addEventListener(
 )
 
 // 5. Куда листают страницу: в свёрнутом режиме капсула сжимается, пока читают вниз.
+// Проверки от дребезга. Худеющий док делает страницу выше, и браузер сам сдвигает прокрутку: у низа
+// страницы — вверх, у вёрстки на vh — куда придётся. Это не чтение: сразу после смены размера положение
+// только запоминаем, иначе док качался бы «маленький — большой» без конца. И слушаем лишь главную прокрутку
+// страницы: списки, карусели и чаты внутри неё направление чтения не задают.
 const scrollTops = new WeakMap<EventTarget, number>()
 let scrollDir = ''
+let resizedAt = -Infinity
+window.addEventListener('resize', () => {
+  resizedAt = performance.now()
+})
 window.addEventListener(
   'scroll',
   (e) => {
     const t = e.target
     const doc = t === document || t === document.documentElement || t === document.body
+    if (!doc && ((t as Element).clientHeight < innerHeight * 0.5 || (t as Element).clientWidth < innerWidth * 0.4)) return
     const y = doc ? window.scrollY : (t as Element).scrollTop
     const key = doc ? document : (t as EventTarget)
+    if (performance.now() - resizedAt < 400) {
+      scrollTops.set(key, y)
+      return
+    }
     const last = scrollTops.get(key) ?? 0
     if (Math.abs(y - last) < 24 && y > 8) return
     scrollTops.set(key, y)
@@ -266,8 +308,12 @@ window.addEventListener(
   { passive: true, capture: true }
 )
 
-// 6. Свайп двумя пальцами по тачпаду — назад/вперёд, как в Chrome. Если под пальцами есть что
-// листать вбок (карусель, таблица), жест не перехватываем. Щелчки колёсика мыши вбок не считаем.
+// 6. Свайп двумя пальцами по тачпаду — назад/вперёд, как в Chrome. Жест — серия событий колеса без паузы
+// дольше 140 мс. Что это — свайп или прокрутка, решаем по первым пикселям и до конца серии не меняем:
+// прокрутка, ушедшая вбок, «назад» не станет. Жест принадлежит странице, если под пальцами есть что листать
+// вбок (карусель, таблица), если страница сама забрала колесо (preventDefault — Google Таблицы, карты,
+// редакторы листают себя сами) или если за время жеста что-то на странице уехало вбок (своя полоса
+// прокрутки рядом с сеткой). Щелчки колёсика мыши вбок не считаем.
 function canScrollX(from: Element | null, dir: number): boolean {
   for (let n = from; n && n !== document.documentElement; n = n.parentElement) {
     if (n.scrollWidth <= n.clientWidth + 1) continue
@@ -281,35 +327,78 @@ function canScrollX(from: Element | null, dir: number): boolean {
   return false
 }
 
+/** undecided — пальцы ещё не сдвинулись настолько, чтобы понять; other — прокрутка или жест страницы. */
+let gesture: null | 'undecided' | 'swipe' | 'other' = null
+/** Было ли что листать назад/вперёд там, где жест начался, — до того, как страница успела сдвинуться. */
+let swipeRoom = { back: false, fwd: false }
 let swipeDx = 0
-let swiping = false
+let swipeDy = 0
 let swipeEnd: ReturnType<typeof setTimeout> | undefined
 let swipeFrame = 0
+
+function endGesture(): void {
+  cancelAnimationFrame(swipeFrame)
+  swipeFrame = 0
+  if (gesture === 'swipe') ipcRenderer.sendToHost('swipe-end', swipeDx)
+  gesture = null
+}
+
+/** Жест оказался страничным: стрелку убираем без перехода, до конца серии больше не вмешиваемся. */
+function dropSwipe(): void {
+  if (gesture === 'swipe') {
+    cancelAnimationFrame(swipeFrame)
+    swipeFrame = 0
+    ipcRenderer.sendToHost('swipe-end', 0)
+  }
+  if (gesture) gesture = 'other'
+}
+
 window.addEventListener(
   'wheel',
   (e) => {
-    if (e.ctrlKey || e.shiftKey || e.deltaMode !== 0) return
-    const ax = Math.abs(e.deltaX)
-    if (!swiping) {
-      if (ax < 2 || ax < Math.abs(e.deltaY) * 1.5) return
-      if (ax >= 100 && ax % 120 === 0) return // колёсико мыши с наклоном
-      if (canScrollX(e.target as Element | null, Math.sign(e.deltaX))) return
-      swiping = true
-      swipeDx = 0
+    if (!e.isTrusted) return
+    clearTimeout(swipeEnd)
+    swipeEnd = setTimeout(endGesture, 140)
+    if (!gesture) {
+      gesture = 'undecided'
+      swipeDx = swipeDy = 0
+      const from = e.target as Element | null
+      swipeRoom = { back: canScrollX(from, -1), fwd: canScrollX(from, 1) }
     }
+    if (gesture === 'other') return
+    const ax = Math.abs(e.deltaX)
+    // Ctrl — масштаб, Shift — прокрутка колесом вбок, строки и страницы — колесо мыши, кратное 120 — его наклон.
+    if (e.ctrlKey || e.shiftKey || e.deltaMode !== 0 || (ax >= 100 && ax % 120 === 0)) return dropSwipe()
     swipeDx += e.deltaX
-    if (!swipeFrame) {
+    swipeDy += e.deltaY
+    if (gesture === 'undecided' && Math.abs(swipeDx) + Math.abs(swipeDy) >= 4) {
+      const sideways = Math.abs(swipeDx) >= Math.abs(swipeDy) * 1.5
+      gesture = sideways && !(swipeDx < 0 ? swipeRoom.back : swipeRoom.fwd) ? 'swipe' : 'other'
+    }
+    // Наш слушатель стоит раньше страничных: об отмене узнаём, когда событие обойдёт всех.
+    setTimeout(() => {
+      if (e.defaultPrevented) dropSwipe()
+    })
+    if (gesture === 'swipe' && !swipeFrame) {
       swipeFrame = requestAnimationFrame(() => {
         swipeFrame = 0
-        ipcRenderer.sendToHost('swipe', swipeDx)
+        if (gesture === 'swipe') ipcRenderer.sendToHost('swipe', swipeDx)
       })
     }
-    clearTimeout(swipeEnd)
-    swipeEnd = setTimeout(() => {
-      ipcRenderer.sendToHost('swipe-end', swipeDx)
-      swiping = false
-      swipeDx = 0
-    }, 140)
+  },
+  { passive: true, capture: true }
+)
+
+// Что-то уехало вбок, пока идёт жест, — значит, пальцы листают страницу, а не историю.
+const scrollLefts = new WeakMap<object, number>()
+window.addEventListener(
+  'scroll',
+  (e) => {
+    const el = e.target === document ? document.scrollingElement : (e.target as Element)
+    if (!el) return
+    const left = el.scrollLeft
+    if (left !== (scrollLefts.get(el) ?? 0)) dropSwipe()
+    scrollLefts.set(el, left)
   },
   { passive: true, capture: true }
 )

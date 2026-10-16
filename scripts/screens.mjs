@@ -50,7 +50,7 @@ await new Promise((r) => site.listen(0, '127.0.0.1', r))
 const SITE = `http://localhost:${site.address().port}`
 
 // ---------- Masaki ----------
-const app = await electron.launch({ args: [root], cwd: root, env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile }, timeout: 60000 })
+const app = await electron.launch({ args: [root], cwd: root, env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile }, timeout: 60000 })
 const win = await app.firstWindow()
 await win.waitForSelector('.stage', { timeout: 30000 })
 await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setBounds({ x: 0, y: 0, width: 1440, height: 900 }))

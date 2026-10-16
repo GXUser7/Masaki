@@ -193,7 +193,43 @@ async function rescanAll(): Promise<void> {
   )
   notify()
 }
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => void rescanAll())
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  void rescanAll()
+  glyphs.clear()
+  glyphListeners.forEach((fn) => fn())
+})
+
+// ---------- Значок вкладки: светлый глиф ----------
+// Значки вкладок и адреса лежат на белом кружке, а светлый глиф на прозрачном (тёмная версия значка
+// GitHub и т. п.: сайт видит тёмную тему и отдаёт белый значок) на нём пропадает — ему нужен тёмный кружок.
+// Значок вкладки — адрес чужой картинки, canvas её пикселей без CORS не отдаст: берём копию data: у main.
+
+const glyphs = new Map<string, boolean | null>()
+const glyphListeners = new Set<() => void>()
+
+async function scanGlyph(src: string): Promise<void> {
+  const data = src.startsWith('data:') ? src : await window.masaki.faviconData(src).catch(() => null)
+  glyphs.set(src, data ? (await scanIcon(data)).lightGlyph : false)
+  glyphListeners.forEach((fn) => fn())
+}
+
+/** Светлый ли значок на прозрачном фоне — тогда под ним нужен тёмный кружок. */
+export function useLightGlyph(src: string | undefined): boolean {
+  const [, force] = useState(0)
+  useEffect(() => {
+    const fn = (): void => force((n) => n + 1)
+    glyphListeners.add(fn)
+    return () => {
+      glyphListeners.delete(fn)
+    }
+  }, [])
+  useEffect(() => {
+    if (!src || glyphs.has(src)) return
+    glyphs.set(src, null)
+    void scanGlyph(src)
+  })
+  return !!src && glyphs.get(src) === true
+}
 
 /** Цвета самого значка (без выбранного цвета): для кружка «Авто» в меню плитки. */
 export function siteIconColors(url: string): TileColors | null {

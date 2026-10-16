@@ -47,7 +47,10 @@ export interface PermissionPrompt {
 }
 
 export interface SitePermission {
+  /** Полный origin — по нему решение и сбрасывается. */
   origin: string
+  /** Как показать сайт: https — без схемы, http и порты — как есть. */
+  site: string
   permission: string
   label: string
   allow: boolean
@@ -202,6 +205,8 @@ export interface Settings {
   clock: ClockSettings
   shortcuts: Shortcut[]
   favorites: Shortcut[]
+  /** Плитки избранного в цвете темы, а не в цветах значков сайтов (свой цвет плитки главнее). */
+  favThemed: boolean
   addons: AddonSettings
   /** Через сколько часов неактивные вкладки уходят в архив; 0 — никогда. */
   archiveAfter: number
@@ -218,6 +223,7 @@ export const defaultSettings: Settings = {
   sidebarCollapsed: false,
   windowButtonsTucked: false,
   aiDefault: false,
+  favThemed: false,
   archiveAfter: 0,
   aiControl: false,
   clock: { style: 'flex', color: 'auto', size: 'dynamic', rounded: true, thickness: 45 },
@@ -304,6 +310,8 @@ export interface DownloadInfo {
   url: string
   path: string
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'
+  /** interrupted до done ещё можно отменить; завершённый объект больше не используется. */
+  canCancel: boolean
   received: number
   total: number
   startedAt: number
@@ -603,6 +611,7 @@ export interface MasakiApi {
   }
   downloads: {
     onUpdate(cb: (d: DownloadInfo) => void): () => void
+    cancel(id: string): Promise<boolean>
     open(path: string): void
     showInFolder(path: string): void
     /** Начать перетаскивание скачанного файла из списка загрузок в проводник или сайт. */
@@ -610,6 +619,8 @@ export interface MasakiApi {
   }
   /** Данные сайтов: очистить для одного адреса или кэш целиком (команды палитры). */
   site: {
+    /** Только куки сайта открытой вкладки и его поддоменов; хранилища и кэш остаются. */
+    clearCookies(wcId: number, expectedOrigin: string): Promise<{ ok: boolean; site?: string; reloaded?: boolean; error?: string }>
     clearData(origin: string): Promise<void>
     clearCache(): Promise<void>
   }
@@ -643,6 +654,10 @@ export interface MasakiApi {
   captureTab(wcId: number): Promise<string | null>
   /** Значок сайта (data URL), как на плитках новой вкладки Chrome. */
   favicon(url: string): Promise<string | null>
+  /** Значок вкладки по его адресу — копией data:, чтобы интерфейс мог разобрать пиксели. */
+  faviconData(iconUrl: string): Promise<string | null>
+  /** Спросить AI Mode о картинке (data:image/…) во вкладке wcId: через Google Lens, ответ — AI Mode с вопросом. */
+  aiImage(wcId: number, query: string, image: string): Promise<boolean>
   /** Запомнить значок, который сайт сам показал во вкладке: он точнее значка из сервиса Google. */
   learnFavicon(pageUrl: string, iconUrl: string): void
   onFaviconUpdated(cb: (host: string) => void): () => void

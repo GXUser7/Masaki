@@ -234,6 +234,12 @@ input {
   height: 100%;
   border: 0;
   visibility: hidden;
+  /* У обычной страницы свой Canvas; тема панели не должна становиться фоном чёрного текста. */
+  background-color: var(--site-canvas, Canvas);
+}
+.wv.clear:not(.pane) {
+  /* В split нет общей подложки: каждая половина сохраняет собственный цвет сайта. */
+  background-color: transparent;
 }
 .wv.on {
   visibility: visible;
@@ -354,6 +360,10 @@ input {
 }
 .fav.img {
   background: rgba(255, 255, 255, 0.92);
+}
+/* Светлый значок на прозрачном (useLightGlyph) — на тёмном кружке, иначе белое на белом. */
+.fav.img.dk {
+  background: color-mix(in srgb, var(--primary) 14%, #1c1c20);
 }
 .fav img {
   width: 18px;
@@ -658,9 +668,56 @@ input {
 }
 .dl-btn.busy {
   color: var(--primary);
-  background: conic-gradient(var(--primary) calc(var(--p) * 1turn), transparent 0) border-box;
-  -webkit-mask:
-    radial-gradient(circle, #000 0 15px, transparent 15.5px 17px, #000 17.5px) border-box;
+}
+
+/* Круговой индикатор M3 Expressive (ProgressRing): волнистая дуга, зазор, тихая дорожка; значок внутри. */
+.pring {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  color: var(--primary);
+}
+/* Специфичнее, чем .ib svg (22×22): иначе в кнопке кольцо сжималось в угол. */
+.pring > .pring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.pring > svg:not(.pring-svg) {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+.pring-track,
+.pring-wave {
+  fill: none;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition:
+    stroke-dasharray 0.5s var(--spring),
+    stroke-dashoffset 0.5s var(--spring),
+    opacity 0.2s;
+}
+.pring-track {
+  stroke: color-mix(in srgb, var(--primary) 26%, transparent);
+}
+.pring-wave {
+  stroke: var(--primary);
+}
+.pring.spin .pring-svg {
+  animation: pring-spin 1.2s linear infinite;
+}
+@keyframes pring-spin {
+  to {
+    transform: rotate(1turn);
+  }
 }
 
 .ai-bg {
@@ -764,6 +821,46 @@ input {
 }
 .cmd-in input::placeholder {
   color: var(--on-sv);
+}
+/* Картинка для AI Mode в строке палитры: миниатюра с крестиком и кнопка «добавить». */
+.pal-pic {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--glass-hi);
+  box-shadow: 0 0 0 2px var(--primary);
+}
+.pal-pic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.pal-pic-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  padding: 0;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--glass-pop);
+  color: var(--on-surface);
+  cursor: pointer;
+}
+.pal-pic-x svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+.cmd-in .pal-pic-add {
+  flex: none;
 }
 .chip {
   height: 40px;
@@ -1010,7 +1107,11 @@ input {
   text-align: left;
   cursor: pointer;
 }
-.dl-main:hover {
+.dl-main:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.dl-main:not(:disabled):hover {
   background: var(--hov);
 }
 .dl-name {
@@ -3832,6 +3933,16 @@ input {
 .light .fvt:hover .tile-shape {
   fill: var(--tl, var(--tone));
 }
+/* Плитки в цвете темы (настройка): тональный цвет палитры уже спокойный — без приглушения,
+   а при наведении «оживают» до главного контейнера. */
+.dark .fvt .tile.themed .tile-shape,
+.light .fvt .tile.themed .tile-shape {
+  fill: var(--sc);
+}
+.dark .fvt:hover .tile.themed .tile-shape,
+.light .fvt:hover .tile.themed .tile-shape {
+  fill: var(--pc);
+}
 .fvt {
   height: 54px;
 }
@@ -4327,12 +4438,160 @@ input {
   transition:
     opacity 0.3s 0.1s,
     transform 0.6s var(--spring) 0.1s,
-    visibility 0s;
+    visibility 0s,
+    grid-template-rows 0.45s var(--spring);
 }
 .capz > .capsule,
 .dk-tabs,
-.dk-right > .mplayer {
+.dk-right > .mplayer,
+.dk-right > .dk-dl-wrap {
   pointer-events: auto;
+}
+
+/* Загрузка в доке на месте плеера (DockDownloads): играет что-то — место остаётся плееру. */
+.dk-right:has(> .mplayer) > .dk-dl-wrap {
+  display: none;
+}
+.dk-dl-wrap {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+.dk-dl {
+  height: 52px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 6px 16px 6px 6px;
+  border-radius: 26px;
+  display: flex;
+  align-items: center;
+  background: var(--glass-pop);
+  backdrop-filter: blur(var(--blur)) saturate(140%);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--lift);
+  animation: pop 0.45s var(--spring);
+  transition:
+    height 0.45s var(--spring),
+    padding 0.45s var(--spring),
+    border-radius 0.45s var(--spring);
+}
+.dk-dl-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--on-surface);
+  cursor: pointer;
+  text-align: left;
+}
+/* Индикатор загрузки на острове — тот же ProgressRing, что на кнопке, покрупнее. */
+.pring.dk-dl-ring {
+  width: 40px;
+  height: 40px;
+  transition:
+    width 0.45s var(--spring),
+    height 0.45s var(--spring);
+}
+.pring.dk-dl-ring > svg:not(.pring-svg) {
+  width: 19px;
+  height: 19px;
+}
+.dk-dl-t {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dk-dl-t b,
+.dk-dl-name {
+  max-width: 170px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 650;
+}
+.dk-dl-t small,
+.dk-dl-sub {
+  font-size: 12px;
+  color: var(--on-sv);
+}
+/* Список всех идущих загрузок над островом — выезжает при наведении, если загрузок несколько. */
+.dk-dl-list {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: 300px;
+  max-height: 50vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 8px;
+  border-radius: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--glass-pop);
+  backdrop-filter: blur(var(--blur)) saturate(140%);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--lift);
+  transform-origin: bottom right;
+  animation: dk-dl-in 0.45s var(--spring);
+}
+@keyframes dk-dl-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+}
+.dk-dl-row {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 12px 14px;
+  border-radius: 14px;
+}
+.dk-dl-name {
+  max-width: 100%;
+}
+.dk-dl-bar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 6px;
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--on-surface) 15%, transparent);
+}
+.dk-dl-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform-origin: left;
+  transform: scaleX(var(--p, 0));
+  background: var(--primary);
+  transition: transform 0.3s;
+}
+/* Худой док: остаётся кольцо, как обложка у плеера. */
+.capz.small .dk-dl {
+  height: 32px;
+  padding: 2px;
+  border-radius: 16px;
+}
+.capz.small .dk-dl-t {
+  display: none;
+}
+.capz.small .pring.dk-dl-ring {
+  width: 28px;
+  height: 28px;
+}
+.capz.small .pring.dk-dl-ring > svg:not(.pring-svg) {
+  width: 14px;
+  height: 14px;
 }
 /* Страница заканчивается над доком и не перекрывается им. */
 .collapsed .card {
@@ -4606,15 +4865,16 @@ input {
 }
 .capz.small {
   grid-template-rows: 34px;
+  /* Вся полоса под страницей раскрывает док наведением (Dock в Chrome.tsx), а не только пилюли.
+     Окно за полосой перетаскивать нельзя, пока док маленький, — тянуть можно за капсулу и края. */
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 .capz.small .capsule {
   height: 34px;
   padding: 2px;
   border-radius: 17px;
 }
-.capz.small .capsule > .ib,
-.capz.small .cap-div,
-.capz.small .cap-w,
 .capz.small .abar-nav,
 .capz.small .a-star,
 .capz.small .a-rel {
@@ -4661,8 +4921,7 @@ input {
   box-shadow: 0 0 0 2px var(--primary);
 }
 .capz.small .dk-t.on::after,
-.capz.small .dk-g,
-.capz.small .dk-add {
+.capz.small .dk-g {
   display: none;
 }
 .capz.small .dk-more {
@@ -4678,7 +4937,6 @@ input {
   border-radius: 16px;
   gap: 8px;
 }
-.capz.small .mplayer.dock .mp-ctl,
 .capz.small .mplayer.dock .mp-prog,
 .capz.small .mplayer.dock .mp-t small,
 .capz.small .mplayer.dock .mp-btn {
@@ -4701,6 +4959,96 @@ input {
 .capz.small .mplayer.dock .mp-art img,
 .capz.small .mplayer.dock .mp-art .fav {
   border-radius: 50%;
+}
+
+/* Док меняет размер перетеканием, а не скачком: ширины едут той же пружиной, что и высоты островов, а
+   лишние кнопки сжимаются в ноль и гаснут (display: none выдернул бы их из ряда сразу). Меняется вёрстка
+   только дока — размер страницы (webview) на каждом кадре не пересчитывается. Класс morph держится, пока
+   док перетекает (Dock в Chrome.tsx): в остальное время ширины меняются сразу, как раньше, — иначе
+   вкладки тянулись бы за размером окна. */
+.capz {
+  interpolate-size: allow-keywords;
+}
+.capz.morph .capsule .abar {
+  transition:
+    width 0.45s var(--spring),
+    height 0.45s var(--spring),
+    padding 0.45s var(--spring),
+    border-radius 0.45s var(--spring),
+    background-color 0.3s;
+}
+.capz.morph .addr {
+  transition:
+    height 0.45s var(--spring),
+    background-color 0.3s,
+    border-radius 0.45s var(--spring);
+}
+.capz.morph .dk-t {
+  transition:
+    width 0.45s var(--spring),
+    height 0.45s var(--spring),
+    box-shadow 0.3s,
+    background-color 0.2s,
+    border-radius 0.45s var(--spring);
+}
+.capz.morph .dk-t .fav,
+.capz.morph .mplayer.dock .mp-art {
+  transition:
+    width 0.45s var(--spring),
+    height 0.45s var(--spring),
+    padding 0.45s var(--spring),
+    border-radius 0.45s var(--spring);
+}
+/* Уходящее: ширина и отступы — в ноль, потом прячется совсем (visibility — после сжатия, чтобы
+   нельзя было попасть Tab'ом или щелчком в невидимую кнопку). Отрицательный отступ съедает gap ряда. */
+.capz.morph .capsule > .ib,
+.capz.morph .cap-div,
+.capz.morph .cap-w,
+.capz.morph .dk-add,
+.capz.morph .mplayer.dock .mp-ctl {
+  transition:
+    width 0.45s var(--spring),
+    margin 0.45s var(--spring),
+    padding 0.45s var(--spring),
+    opacity 0.25s 0.1s,
+    visibility 0s,
+    border-radius 0.35s var(--snap),
+    transform 0.35s var(--snap),
+    background-color 0.2s,
+    color 0.2s;
+}
+.capz.small .capsule > .ib,
+.capz.small .cap-div,
+.capz.small .cap-w,
+.capz.small .dk-add,
+.capz.small .mplayer.dock .mp-ctl {
+  width: 0;
+  min-width: 0;
+  padding-inline: 0;
+  margin-inline: -1px;
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.capz.morph.small .capsule > .ib,
+.capz.morph.small .cap-div,
+.capz.morph.small .cap-w,
+.capz.morph.small .dk-add,
+.capz.morph.small .mplayer.dock .mp-ctl {
+  transition:
+    width 0.45s var(--spring),
+    margin 0.45s var(--spring),
+    padding 0.45s var(--spring),
+    opacity 0.15s,
+    visibility 0s 0.45s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .capz,
+  .capz * {
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+  }
 }
 
 /* Список всех вкладок над островом вкладок («ещё N»). */
@@ -5006,7 +5354,7 @@ input {
   flex: 1;
   border-radius: 20px;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--site-canvas, Canvas);
 }
 
 /* ---------- Две вкладки рядом ---------- */
@@ -5018,7 +5366,6 @@ input {
   visibility: visible;
   border-radius: var(--r-l);
   overflow: hidden;
-  background: var(--page);
 }
 .split-div {
   position: absolute;

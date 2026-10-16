@@ -209,12 +209,19 @@ npm run pack       # dist/win-unpacked/Masaki.exe
 npm run dist       # установщик dist/Masaki-Setup-*.exe
 ```
 
-Тесты (Playwright, каждый — во временном профиле):
+Тесты (Playwright, каждый — во временном профиле). Проверки запускаются в скрытом режиме:
+тестовый браузер и окна расширений не появляются на экране и не забирают фокус,
+снимки по-прежнему сохраняются в `test-output/`.
 
 ```bash
 npm run typecheck
 npm run smoke           # основной сценарий, снимки окна в test-output/
 npm run test:addons     # аддоны и функции Chrome в контекстном меню
+npm run test:downloads  # отмена загрузки и целостность скачанного файла
+npm run test:site-data  # очистка кук текущего сайта и изоляция остальных данных
+npm run test:permissions # разрешения сайтов: камера и микрофон отдельно, http и https независимы
+npm run test:store      # надёжная запись файлов профиля (без запуска браузера)
+npm run test:ai-image   # картинка в AI Mode из палитры (подставной Google Lens)
 npm run test:import     # перенос из Chrome на подставной папке Chrome
 npm run test:sync       # синхронизация через подставной Google
 npm run test:passwords  # менеджер паролей и его шифрованная синхронизация
@@ -223,6 +230,12 @@ npm run test:youcloud   # YouCloud: мост, мини-плеер, поиск и
 npm run perf            # плавность сворачивания боковой панели
 npm run screens         # демо-снимки для README (docs/screens); живые — docs/screens/live, снимаются руками
 ```
+
+Для ручной самопроверки без окон задайте `MASAKI_TEST_HEADLESS=1` вместе с
+`MASAKI_PROFILE=<временная папка>`. Для видимого запуска тестов задайте
+`MASAKI_TEST_HEADLESS=0`; окно откроется без захвата фокуса.
+Системное окно «Картинка в картинке» в скрытом прогоне пропускается.
+Замеры `perf` в этом режиме включают затраты на внеэкранную отрисовку и не заменяют замер обычного окна.
 
 Как всё устроено, принятые решения и грабли, на которые уже наступали, — в [AGENTS.md](AGENTS.md).
 

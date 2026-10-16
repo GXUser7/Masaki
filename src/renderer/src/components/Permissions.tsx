@@ -64,13 +64,13 @@ export function PermissionList(): React.JSX.Element {
       {items.map((it) => (
         <div key={it.origin + it.permission} className="sc-item">
           <span className="sc-item-t">
-            <b>{it.origin}</b>
+            <b>{it.site}</b>
             <small>{it.label}</small>
           </span>
           <span className={'perm-state' + (it.allow ? ' ok' : '')}>{it.allow ? 'Разрешено' : 'Запрещено'}</span>
           <button
             className="ib"
-            aria-label={`Сбросить решение для ${it.origin}`}
+            aria-label={`Сбросить решение для ${it.site}`}
             title="Сбросить — сайт спросит снова"
             onClick={() => {
               window.masaki.permissions.forget(it.origin, it.permission)

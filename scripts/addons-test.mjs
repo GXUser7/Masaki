@@ -1,5 +1,6 @@
 // Тест аддонов и функций Chrome в меню: прозрачные сайты, видео, QR, блокировщик, расширение.
 import { _electron as electron } from 'playwright'
+import { clickGuest as clickGuestInput } from './electron-input.mjs'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,7 +16,8 @@ fs.writeFileSync(
   JSON.stringify({ addons: { extensions: [path.join(fixtures, 'ext-banner'), path.join(fixtures, 'ext-action')] } })
 )
 
-const app = await electron.launch({ args: [root], cwd: root, env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile }, timeout: 60000 })
+const headless = process.env.MASAKI_TEST_HEADLESS !== '0'
+const app = await electron.launch({ args: [root], cwd: root, colorScheme: null, env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_TEST_HEADLESS: headless ? '1' : '0', MASAKI_PROFILE: profile }, timeout: 60000 })
 const page = await app.firstWindow()
 const logs = []
 page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`))
@@ -35,10 +37,56 @@ async function openAddons() {
 const open = (url) =>
   app.evaluate(({ BrowserWindow }, u) => BrowserWindow.getAllWindows()[0].webContents.send('command', { type: 'open-url', url: u }), url)
 
+async function clickInGuest(x, y, options) {
+  const wcId = await page.evaluate(() => document.querySelector('webview.wv.on').getWebContentsId())
+  await clickGuestInput(app, wcId, x, y, options)
+}
+
 let failed = false
 try {
   await page.waitForSelector('.ntp', { timeout: 30000 })
   await page.waitForTimeout(1200)
+
+  console.log('шаг Canvas обычной страницы без аддона')
+  await open(fileUrl('glass-theme.html'))
+  await page.waitForFunction(() => {
+    const w = document.querySelector('webview.wv.on')
+    return w && getComputedStyle(w).backgroundColor === 'rgb(255, 255, 255)'
+  })
+  await page.waitForTimeout(500)
+  await shot('19-page-canvas')
+  const normalGuest = await page.evaluate(() => document.querySelector('webview.wv.on').getWebContentsId())
+  const normal = await app.evaluate(({ webContents }, id) => webContents.fromId(id).executeJavaScript(`({
+    prefersDark: matchMedia('(prefers-color-scheme: dark)').matches,
+    rootBg: getComputedStyle(document.documentElement).backgroundColor,
+    glass: !!window.__masakiGlass
+  })`), normalGuest)
+  if (!normal.prefersDark || normal.glass || normal.rootBg !== 'rgba(0, 0, 0, 0)') throw new Error('Подложка изменила CSS или предпочтение темы сайта: ' + JSON.stringify(normal))
+  await app.evaluate(({ webContents }, id) => webContents.fromId(id).executeJavaScript(`
+    document.documentElement.style.colorScheme = 'dark'; document.body.style.color = 'CanvasText';
+    document.querySelector('header').style.backgroundColor = 'Canvas'; 1
+  `), normalGuest)
+  await page.waitForFunction(() => {
+    const color = getComputedStyle(document.querySelector('webview.wv.on')).backgroundColor
+    return color !== 'rgb(255, 255, 255)' && color !== 'rgba(0, 0, 0, 0)'
+  })
+  await page.waitForTimeout(500)
+  await shot('19b-page-dark-canvas')
+  await open(fileUrl('glass-theme.html') + '?light')
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('webview.wv.on')).backgroundColor === 'rgb(255, 255, 255)')
+  await page.click('.tab:not(.on):has-text("Тема прозрачного сайта")', { button: 'right' })
+  await page.click('.cm-item:has-text("Открыть рядом с текущей")')
+  await page.waitForSelector('.split-div')
+  const paneColors = await page.$$eval('webview.wv.pane', (nodes) => nodes.map((n) => getComputedStyle(n).backgroundColor))
+  if (paneColors.length !== 2 || !paneColors.includes('rgb(255, 255, 255)') || !paneColors.some((c) => /^rgb\(/.test(c) && c.match(/\d+/g).every((n) => Number(n) < 128))) throw new Error('Половины split потеряли собственные фоны: ' + JSON.stringify(paneColors))
+  await page.waitForTimeout(500)
+  await shot('19c-page-split-canvas')
+  await page.click('.tab.on', { button: 'right' })
+  await page.click('.cm-item:has-text("Убрать разделение экрана")')
+  await page.locator('.tab.on .x').click()
+  await page.waitForFunction(() => [...document.querySelectorAll('.tab')].filter((t) => t.textContent.includes('Тема прозрачного сайта')).length === 1)
+  await page.locator('.tab.on .x').click()
+  await page.waitForSelector('.ntp')
 
   console.log('шаг страница аддонов')
   await openAddons()
@@ -56,6 +104,42 @@ try {
   await open(fileUrl('dark.html'))
   await page.waitForTimeout(2500)
   await shot('22-glass-dark')
+
+  console.log('шаг светлый Canvas и контрастные секции')
+  await open(fileUrl('glass-theme.html'))
+  await page.waitForTimeout(2500)
+  const inTheme = (code) =>
+    app.evaluate(async ({ webContents }, code) => {
+      const g = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().includes('glass-theme.html'))
+      return g?.executeJavaScript(code)
+    }, code)
+  const theme = await inTheme(`({
+    prefersDark: matchMedia('(prefers-color-scheme: dark)').matches,
+    base: window.__masakiGlass.apply(true),
+    inverse: getComputedStyle(document.querySelector('.inverse')).backgroundColor,
+    text: getComputedStyle(document.body).color
+  })`)
+  console.log('Canvas сайта:', JSON.stringify(theme))
+  if (!theme?.prefersDark || theme.base !== '255,255,255') throw new Error('Светлый сайт с прозрачными html/body получил тёмную подложку: ' + JSON.stringify(theme))
+  if (theme.inverse !== 'rgb(18, 19, 23)' || theme.text !== 'rgb(18, 19, 23)') throw new Error('Аддон испортил контрастную секцию или цвет текста: ' + JSON.stringify(theme))
+  if (!(await page.$('.card.page.glassy:not(.match)'))) throw new Error('Светлый сайт ошибочно получил тёмное стекло панели')
+  await shot('22e-glass-canvas')
+  // У сайтов с явным color-scheme:dark системный Canvas уже тёмный. Смена предпочтения
+  // браузера не должна заставлять нас считать все прозрачные документы светлыми.
+  const darkCanvas = await inTheme(`(() => {
+    window.__masakiGlass.remove()
+    document.documentElement.style.colorScheme = 'dark'
+    return window.__masakiGlass.apply(true)
+  })()`)
+  if (!darkCanvas || !darkCanvas.split(',').every((x) => Number(x) < 128)) throw new Error('Явный тёмный color-scheme потерял тёмный Canvas: ' + darkCanvas)
+  const mixed = await inTheme(`(() => {
+    window.__masakiGlass.remove()
+    document.documentElement.style.backgroundColor = '#121317'
+    document.body.style.color = '#fff'
+    const base = window.__masakiGlass.apply(true)
+    return { base, light: getComputedStyle(document.querySelector('.light')).backgroundColor }
+  })()`)
+  if (mixed?.base !== '18,19,23' || mixed.light !== 'rgb(255, 255, 255)') throw new Error('Светлая секция на тёмном сайте потеряла свой фон: ' + JSON.stringify(mixed))
 
   console.log('шаг сайт-приложение')
   await open(fileUrl('app-like.html'))
@@ -161,7 +245,7 @@ try {
   await page.click('.tab:has-text("Светлая страница")')
   await page.waitForTimeout(800)
   const box = await page.locator('webview.wv.on').boundingBox()
-  await page.mouse.click(box.x + 40 + 200, box.y + 40 + 230, { button: 'right' })
+  await clickInGuest(40 + 200, 40 + 230, { button: 'right' })
   await page.waitForSelector('.cmenu', { timeout: 8000 })
   await page.waitForTimeout(400)
   await shot('23-video-menu')
@@ -174,24 +258,28 @@ try {
   })
   console.log('кадр в буфере обмена:', hasImage)
   if (!hasImage) throw new Error('Кадр видео не попал в буфер обмена')
-  // Картинка в картинке
-  await page.mouse.click(box.x + 40 + 200, box.y + 40 + 230, { button: 'right' })
-  await page.waitForSelector('.cmenu')
-  await page.click('.cm-item:has-text("Картинка в картинке")')
-  await page.waitForTimeout(1500)
-  const pip = await app.evaluate(async ({ webContents }) => {
-    const g = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().includes('light.html'))
-    return g ? g.executeJavaScript('!!document.pictureInPictureElement') : 'нет вкладки'
-  })
-  console.log('картинка в картинке:', pip)
-  if (pip !== true) throw new Error('Картинка в картинке не открылась')
-  await app.evaluate(async ({ webContents }) => {
-    const g = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().includes('light.html'))
-    await g?.executeJavaScript('document.exitPictureInPicture()', true)
-  })
+  // Системное PiP-окно не относится к BrowserWindow и не умеет оставаться скрытым.
+  if (headless) {
+    console.log('пропуск — системное окно «Картинка в картинке» в скрытом режиме')
+  } else {
+    await clickInGuest(40 + 200, 40 + 230, { button: 'right' })
+    await page.waitForSelector('.cmenu')
+    await page.click('.cm-item:has-text("Картинка в картинке")')
+    await page.waitForTimeout(1500)
+    const pip = await app.evaluate(async ({ webContents }) => {
+      const g = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().includes('light.html'))
+      return g ? g.executeJavaScript('!!document.pictureInPictureElement') : 'нет вкладки'
+    })
+    console.log('картинка в картинке:', pip)
+    if (pip !== true) throw new Error('Картинка в картинке не открылась')
+    await app.evaluate(async ({ webContents }) => {
+      const g = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().includes('light.html'))
+      await g?.executeJavaScript('document.exitPictureInPicture()', true)
+    })
+  }
 
   console.log('шаг QR-код')
-  await page.mouse.click(box.x + box.width - 120, box.y + box.height - 80, { button: 'right' })
+  await clickInGuest(box.width - 120, box.height - 80, { button: 'right' })
   await page.waitForSelector('.cmenu')
   await page.click('.cm-item:has-text("QR-код")')
   await page.waitForSelector('.pop.qr img', { timeout: 5000 })
@@ -238,16 +326,18 @@ try {
   const popupUrl = () =>
     app.evaluate(({ BrowserWindow }) => {
       const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.webContents.getURL().includes('popup.html'))
-      return w ? { url: w.webContents.getURL(), bounds: w.getBounds(), visible: w.isVisible() } : null
+      return w ? { url: w.webContents.getURL(), bounds: w.getBounds(), visible: w.isVisible(), ready: !w.webContents.isLoadingMainFrame() } : null
     })
   await page.click('.abar-side .ext-act')
   let pop = null
-  for (let i = 0; i < 20 && !(pop?.visible); i++) {
+  for (let i = 0; i < 20 && !(pop?.ready && pop.bounds.width >= 100 && pop.bounds.height >= 100); i++) {
     await page.waitForTimeout(250)
     pop = await popupUrl()
   }
   console.log('окно расширения:', JSON.stringify(pop))
-  if (!pop?.visible || pop.bounds.width < 100) throw new Error('всплывающее окно расширения не показалось: ' + JSON.stringify(pop))
+  if (!pop?.ready || pop.bounds.width < 100 || pop.bounds.height < 100) throw new Error('всплывающее окно расширения не загрузилось: ' + JSON.stringify(pop))
+  if (headless && pop.visible) throw new Error('Тест показал окно расширения поверх рабочего стола')
+  if (!headless && !pop.visible) throw new Error('Видимое окно расширения не показалось')
   const popPng = await app.evaluate(async ({ BrowserWindow }) => {
     const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('popup.html'))
     return (await w.capturePage()).toPNG().toString('base64')
@@ -258,7 +348,7 @@ try {
   // Пункт расширения в контекстном меню страницы: щелчок доходит до фона расширения.
   console.log('шаг меню расширения')
   const wvBox = await page.locator('webview.wv.on').boundingBox()
-  await page.mouse.click(wvBox.x + wvBox.width / 2, wvBox.y + 200, { button: 'right' })
+  await clickInGuest(wvBox.width / 2, 200, { button: 'right' })
   await page.waitForSelector('.cmenu.shown .cm-item:has-text("Проверить в Masaki")', { timeout: 5000 })
   await page.waitForTimeout(300)
   await shot('27d-ext-context-menu')
@@ -275,6 +365,8 @@ try {
   if (!(await page.$('.addons-page .sc-item.ext-off:has-text("Masaki test action")'))) throw new Error('отключённое расширение пропало из списка')
   await page.click('.addons-page .sc-item:has-text("Masaki test action") .switch')
   await page.waitForSelector('.abar-side .ext-act', { timeout: 8000 })
+  const hidden = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every((w) => !w.isVisible() && !w.isFocused()))
+  if (headless && !hidden) throw new Error('Тест показал окно или перехватил фокус')
 } catch (e) {
   failed = true
   console.error('ОШИБКА:', e.message)

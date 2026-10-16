@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<meta charset="utf-8">
+<title>Тема прозрачного сайта</title>
+<!-- Как Antigravity: у html/body нет заливки и color-scheme, текст тёмный, а светлый фон —
+     браузерный Canvas. Предпочтение тёмной темы не должно превращать такой сайт в тёмный.
+     Отдельные контрастные секции имеют собственные фоны, даже если они больше экрана. -->
+<style>
+  body { margin: 0; font: 20px/1.5 sans-serif; color: #121317; }
+  header { position: sticky; top: 0; padding: 16px 32px; background: #f8f9fc; }
+  main, section { box-sizing: border-box; min-height: 100vh; padding: 64px 32px; }
+  h1, h2 { max-width: 700px; }
+  .inverse { background: #121317; color: #fff; }
+  .light { background: #fff; color: #121317; }
+</style>
+<body>
+  <header>Светлая шапка</header>
+  <main>
+    <h1>Прозрачный корень — ещё не тёмная тема</h1>
+    <p>Тёмный текст должен оставаться на светлой подложке.</p>
+  </main>
+  <section class="inverse"><h2>Белый текст на отдельной тёмной секции</h2></section>
+  <section class="light"><h2>Тёмный текст на отдельной светлой секции</h2></section>
+</body>
+</html>

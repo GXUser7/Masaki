@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   closeFind,
   findInPage,
   goBack,
   goForward,
+  openFavorite,
   printPage,
   reloadOrStop,
   toggleDevtools,
@@ -14,11 +15,12 @@ import {
 import { shapes } from '../lib/shapes'
 import QRCode from 'qrcode'
 import { hostOf } from '../lib/url'
-import type { ExtAction, ExtensionInfo, TabGroup, UpdateState } from '../../../shared/types'
+import { siteCookieDomain } from '../../../shared/site'
+import type { DownloadInfo, ExtAction, ExtensionInfo, TabGroup, UpdateState } from '../../../shared/types'
 import { actionFor, actionIcon, badgeColor, pressAction, STORE_URL, togglePin, useExtensions } from '../lib/extensions'
-import { useStore, type Tab } from '../store'
+import { useStore, wv, type Tab } from '../store'
 import { Icon } from './Icon'
-import { AddressLabel, Grain, ShapeTile, TabFav, useHoverOverPage } from './parts'
+import { AddressLabel, Grain, ProgressRing, ShapeTile, TabFav, useHoverOverPage } from './parts'
 import { LoadFill, MiniPlayer, WinButtons } from './Extras'
 import { openYouCloud } from '../lib/youcloud'
 import { syncHint, syncStatusText } from './SyncSection'
@@ -216,22 +218,122 @@ function extPopStyle(): React.CSSProperties | undefined {
     : { left: Math.max(8, Math.min(extAnchor.left - 8, window.innerWidth - w - 8)), right: 'auto', top: extAnchor.bottom + 8, bottom: 'auto', width: w }
 }
 
-function DownloadsButton(): React.JSX.Element {
+/** В доке список загрузок открывается над тем, что его позвало: кнопкой в капсуле или островом загрузки. */
+let dlAnchor: '.cap-dl' | '.dk-dl' = '.cap-dl'
+
+function openDownloads(anchor: '.cap-dl' | '.dk-dl' = '.cap-dl'): void {
+  dlAnchor = anchor
+  useStore.getState().setPopover('downloads')
+}
+
+/** Место списка загрузок в доке: над якорем, по его центру, не за краем окна. В панели — как раньше. */
+function dlPopStyle(): React.CSSProperties | undefined {
+  const anchor = dlAnchor
+  dlAnchor = '.cap-dl'
+  if (!useStore.getState().settings.sidebarCollapsed) return undefined
+  const dock = document.querySelector('.capz')
+  const el = document.querySelector(`.capz ${anchor}`) ?? document.querySelector('.capz .cap-dl') ?? document.querySelector('.capz .capsule')
+  if (!dock || !el) return undefined
+  const a = el.getBoundingClientRect()
+  const w = 340
+  const left = Math.max(8, Math.min(a.left + a.width / 2 - w / 2, window.innerWidth - w - 8))
+  return { left, right: 'auto', top: 'auto', bottom: window.innerHeight - dock.getBoundingClientRect().top + 8, width: w }
+}
+
+function progressOf(d: DownloadInfo): number {
+  return d.total ? Math.min(1, d.received / d.total) : 0
+}
+
+function DownloadsButton({ dock = false }: { dock?: boolean }): React.JSX.Element {
   const downloads = useStore((s) => s.downloads)
   const busy = downloads.filter((d) => d.state === 'progressing')
-  const progress = busy.length
-    ? busy.reduce((a, d) => a + (d.total ? d.received / d.total : 0), 0) / busy.length
-    : 0
+  const progress = busy.length ? busy.reduce((a, d) => a + progressOf(d), 0) / busy.length : 0
   return (
     <button
-      className={'ib dl-btn' + (busy.length ? ' busy' : '')}
-      aria-label={busy.length ? `Загрузки, идёт ${busy.length}` : 'Загрузки'}
+      className={'ib dl-btn' + (dock ? ' cap-dl' : '') + (busy.length ? ' busy' : '')}
+      aria-label={busy.length ? `Загрузки, идёт ${busy.length}, ${Math.round(progress * 100)}%` : 'Загрузки'}
       title="Загрузки"
-      onClick={() => useStore.getState().setPopover('downloads')}
-      style={{ '--p': progress } as React.CSSProperties}
+      onClick={() => openDownloads()}
     >
-      <Icon name="download" />
+      {busy.length ? (
+        <ProgressRing value={progress} spin={busy.every((d) => !d.total)}>
+          <Icon name="download" />
+        </ProgressRing>
+      ) : (
+        <Icon name="download" />
+      )}
     </button>
+  )
+}
+
+/**
+ * Загрузка в доке на месте плеера, когда ничего не играет: самая свежая из идущих, с кольцом прогресса.
+ * Щелчок — список загрузок над островом. Идёт несколько — при наведении (или фокусе) выезжают все.
+ */
+function DockDownloads(): React.JSX.Element | null {
+  const downloads = useStore((s) => s.downloads)
+  const busy = downloads.filter((d) => d.state === 'progressing')
+  const [open, setOpen] = useState(false)
+  const island = useRef<HTMLDivElement>(null)
+  const list = useRef<HTMLDivElement>(null)
+  const more = busy.length > 1
+  useEffect(() => {
+    if (!open) return
+    // Уход с острова прямо на страницу окно может не заметить — сверяемся с настоящим курсором.
+    const timer = window.setInterval(async () => {
+      const { x, y } = await window.masaki.cursor()
+      const over = [island.current, list.current].some((el) => {
+        const r = el?.getBoundingClientRect()
+        return !!r && x >= r.left - 6 && x <= r.right + 6 && y >= r.top - 6 && y <= r.bottom + 6
+      })
+      if (!over && !island.current?.parentElement?.contains(document.activeElement)) setOpen(false)
+    }, 120)
+    return () => window.clearInterval(timer)
+  }, [open])
+  if (!busy.length) return null
+  const d = busy[0]
+  const pct = Math.round(progressOf(d) * 100)
+  const sub = (x: DownloadInfo): string =>
+    x.total ? `${Math.round(progressOf(x) * 100)}% · ${formatBytes(x.received)} из ${formatBytes(x.total)}` : formatBytes(x.received)
+  return (
+    <div
+      className="dk-dl-wrap"
+      onPointerEnter={() => more && setOpen(true)}
+      onFocus={() => more && setOpen(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false)
+      }}
+    >
+      {open && more && (
+        <div ref={list} className="dk-dl-list" role="list" aria-label="Идущие загрузки">
+          {busy.map((x) => (
+            <div key={x.id} className="dk-dl-row" role="listitem" style={{ '--p': progressOf(x) } as React.CSSProperties}>
+              <span className="dk-dl-name">{x.filename}</span>
+              <span className="dk-dl-sub">{sub(x)}</span>
+              <i className="dk-dl-bar" aria-hidden="true" />
+            </div>
+          ))}
+        </div>
+      )}
+      <div ref={island} className="dk-dl">
+        <button
+          className="dk-dl-main"
+          aria-label={`Загрузка «${d.filename}», ${pct}%` + (more ? `, ещё ${busy.length - 1}` : '')}
+          title="Загрузки"
+          onClick={() => openDownloads('.dk-dl')}
+        >
+          <ProgressRing className="dk-dl-ring" value={progressOf(d)} spin={!d.total}>
+            <Icon name="download" />
+          </ProgressRing>
+          <span className="dk-dl-t">
+            <b>{d.filename}</b>
+            <small>
+              {pct}%{more ? ` · ещё ${busy.length - 1}` : ''}
+            </small>
+          </span>
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -404,6 +506,7 @@ function TabList(): React.JSX.Element {
 export function Sidebar(): React.JSX.Element {
   const tabs = useStore((s) => s.tabs)
   const favorites = useStore((s) => s.settings.favorites)
+  const themed = useStore((s) => s.settings.favThemed)
   // Избранного может быть много (например, после переноса закладок): сначала видны два ряда.
   const [allFavs, setAllFavs] = useState(false)
   const more = favorites.length > FAV_SHOWN
@@ -438,13 +541,13 @@ export function Sidebar(): React.JSX.Element {
               className="fvt"
               title={f.title}
               aria-label={f.title}
-              onClick={() => s().navigate(f.url, { raw: true })}
+              onClick={() => openFavorite(f.url)}
               onContextMenu={(e) => {
                 e.preventDefault()
                 openTileMenu(e.clientX, e.clientY, 'favorites', i)
               }}
             >
-              <ShapeTile item={f} index={i} />
+              <ShapeTile item={f} index={i} themed={themed} />
             </button>
           ))}
           {more && (
@@ -624,6 +727,23 @@ function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Ele
   )
 }
 
+const MORPH_MS = 600
+
+/** Идёт ли перетекание дока. Класс должен появиться в том же кадре, что и смена размера, — иначе
+ *  переходу CSS не с чего начаться; поэтому смену замечаем прямо при отрисовке. */
+function useMorph(tiny: boolean): boolean {
+  const last = useRef({ tiny, at: -Infinity })
+  if (last.current.tiny !== tiny) last.current = { tiny, at: performance.now() }
+  const morph = performance.now() - last.current.at < MORPH_MS
+  const [, settle] = useState(0)
+  useEffect(() => {
+    if (!morph) return
+    const t = window.setTimeout(() => settle((n) => n + 1), MORPH_MS)
+    return () => window.clearTimeout(t)
+  }, [tiny, morph])
+  return morph
+}
+
 /**
  * Док вместо боковой панели (вариант A редизайна дока): вкладки слева, капсула с адресом по центру,
  * плеер справа — всё в свободном месте и видно сразу. Пока страницу листают вниз, док худеет целиком;
@@ -634,8 +754,41 @@ export function Dock(): React.JSX.Element {
   const [ref, hot, enter] = useHoverOverPage()
   const s = useStore.getState
   const tiny = small && !hot
+  const morph = useMorph(tiny)
+  const intent = useRef<number | undefined>(undefined)
+  const calm = (): void => {
+    window.clearTimeout(intent.current)
+    intent.current = undefined
+  }
+  // Маленький док раскрывается не только с пилюль, но и со всей полосы внизу окна. Острова — сразу;
+  // пустая полоса — после короткой паузы и сверки с настоящим курсором: путь мыши к панели задач
+  // мимо дока его не дёргает (уход со страницы во вкладку окно может и не заметить).
+  const wake = (e: React.PointerEvent): void => {
+    if (hot) return
+    if ((e.target as Element).closest('.capsule, .dk-tabs, .mplayer')) {
+      calm()
+      enter()
+      return
+    }
+    if (intent.current !== undefined) return
+    intent.current = window.setTimeout(async () => {
+      intent.current = undefined
+      const el = ref.current
+      if (!el) return
+      const { x, y } = await window.masaki.cursor()
+      const r = el.getBoundingClientRect()
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) enter()
+    }, 140)
+  }
+  useEffect(() => calm, [])
   return (
-    <div ref={ref} className={'capz' + (tiny ? ' small' : '')} onPointerEnter={enter} onPointerMove={hot ? undefined : enter}>
+    <div
+      ref={ref}
+      className={'capz' + (tiny ? ' small' : '') + (morph ? ' morph' : '')}
+      onPointerEnter={wake}
+      onPointerMove={hot ? undefined : wake}
+      onPointerLeave={calm}
+    >
       <DockTabs tiny={tiny} hot={hot} />
       <div className="glass capsule">
         <Grain />
@@ -643,12 +796,14 @@ export function Dock(): React.JSX.Element {
           <Icon name="sidebar" />
         </button>
         <AddressBar where="cap" />
+        <DownloadsButton dock />
         <MenuButton className="ib cap-more" />
         <span className="vdiv cap-div" />
         <WinButtons className="cap-w" />
       </div>
       <div className="dk-right">
         <MiniPlayer dock />
+        <DockDownloads />
       </div>
     </div>
   )
@@ -702,6 +857,45 @@ function TabsList({ close }: { close: () => void }): React.JSX.Element {
 
 // ---------- Всплывающие меню ----------
 
+/** Итог остаётся в открытом меню, чтобы очистка не выглядела как молчаливое действие. */
+function SiteCookiesButton({ tab }: { tab: Tab }): React.JSX.Element | null {
+  const site = tab.kind === 'web' ? siteCookieDomain(tab.url) : ''
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  const [message, setMessage] = useState('')
+  if (!site) return null
+  const clear = async (): Promise<void> => {
+    const view = wv(tab.id)
+    if (!view) return
+    setState('busy')
+    setMessage('')
+    try {
+      const result = await window.masaki.site.clearCookies(view.getWebContentsId(), new URL(tab.url).origin)
+      setState(result.ok ? 'done' : 'error')
+      setMessage(result.ok
+        ? `${result.site ?? site} · ${result.reloaded ? 'страница обновлена' : 'куки удалены'}`
+        : result.error ?? 'Не удалось очистить куки.')
+    } catch {
+      setState('error')
+      setMessage('Не удалось очистить куки. Попробуйте ещё раз.')
+    }
+  }
+  return (
+    <button
+      className="mi sy-mi"
+      aria-label="Очистить куки текущего сайта"
+      title={`${site} и его поддомены · потребуется войти на сайт заново`}
+      disabled={state === 'busy' || !wv(tab.id)}
+      onClick={() => void clear()}
+    >
+      <Icon name={state === 'done' ? 'check' : state === 'error' ? 'warn' : 'delete'} />
+      <span className="sy-mi-t" aria-live="polite">
+        {state === 'busy' ? 'Очистка кук…' : state === 'done' ? 'Куки очищены' : 'Очистить куки этого сайта'}
+        <small>{message || `${site} · потребуется войти заново`}</small>
+      </span>
+    </button>
+  )
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return n + ' Б'
   if (n < 1024 ** 2) return (n / 1024).toFixed(0) + ' КБ'
@@ -718,6 +912,9 @@ export function Popover(): React.JSX.Element | null {
   const update = useStore((s) => s.update)
   const t = useActive()
   const s = useStore.getState
+  // Место считается один раз при открытии: прогресс загрузок перерисовывает окно, а оно не должно прыгать.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const dlStyle = useMemo(() => (popover === 'downloads' ? dlPopStyle() : undefined), [popover])
   if (!popover) return null
   const close = (): void => s().setPopover(null)
   const run = (fn: () => void) => () => {
@@ -728,7 +925,7 @@ export function Popover(): React.JSX.Element | null {
   return (
     <>
       <button className="pop-scrim" aria-label="Закрыть меню" onClick={close} />
-      <div className={'glass pop ' + popover} role="menu" style={popover === 'extensions' ? extPopStyle() : undefined}>
+      <div className={'glass pop ' + popover} role="menu" style={popover === 'extensions' ? extPopStyle() : popover === 'downloads' ? dlStyle : undefined}>
         <Grain />
         {popover === 'qr' ? (
           <QrCode url={qrUrl} />
@@ -810,7 +1007,7 @@ export function Popover(): React.JSX.Element | null {
                   window.masaki.downloads.drag(d.path)
                 }}
               >
-                <button className="dl-main" onClick={() => d.state === 'completed' && window.masaki.downloads.open(d.path)}>
+                <button className="dl-main" disabled={d.state !== 'completed'} onClick={() => window.masaki.downloads.open(d.path)}>
                   <span className="dl-name">{d.filename}</span>
                   <span className="dl-sub">
                     {d.state === 'progressing'
@@ -827,9 +1024,16 @@ export function Popover(): React.JSX.Element | null {
                     </span>
                   )}
                 </button>
-                <button className="ib" aria-label="Показать в папке" onClick={() => window.masaki.downloads.showInFolder(d.path)}>
-                  <Icon name="folder" />
-                </button>
+                {d.canCancel && (
+                  <button className="ib" aria-label="Отменить загрузку" title="Отменить загрузку" onClick={() => void window.masaki.downloads.cancel(d.id)}>
+                    <Icon name="close" />
+                  </button>
+                )}
+                {d.state === 'completed' && (
+                  <button className="ib" aria-label="Показать в папке" onClick={() => window.masaki.downloads.showInFolder(d.path)}>
+                    <Icon name="folder" />
+                  </button>
+                )}
               </div>
             ))}
           </>
@@ -863,9 +1067,10 @@ export function Popover(): React.JSX.Element | null {
                 <Icon name="zoomIn" />
               </button>
             </div>
-            <button className="mi" onClick={run(() => s().setPopover('downloads'))}>
+            <button className="mi" onClick={run(() => openDownloads())}>
               <Icon name="download" /> Загрузки <span className="kbd">Ctrl J</span>
             </button>
+            <SiteCookiesButton key={t.id + t.url} tab={t} />
             <button className="mi" disabled={t.kind !== 'web'} onClick={run(printPage)}>
               <Icon name="print" /> Печать <span className="kbd">Ctrl P</span>
             </button>

@@ -1,4 +1,4 @@
-import { createElement, useEffect, useRef } from 'react'
+import { createElement, useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { AutofillRequest } from '../../../shared/types'
 import { finishSwipe } from './Extras'
 import { hostOf } from '../lib/url'
@@ -6,9 +6,30 @@ import { captureThumb, markReady, registerWebview, unregisterWebview, useStore, 
 import { syncGlass } from '../lib/glass'
 import { isYouCloud, parseMedia, sendYouCloudTheme } from '../lib/youcloud'
 
+/** Не чаще раза за столько мс док меняет размер: дольше, чем перетекание (0,45 с). */
+const DOCK_HOLD = 500
+let dockChangedAt = -Infinity
+let dockTimer: number | undefined
+
+/** Качели «вниз — вверх» (пружинящая прокрутка сайта, сдвиги от смены высоты страницы) схлопываются в
+ *  последнее решение: оно применяется, когда пройдёт пауза, а не мигает на каждый сигнал. */
+function setDockSmall(tabId: string, small: boolean): void {
+  window.clearTimeout(dockTimer)
+  const st = useStore.getState()
+  if (st.activeId !== tabId || !st.settings.sidebarCollapsed || st.capsuleSmall === small) return
+  const wait = dockChangedAt + DOCK_HOLD - performance.now()
+  if (wait > 0) {
+    dockTimer = window.setTimeout(() => setDockSmall(tabId, small), wait)
+    return
+  }
+  dockChangedAt = performance.now()
+  useStore.setState({ capsuleSmall: small })
+}
+
 /** Одна вкладка = один <webview>. Неактивные просто скрыты и продолжают жить, как в Chrome. */
 export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: boolean; pane?: 'a' | 'b'; ratio?: number }): React.JSX.Element {
   const ref = useRef<Electron.WebviewTag | null>(null)
+  const [canvas, setCanvas] = useState<string>()
   const id = tab.id
 
   useEffect(() => {
@@ -54,6 +75,11 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
         (e: Electron.IpcMessageEvent) => {
           const st = store()
           switch (e.channel) {
+            case 'page:canvas': {
+              const color = e.args[0]
+              if (typeof color === 'string' && /^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$/.test(color)) setCanvas(color)
+              break
+            }
             case 'pw:show':
               if (st.activeId === id) useStore.setState({ autofill: { tabId: id, wcId: el.getWebContentsId(), req: e.args[0] as AutofillRequest } })
               break
@@ -68,10 +94,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
             }
             case 'scroll':
               // Листают вниз — капсула сжимается до домена, вверх — возвращается.
-              if (st.activeId === id && st.settings.sidebarCollapsed) {
-                const small = e.args[0] === 'down'
-                if (st.capsuleSmall !== small) useStore.setState({ capsuleSmall: small })
-              }
+              setDockSmall(id, e.args[0] === 'down')
               break
             case 'swipe':
               if (st.activeId === id) useStore.setState({ swipe: { tabId: id, dx: Number(e.args[0]) || 0 } })
@@ -188,8 +211,11 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
     partition: 'persist:frost', // старое имя сессии: в ней куки и входы, не менять
     allowpopups: 'true',
     webpreferences: 'spellcheck=yes',
-    className: 'wv' + (active || pane ? ' on' : '') + (pane ? ' pane' : '') + (pane && active ? ' focused' : ''),
-    style: pane === 'a' ? { width: `calc(${ratio * 100}% - 4px)` } : pane === 'b' ? { left: `calc(${ratio * 100}% + 4px)`, width: 'auto', right: 0 } : undefined,
+    className: 'wv' + (active || pane ? ' on' : '') + (tab.glassBg || isYouCloud(tab.url) ? ' clear' : '') + (pane ? ' pane' : '') + (pane && active ? ' focused' : ''),
+    style: {
+      '--site-canvas': tab.glassBg ? `rgb(${tab.glassBg})` : isYouCloud(tab.url) ? 'var(--page)' : canvas,
+      ...(pane === 'a' ? { width: `calc(${ratio * 100}% - 4px)` } : pane === 'b' ? { left: `calc(${ratio * 100}% + 4px)`, width: 'auto', right: 0 } : {})
+    } as CSSProperties & { '--site-canvas'?: string },
     'data-tab': id
   })
 }

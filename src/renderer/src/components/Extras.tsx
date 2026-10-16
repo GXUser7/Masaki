@@ -1,4 +1,4 @@
-import { createElement, useEffect, useRef, useState } from 'react'
+import { createElement, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { goBack, goForward } from '../actions'
 import { shapes } from '../lib/shapes'
 import { hostOf } from '../lib/url'
@@ -341,17 +341,26 @@ export function MorphKeyframes(): React.JSX.Element {
 export function Glance(): React.JSX.Element | null {
   const url = useStore((s) => s.glance)
   const [current, setCurrent] = useState<string | null>(null)
+  const [canvas, setCanvas] = useState<string>()
   const ref = useRef<HTMLElement | null>(null)
   useEffect(() => {
     setCurrent(url)
+    setCanvas(undefined)
     const el = ref.current as Electron.WebviewTag | null
     if (!el) return
     const nav = (e: Event): void => setCurrent((e as Electron.DidNavigateEvent).url)
+    const message = (e: Event): void => {
+      const m = e as Electron.IpcMessageEvent
+      const color = m.args[0]
+      if (m.channel === 'page:canvas' && typeof color === 'string' && /^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$/.test(color)) setCanvas(color)
+    }
+    el.addEventListener('ipc-message', message)
     el.addEventListener('did-navigate', nav)
     el.addEventListener('did-navigate-in-page', nav)
     return () => {
       el.removeEventListener('did-navigate', nav)
       el.removeEventListener('did-navigate-in-page', nav)
+      el.removeEventListener('ipc-message', message)
     }
   }, [url])
   if (!url) return null
@@ -385,7 +394,8 @@ export function Glance(): React.JSX.Element | null {
           src: url,
           partition: 'persist:frost', // старое имя сессии: в ней куки и входы, не менять
           allowpopups: 'true',
-          className: 'gl-wv'
+          className: 'gl-wv',
+          style: { '--site-canvas': canvas } as CSSProperties & { '--site-canvas'?: string }
         })}
       </div>
     </div>

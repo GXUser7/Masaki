@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
+import { clickGuest, guestMouse } from './electron-input.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = path.join(root, 'test-output')
@@ -18,7 +19,7 @@ const only = process.argv.slice(2)
 const app = await electron.launch({
   args: [root],
   cwd: root,
-  env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile },
+  env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile },
   // Playwright по умолчанию подменяет prefers-color-scheme на светлую — тогда SVG-значки с медиазапросом
   // в тесте рисовались бы не так, как у пользователя. Тему решает сам Masaki (nativeTheme.themeSource).
   colorScheme: null,
@@ -40,11 +41,20 @@ async function shot(name) {
 }
 
 const command = (c) => app.evaluate(({ BrowserWindow }, c) => BrowserWindow.getAllWindows()[0].webContents.send('command', c), c)
+const activeGuestId = () => page.evaluate(() => document.querySelector('webview.wv.on')?.getWebContentsId())
 async function inTab(code) {
-  const id = await page.evaluate(() => document.querySelector('webview.wv.on')?.getWebContentsId())
+  const id = await activeGuestId()
   return app.evaluate(({ webContents }, [id, code]) => webContents.fromId(id).executeJavaScript(code), [id, code])
 }
 const fileUrl = (f) => 'file:///' + f.split(path.sep).join('/')
+
+async function assertHidden() {
+  if (process.env.MASAKI_TEST_HEADLESS === '0') return
+  const windows = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().map((w) => ({ visible: w.isVisible(), focused: w.isFocused() }))
+  )
+  if (windows.some((w) => w.visible || w.focused)) throw new Error('Тестовое окно появилось на экране: ' + JSON.stringify(windows))
+}
 
 async function waitLoaded(ms = 20000) {
   await page.waitForFunction(() => !document.querySelector('.fav.loading'), null, { timeout: ms }).catch(() => {})
@@ -171,7 +181,7 @@ const steps = {
   async pageMenu() {
     await page.waitForTimeout(800)
     const box = await page.locator('webview.wv.on').boundingBox()
-    await page.mouse.click(box.x + box.width / 2, box.y + 120, { button: 'right' })
+    await clickGuest(app, await activeGuestId(), box.width / 2, 120, { button: 'right' })
     await page.waitForSelector('.cmenu', { timeout: 8000 })
     await page.waitForTimeout(500)
     await shot('03b-page-menu')
@@ -183,6 +193,40 @@ const steps = {
     await page.waitForTimeout(400)
     await shot('03c-tab-menu')
     await page.click('.cm-scrim', { position: { x: 4, y: 400 } })
+  },
+  async saveFromTab() {
+    // Меню вкладки: страница — в избранное или ярлыком на новую вкладку, повторный выбор убирает.
+    // Избранного больше восьми, как после переноса из Chrome: добавление не должно выкидывать старое.
+    const cur = await page.evaluate(() => window.masaki.settings.get())
+    const toUi = (s) => app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0].webContents.send('settings-changed', s), s)
+    const url = await inTab('location.href')
+    await toUi({ ...cur, favorites: Array.from({ length: 10 }, (_, i) => ({ title: 'Закладка ' + i, url: `https://bookmark-${i}.test/` })) })
+    await page.waitForTimeout(300)
+    const saved = () => page.evaluate(() => window.masaki.settings.get())
+    const pick = async (label) => {
+      await page.click('.tab.on', { button: 'right' })
+      await page.click(`.cmenu .cm-item:has-text("${label}")`)
+      await page.waitForTimeout(400)
+    }
+    await pick('Добавить в избранное')
+    let s = await saved()
+    if (s.favorites.length !== 11 || s.favorites[10].url !== url) throw new Error('страница добавилась в избранное не так: ' + s.favorites.length)
+    await page.click('.tab.on', { button: 'right' })
+    await page.waitForSelector('.cmenu .cm-item:has-text("Убрать из избранного")')
+    await page.waitForTimeout(300)
+    await shot('03c2-tab-menu-saved')
+    await page.click('.cm-scrim', { position: { x: 4, y: 400 } })
+    await pick('Убрать из избранного')
+    s = await saved()
+    if (s.favorites.length !== 10 || s.favorites.some((f) => f.url === url)) throw new Error('страница не убралась из избранного')
+    await pick('Добавить на новую вкладку')
+    if (!(await saved()).shortcuts.some((f) => f.url === url)) throw new Error('страница не добавилась на новую вкладку')
+    await pick('Убрать с новой вкладки')
+    if ((await saved()).shortcuts.some((f) => f.url === url)) throw new Error('ярлык не убрался с новой вкладки')
+    // Как было — и главному процессу, и интерфейсу.
+    await page.evaluate((c) => window.masaki.settings.set(c), cur)
+    await toUi(cur)
+    await page.waitForTimeout(300)
   },
   async tileMenu() {
     await page.click('.fvt >> nth=0', { button: 'right' })
@@ -295,6 +339,53 @@ const steps = {
     await showFavs(cur.favorites)
     await page.waitForTimeout(300)
   },
+  async favTiles() {
+    // Избранное открывается новой вкладкой, а пустую новую вкладку просто занимает. Сайты — свои файлы:
+    // в избранном по умолчанию Google, его из автотеста открывать нельзя.
+    const cur = await page.evaluate(() => window.masaki.settings.get())
+    const toUi = (s) => app.evaluate(({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0].webContents.send('settings-changed', s), s)
+    const white = path.join(out, 'fav-white.html')
+    const blue = path.join(out, 'fav-blue.html')
+    fs.writeFileSync(white, `<meta charset="utf-8"><title>Белый значок</title><link rel="icon" href="${ringPng([255, 255, 255])}"><body style="font:20px sans-serif;padding:40px">Белый значок</body>`)
+    fs.writeFileSync(blue, `<meta charset="utf-8"><title>Синий значок</title><link rel="icon" href="${ringPng([26, 115, 232])}"><body style="font:20px sans-serif;padding:40px">Синий значок</body>`)
+    await toUi({ ...cur, favorites: [{ title: 'Белый значок', url: fileUrl(white) }, { title: 'Синий значок', url: fileUrl(blue) }] })
+    await page.waitForTimeout(400)
+    const tabs = () => page.evaluate(() => document.querySelectorAll('.side .tab').length)
+    const before = await tabs()
+    // В строке вкладки ещё буква значка — берём последнюю строку, само название.
+    const wasTitle = (await page.locator('.side .tab.on').innerText()).trim().split('\n').pop().trim()
+    const was = await inTab('location.href')
+    await page.click('.fvt >> nth=0')
+    await waitLoaded()
+    if ((await tabs()) !== before + 1) throw new Error('избранное открылось не в новой вкладке')
+    if ((await inTab('location.href')) !== fileUrl(white)) throw new Error('новая вкладка открыла не ту страницу')
+    // Пустая новая вкладка — занимается, лишняя не появляется.
+    await command({ type: 'new-tab' })
+    await page.waitForTimeout(500)
+    const withNtp = await tabs()
+    await page.click('.fvt >> nth=1')
+    await waitLoaded()
+    if ((await tabs()) !== withNtp) throw new Error('избранное с пустой новой вкладки открыло ещё одну')
+    // Светлый значок на прозрачном — на тёмном кружке, обычный — на белом.
+    await page.waitForSelector('.side .tab.on .fav.img:not(.dk)', { timeout: 5000 })
+    await page.waitForSelector('.side .tab:has-text("Белый значок") .fav.img.dk', { timeout: 5000 })
+    // Плитки в цвете темы: заливка — тональный цвет палитры у всех плиток, кроме выбранного вручную.
+    await toUi({ ...cur, favThemed: true, favorites: [...cur.favorites.slice(0, 3), { ...cur.favorites[3], color: '#E91E63' }] })
+    await page.waitForTimeout(700)
+    const fills = await page.evaluate(() => [...document.querySelectorAll('.fvt .tile')].map((t) => t.style.getPropertyValue('--td')))
+    if (fills.slice(0, 3).some((f) => f !== 'var(--sc)') || fills[3] === 'var(--sc)') throw new Error('плитки в цвете темы окрашены не так: ' + JSON.stringify(fills))
+    await shot('03d4-fav-themed')
+    for (const title of ['Белый значок', 'Синий значок']) {
+      await page.click(`.side .tab:has-text("${title}")`)
+      await command({ type: 'close-tab' })
+      await page.waitForTimeout(300)
+    }
+    await page.click(`.side .tab:has-text("${wasTitle}")`)
+    await page.waitForTimeout(300)
+    if ((await inTab('location.href')) !== was) throw new Error('не вернулась прежняя вкладка')
+    await toUi(cur)
+    await page.waitForTimeout(300)
+  },
   async winButtons() {
     // Кнопки окна — в шапке панели; задержка на «развернуть» открывает свои раскладки.
     await page.hover('.side-top .wb[aria-label$="окно"] >> nth=1')
@@ -360,6 +451,78 @@ const steps = {
     await page.waitForTimeout(400)
     if (await page.$('.gl-card')) await page.click('.gl-card .ib[aria-label^="Закрыть"]')
   },
+  async swipeOwned() {
+    // Как Google Таблицы: сетка листает себя сама — забирает колесо (preventDefault) или двигает свою
+    // полосу прокрутки рядом с сеткой. Такой жест — страницы, назад уходить нельзя. И прокрутка вниз,
+    // ушедшая вбок, тоже не «назад». В истории вкладки при этом есть куда вернуться.
+    const sheet = path.join(out, 'swipe-sheet.html')
+    const tall = path.join(out, 'swipe-tall.html')
+    fs.writeFileSync(sheet, `<meta charset="utf-8"><title>Таблица</title>
+<style>body{margin:0;font:16px sans-serif}#go{position:fixed;top:8px;left:8px;z-index:1;padding:12px 20px;background:#dfe}
+#grid{position:absolute;top:60px;left:0;right:0;bottom:16px;overflow:hidden}
+#cells{width:4000px;height:100%;background:repeating-linear-gradient(90deg,#fff 0 99px,#bbb 99px 100px)}
+#bar{position:absolute;left:0;right:0;bottom:0;height:16px;overflow-x:scroll}#bar div{width:4000px;height:1px}</style>
+<a id="go"></a><div id="grid"><div id="cells"></div></div><div id="bar"><div></div></div>
+<script>
+  const mode = location.search.slice(1)
+  document.title = 'Таблица ' + mode
+  go.href = mode === 'prevent' ? 'swipe-sheet.html?bar' : 'swipe-tall.html'
+  go.textContent = 'Дальше'
+  let x = mode === 'bar' ? 500 : 0
+  window.wheels = 0
+  addEventListener('load', () => { bar.scrollLeft = x; cells.style.transform = 'translateX(' + -x + 'px)' })
+  grid.addEventListener('wheel', (e) => {
+    window.wheels++
+    if (mode === 'prevent') e.preventDefault()
+    x = Math.max(0, Math.min(3000, x + e.deltaX))
+    cells.style.transform = 'translateX(' + -x + 'px)'
+    if (mode === 'bar') bar.scrollLeft = x
+  }, { passive: false })
+</script>`)
+    fs.writeFileSync(tall, '<meta charset="utf-8"><title>Длинная</title><body style="font:20px sans-serif;padding:40px;height:5000px">Длинная страница</body>')
+    const start = path.join(out, 'swipe-start.html')
+    fs.writeFileSync(start, '<meta charset="utf-8"><title>Начало</title><body style="font:20px sans-serif;padding:40px"><a id="n" href="swipe-sheet.html?prevent" style="display:inline-block;padding:20px;background:#dfe">Дальше</a></body>')
+    await command({ type: 'open-url', url: fileUrl(start) })
+    await waitLoaded()
+    const box = await page.locator('webview.wv.on').boundingBox()
+    // Настоящий клик: переход без действия пользователя Chromium не пускает в историю «назад».
+    const follow = async (selector, title) => {
+      const r = await inTab(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.left + 10, y: r.top + 10 } })()`)
+      await clickGuest(app, await activeGuestId(), r.x, r.y)
+      for (let i = 0; i < 40 && (await inTab('document.title').catch(() => '')) !== title; i++) await page.waitForTimeout(100)
+      if ((await inTab('document.title')) !== title) throw new Error('не открылась страница ' + title)
+      await page.waitForTimeout(400)
+    }
+    // Весь жест — одной пачкой: пауза между событиями дольше 140 мс разорвала бы его на два.
+    const wheel = async (events) => {
+      await guestMouse(app, await activeGuestId(), events.map(([dx, dy]) => ({ type: 'mouseWheel', x: box.width / 2, y: box.height / 2, deltaX: dx, deltaY: dy })))
+      await page.waitForTimeout(1200)
+    }
+    const back10 = Array(10).fill([-30, 0])
+    const where = () => inTab('location.pathname.split("/").pop() + location.search')
+
+    await follow('#n', 'Таблица prevent')
+    await wheel(back10)
+    if ((await inTab('window.wheels')) < 10) throw new Error('колесо не дошло до сетки')
+    if ((await where()) !== 'swipe-sheet.html?prevent') throw new Error('страница забрала колесо, а Masaki ушёл назад: ' + (await where()))
+    if (await page.$('.swipe')) throw new Error('стрелка жеста осталась на экране')
+
+    await follow('#go', 'Таблица bar')
+    await wheel(back10)
+    const left = await inTab('bar.scrollLeft')
+    if (left >= 500) throw new Error('сетка не листалась вбок: ' + left)
+    if ((await where()) !== 'swipe-sheet.html?bar') throw new Error('сетка листалась своей полосой, а Masaki ушёл назад: ' + (await where()))
+
+    await follow('#go', 'Длинная')
+    await wheel([[0, 20], [0, 20], [0, 20], ...back10])
+    if ((await where()) !== 'swipe-tall.html') throw new Error('прокрутка вниз, ушедшая вбок, сработала как «назад»')
+    // Обычный свайп на той же странице по-прежнему возвращает назад.
+    await wheel(back10)
+    if ((await where()) !== 'swipe-sheet.html?bar') throw new Error('свайп «назад» перестал работать: ' + (await where()))
+    // Фокус после кликов — во вкладке, Ctrl+W туда не дойдёт: закрываем командой.
+    await command({ type: 'close-tab' })
+    await page.waitForTimeout(400)
+  },
   async swipe() {
     // Две страницы в истории вкладки — жест тачпадом влево возвращает назад.
     const a = path.join(out, 'swipe-a.html')
@@ -371,19 +534,21 @@ const steps = {
     // Настоящий клик: переход без действия пользователя Chromium не пускает в историю «назад».
     const box = await page.locator('webview.wv.on').boundingBox()
     const link = await inTab(`(() => { const r = document.getElementById('n').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 20 } })()`)
-    await page.mouse.click(box.x + link.x, box.y + link.y)
+    await clickGuest(app, await activeGuestId(), link.x, link.y)
     await page.waitForTimeout(1500)
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-    for (let i = 0; i < 6; i++) {
-      await page.mouse.wheel(-30, 0)
-      await page.waitForTimeout(16)
-    }
+    // Жест — серия событий без паузы дольше 140 мс, поэтому каждая часть уходит одной пачкой: отдельные
+    // подключения отладчика на событие под нагрузкой рвали жест на короткие куски (тест мигал).
+    const wheel = async (n) =>
+      guestMouse(app, await activeGuestId(), Array.from({ length: n }, () => ({ type: 'mouseWheel', x: box.width / 2, y: box.height / 2, deltaX: -30, deltaY: 0 })))
+    // Недотянутый жест: стрелка видна, а назад не уходит.
+    await wheel(4)
     await page.waitForSelector('.swipe', { timeout: 3000 })
     await shot('03l-swipe')
-    for (let i = 0; i < 4; i++) {
-      await page.mouse.wheel(-30, 0)
-      await page.waitForTimeout(16)
-    }
+    await page.waitForTimeout(600)
+    if ((await inTab('document.title')) !== 'Вторая') throw new Error('недотянутый жест всё равно увёл назад')
+    // Дотянутый — уходит назад.
+    await wheel(8)
     await page.waitForTimeout(1500)
     const title = await inTab('document.title')
     if (title !== 'Первая') throw new Error('жест «назад» не сработал: ' + title)
@@ -398,7 +563,11 @@ const steps = {
     const hwnd = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readBigUInt64LE(0).toString())
     const x = Math.round((box.x + box.width / 2) * dpr)
     const y = Math.round((box.y + box.height / 2) * dpr)
-    const xbutton = (n) => {
+    const xbutton = async (n) => {
+      if (process.env.MASAKI_TEST_HEADLESS !== '0') {
+        await clickGuest(app, await activeGuestId(), box.width / 2, box.height / 2, { button: n === 1 ? 'back' : 'forward' })
+        return
+      }
       const down = (n << 16) | (n === 1 ? 0x20 : 0x40)
       const up = n << 16
       execFileSync('powershell', [
@@ -415,22 +584,22 @@ const steps = {
       await page.waitForTimeout(1500)
       return inTab('document.title')
     }
-    xbutton(2)
+    await xbutton(2)
     let t = await titleNow()
     if (t !== 'Вторая') throw new Error('кнопка мыши «вперёд» (WM_XBUTTON) не сработала: ' + t)
-    xbutton(1)
+    await xbutton(1)
     t = await titleNow()
     if (t !== 'Первая') throw new Error('кнопка мыши «назад» (WM_XBUTTON) не сработала: ' + t)
 
     // Страница, которой боковая кнопка нужна самой (preventDefault), её и получает — как в Chrome.
     await inTab(`window.addEventListener('mouseup', (e) => e.button === 3 && e.preventDefault(), { once: true }); 1`)
-    xbutton(2)
+    await xbutton(2)
     if ((await titleNow()) !== 'Вторая') throw new Error('«вперёд» перед проверкой preventDefault не сработал')
     await inTab(`window.addEventListener('mouseup', (e) => e.button === 3 && e.preventDefault(), { once: true }); 1`)
-    xbutton(1)
+    await xbutton(1)
     t = await titleNow()
     if (t !== 'Вторая') throw new Error('страница отменила кнопку «назад», а Masaki всё равно ушёл назад: ' + t)
-    xbutton(1)
+    await xbutton(1)
     if ((await titleNow()) !== 'Первая') throw new Error('после отменённого нажатия «назад» перестал работать')
 
     // Ctrl+колесо над страницей меняет масштаб вкладки (Electron сам не меняет, только шлёт zoom-changed).
@@ -643,6 +812,74 @@ const steps = {
     await inTab('window.scrollTo(0, 0)')
     await page.waitForTimeout(700)
   },
+  async dockBounce() {
+    // У низа длинной страницы худеющий док делал страницу выше, браузер сдвигал прокрутку вверх — и док
+    // раздувался обратно. Каждая «докрутка» до низа давала пару «сжался — вырос». Теперь — одно сжатие.
+    const f = path.join(out, 'dock-bounce.html')
+    fs.writeFileSync(f, '<meta charset="utf-8"><title>Низ страницы</title><body style="margin:0;font:20px sans-serif"><div style="height:2400px;padding:40px;box-sizing:border-box;background:linear-gradient(#fff,#fde)">Листайте до конца</div></body>')
+    await command({ type: 'open-url', url: fileUrl(f) })
+    await waitLoaded()
+    await page.evaluate(() => {
+      const capz = document.querySelector('.capz')
+      let small = capz.classList.contains('small')
+      window.__dockFlips = []
+      new MutationObserver(() => {
+        if (capz.classList.contains('small') === small) return
+        small = !small
+        window.__dockFlips.push({ small, at: Math.round(performance.now()), morph: capz.classList.contains('morph') })
+      }).observe(capz, { attributes: true, attributeFilter: ['class'] })
+    })
+    const flips = () => page.evaluate(() => window.__dockFlips)
+    if ((await page.$('.capz.small')) !== null) throw new Error('док уже маленький до прокрутки')
+
+    for (let i = 0; i < 4; i++) {
+      await inTab('window.scrollTo(0, 1e6)')
+      if (i === 0) {
+        await page.waitForTimeout(160)
+        await shot('07d-dock-morph')
+      }
+      await page.waitForTimeout(450)
+    }
+    // Настоящее колесо у самого низа тоже не раскачивает док.
+    for (let i = 0; i < 5; i++) {
+      await guestMouse(app, await activeGuestId(), [{ type: 'mouseWheel', x: 300, y: 300, deltaX: 0, deltaY: 200 }])
+      await page.waitForTimeout(60)
+    }
+    await page.waitForTimeout(900)
+    let f1 = await flips()
+    if (f1.length !== 1 || !f1[0].small) throw new Error('док качается у низа страницы: ' + JSON.stringify(f1))
+    if (!f1[0].morph) throw new Error('док сменил размер без перетекания')
+    if (await page.$('.capz.morph')) throw new Error('класс перетекания не снялся')
+    const hidden = await page.evaluate(() => [...document.querySelectorAll('.capz .capsule > .ib, .capz .cap-w')].map((el) => {
+      const cs = getComputedStyle(el)
+      return { vis: cs.visibility, w: el.getBoundingClientRect().width }
+    }))
+    if (!hidden.length || hidden.some((h) => h.vis !== 'hidden' || h.w > 0.5)) throw new Error('спрятанные кнопки дока остались доступны: ' + JSON.stringify(hidden))
+    // Раскрыть маленький док можно со всей полосы внизу, а не только с пилюль; на страницу полоса не заходит.
+    const strip = await page.evaluate(() => {
+      const r = document.querySelector('.capz.small').getBoundingClientRect()
+      return { pe: getComputedStyle(document.querySelector('.capz.small')).pointerEvents, top: r.top, width: r.width, win: innerWidth, card: document.querySelector('.card.page').getBoundingClientRect().bottom }
+    })
+    if (strip.pe !== 'auto' || strip.width < strip.win * 0.9 || strip.top < strip.card - 0.5) throw new Error('полоса наведения дока не та: ' + JSON.stringify(strip))
+    await shot('07e-dock-small-bottom')
+
+    await inTab('window.scrollTo(0, 0)')
+    await page.waitForTimeout(900)
+    f1 = await flips()
+    if (f1.length !== 2 || f1[1].small) throw new Error('док не вырос при прокрутке вверх: ' + JSON.stringify(f1))
+
+    // Быстрые качели сигналов «вниз — вверх» схлопываются: одно сжатие сразу, последнее решение — после паузы.
+    await page.evaluate(() => {
+      const w = document.querySelector('webview.wv.on')
+      for (const dir of ['down', 'up', 'down', 'up', 'down', 'up']) w.dispatchEvent(Object.assign(new Event('ipc-message'), { channel: 'scroll', args: [dir] }))
+    })
+    await page.waitForTimeout(1200)
+    const f2 = (await flips()).slice(2)
+    if (f2.length !== 2 || !f2[0].small || f2[1].small) throw new Error('качели сигналов не схлопнулись: ' + JSON.stringify(f2))
+    if (f2[1].at - f2[0].at < 400) throw new Error('док сменил размер раньше паузы: ' + (f2[1].at - f2[0].at) + ' мс')
+    await command({ type: 'close-tab' })
+    await page.waitForTimeout(500)
+  },
   async small() {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(960, 600))
     await page.keyboard.press('Control+KeyT')
@@ -682,11 +919,13 @@ const steps = {
 
 let failed = false
 try {
+  await assertHidden()
   for (const [name, fn] of Object.entries(steps)) {
     if (only.length && !only.includes(name)) continue
     console.log('шаг', name)
     await fn()
   }
+  await assertHidden()
 } catch (e) {
   failed = true
   console.error('ОШИБКА:', e.message)

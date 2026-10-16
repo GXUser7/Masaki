@@ -12,6 +12,7 @@ import path from 'node:path'
 import { ElectronChromeExtensions } from 'electron-chrome-extensions'
 import { installChromeWebStore, uninstallExtension } from 'electron-chrome-web-store'
 import type { Command, ExtensionInfo, ExtInstallPrompt, ExtMenuItem } from '../shared/types'
+import { testHeadless } from './testMode'
 
 interface Hooks {
   session: Session
@@ -87,6 +88,7 @@ export async function initExtensions(h: Hooks): Promise<void> {
       // Окно-«попап» (вход, мастер настройки) — отдельным окном, как в Chrome; обычное окно — вкладками.
       if (details.type === 'popup' || details.type === 'panel') {
         const w = new BrowserWindow({
+          show: !testHeadless,
           width: details.width ?? 480,
           height: details.height ?? 640,
           x: details.left,

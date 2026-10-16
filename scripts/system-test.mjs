@@ -41,7 +41,7 @@ async function waitFor(fn, what, ms = 30000) {
   }
 }
 
-const env = { ...process.env, MASAKI_PROFILE: profile, MASAKI_TEST_INACTIVE: '1', MASAKI_REG_NAME: REG_NAME }
+const env = { ...process.env, MASAKI_PROFILE: profile, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_REG_NAME: REG_NAME }
 const launch = (file) => {
   const p = spawn(electron, [root, file], { env, stdio: 'ignore' })
   procs.push(p)

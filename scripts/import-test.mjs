@@ -29,7 +29,7 @@ db.close()
 const app = await electron.launch({
   args: [root],
   cwd: root,
-  env: { ...process.env, MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_CHROME_DIR: chrome },
+  env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_CHROME_DIR: chrome },
   timeout: 60000
 })
 const page = await app.firstWindow()

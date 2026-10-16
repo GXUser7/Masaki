@@ -1,5 +1,5 @@
 import type { ExtensionInfo, ExtMenuItem, PageMenuParams, Shortcut } from '../../shared/types'
-import { toggleMute } from './actions'
+import { isSaved, toggleMute, toggleSaved } from './actions'
 import type { MenuEntry } from './components/Menu'
 import { isTileColor, siteIconColors } from './lib/iconColor'
 import { isShape, shapeCycle, type ShapeName } from './lib/shapes'
@@ -223,6 +223,13 @@ export function openTabMenu(x: number, y: number, id: string): void {
           disabled: t.kind !== 'web' || active.kind !== 'web' || active.id === id,
           run: () => S().openSplit(id)
         },
+    { kind: 'sep' },
+    isSaved('favorites', t)
+      ? { kind: 'item', icon: 'starFilled', label: 'Убрать из избранного', run: () => toggleSaved('favorites', t) }
+      : { kind: 'item', icon: 'star', label: 'Добавить в избранное', disabled: t.kind !== 'web', run: () => toggleSaved('favorites', t) },
+    isSaved('shortcuts', t)
+      ? { kind: 'item', icon: 'sparkle', label: 'Убрать с новой вкладки', run: () => toggleSaved('shortcuts', t) }
+      : { kind: 'item', icon: 'sparkle', label: 'Добавить на новую вкладку', disabled: t.kind !== 'web', run: () => toggleSaved('shortcuts', t) },
     { kind: 'sep' },
     ...groupItems,
     {

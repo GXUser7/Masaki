@@ -18,7 +18,7 @@ const out = path.join(root, 'test-output')
 fs.mkdirSync(out, { recursive: true })
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'masaki-profiles-'))
 const PIPE = process.platform === 'win32' ? `\\\\?\\pipe\\masaki-test-discord-${process.pid}` : path.join(os.tmpdir(), `masaki-test-discord-${process.pid}`)
-const env = { ...process.env, MASAKI_PROFILE: base, MASAKI_TEST_INACTIVE: '1', MASAKI_DISCORD_PIPE: PIPE, MASAKI_DISCORD_APP_ID: '1234567890' }
+const env = { ...process.env, MASAKI_PROFILE: base, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_DISCORD_PIPE: PIPE, MASAKI_DISCORD_APP_ID: '1234567890' }
 const failures = []
 const apps = []
 
