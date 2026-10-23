@@ -27,7 +27,17 @@ import { chromeBookmarks, chromeHistory, chromeProfiles, chromeShortcuts } from 
 import * as sync from './sync'
 import * as passwords from './passwords'
 import * as passkeys from './passkeys'
-import { initYouCloud, isYouCloudExtension, noteSoundCloudRequest, overrideHeaders, SOUNDCLOUD_API_URLS, watchWebview, YOUCLOUD_HEADER_URLS } from './youcloud'
+import {
+  initYouCloud,
+  isYouCloudExtension,
+  noteSoundCloudRequest,
+  overrideHeaders,
+  readableMedia,
+  SOUNDCLOUD_API_URLS,
+  watchWebview,
+  YOUCLOUD_HEADER_URLS,
+  YOUCLOUD_MEDIA_URLS
+} from './youcloud'
 import * as extensions from './extensions'
 import { defaultBrowserState, makeDefault, refreshRegistration } from './defaultBrowser'
 import { parseTrack, setDiscordEnabled, setDiscordTrack } from './discord'
@@ -444,6 +454,8 @@ async function applyAdblockNow(on: boolean): Promise<{ ok: boolean; error?: stri
     } else if (blocker?.isBlockingEnabled(ses)) {
       blocker.disableBlockingInSession(ses)
     }
+    // Блокировщик ставит свой onHeadersReceived и, выключаясь, снимает любой: общий — обратно.
+    listenHeaders(ses)
     return { ok: true }
   } catch (e) {
     return { ok: false, error: String(e) }
@@ -602,9 +614,25 @@ function describePermission(permission: string, asked: string[]): Omit<Permissio
   }
 }
 
+/**
+ * Единственный onHeadersReceived сессии вкладок: Electron держит одного слушателя на событие, а ответы
+ * нужны и YouCloud (звук YouTube, который слышит волна плеера), и блокировщику рекламы (его CSP).
+ * Без блокировщика слушаем только googlevideo.
+ */
+function listenHeaders(ses: Electron.Session): void {
+  const blocking = !!blocker?.isBlockingEnabled(ses)
+  ses.webRequest.onHeadersReceived({ urls: blocking ? ['<all_urls>'] : YOUCLOUD_MEDIA_URLS }, (details, callback) => {
+    const responseHeaders = readableMedia(details)
+    if (responseHeaders) callback({ responseHeaders })
+    else if (blocker?.isBlockingEnabled(ses)) blocker.onHeadersReceived(details, callback)
+    else callback({})
+  })
+}
+
 function setupBrowsingSession(): void {
   const ses = session.fromPartition(PARTITION)
   ses.setUserAgent(chromeUserAgent())
+  listenHeaders(ses)
   // Слушатель у сессии один на всё: вход в Google, заголовки запросов моста YouCloud и токен,
   // с которым soundcloud.com ходит в свой API (им YouCloud продлевает истёкшую сессию).
   ses.webRequest.onBeforeSendHeaders({ urls: ['https://accounts.google.com/*', ...YOUCLOUD_HEADER_URLS, ...SOUNDCLOUD_API_URLS] }, (details, callback) => {

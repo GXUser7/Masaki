@@ -311,6 +311,12 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   Плейлист и куски эфира сайт берёт через мост (`yc:fetch` к `*.googlevideo.com`, только GET, байты — base64
   при `binary`): встроенный HLS Chromium не берёт куски с другого хоста, чем плейлист, без CORS, а googlevideo
   отвечает через границу сайтов только YouTube. Играет их hls.js сайта (`web/src/lib/hlsBridge.ts` в YouCloud).
+- **Волна плеера YouCloud слышит YouTube** (мост 0.10, 2026-10-23): сайт спрашивает звук в `<audio>` с
+  `crossOrigin`, чтобы читать его (AnalyserNode), а googlevideo разрешает это только YouTube. Masaki добавляет
+  `Access-Control-Allow-Origin: *` к ответам googlevideo на запросы `media` вкладки YouCloud (`readableMedia`).
+  `onHeadersReceived` у сессии вкладок **один на всех** (`listenHeaders` в index.ts): блокировщик рекламы
+  ставит свой и, выключаясь, снимает любой, поэтому после его включения и выключения общий ставится заново и
+  передаёт остальные ответы блокировщику (его CSP). Проверка — раздел `bridge` в `test:youcloud`.
 - Палитра: команда «YouCloud», пауза/следующий/предыдущий трек, строка «Найти в YouCloud» (если YouCloud
   открывали) → `#/search/<запрос>`.
 

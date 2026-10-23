@@ -18,8 +18,9 @@ export const YOUCLOUD_URL = 'https://youcloud.inkerror67.workers.dev/'
 /** Сайт и его дев-сервер — вкладки, которым отвечает мост. */
 export const YOUCLOUD_ORIGINS = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
 /** Какой версии расширения YouCloud равен мост (сайт сверяет, что он умеет): 0.7 — звук YouTube от yt-dlp,
- *  0.8 — и прямых трансляций (их плейлист HLS), 0.9 — продлевает истёкшую сессию SoundCloud. */
-const BRIDGE_VERSION = '0.9.0'
+ *  0.8 — и прямых трансляций (их плейлист HLS), 0.9 — продлевает истёкшую сессию SoundCloud,
+ *  0.10 — даёт сайту читать звук YouTube (волна полноэкранного плеера его слышит). */
+const BRIDGE_VERSION = '0.10.0'
 
 type Ops = Record<string, string | null>
 
@@ -71,6 +72,34 @@ export function overrideHeaders(url: string, headers: Record<string, string>): R
     for (const k of Object.keys(headers)) if (k.toLowerCase() === name) delete headers[k]
     if (value != null) headers[name] = value
   }
+  return headers
+}
+
+// ---------- Звук YouTube для волны плеера ----------
+
+/** Откуда <audio> сайта берёт звук YouTube — для onHeadersReceived сессии вкладок. */
+export const YOUCLOUD_MEDIA_URLS = ['https://*.googlevideo.com/*']
+
+/**
+ * Звук YouTube в <audio> вкладки YouCloud: сайт спрашивает его в CORS, чтобы волна полноэкранного
+ * плеера его слышала, а googlevideo так отвечает только YouTube. В ответ добавляется разрешение
+ * читать звук — сам запрос и всё остальное в ответе как были. Как правило READ_MEDIA у расширения.
+ * Вызывается из единственного onHeadersReceived сессии; null — ответ не наш.
+ */
+export function readableMedia(details: Electron.OnHeadersReceivedListenerDetails): Record<string, string[]> | null {
+  if (details.resourceType !== 'media') return null
+  let mediaHost: string
+  let page: string
+  try {
+    mediaHost = new URL(details.url).hostname
+    page = new URL(details.webContents?.getURL() ?? '').origin
+  } catch {
+    return null
+  }
+  if (!MEDIA.some((d) => mediaHost === d || mediaHost.endsWith('.' + d)) || !YOUCLOUD_ORIGINS.includes(page)) return null
+  const headers = { ...(details.responseHeaders ?? {}) }
+  for (const name of Object.keys(headers)) if (name.toLowerCase() === 'access-control-allow-origin') delete headers[name]
+  headers['Access-Control-Allow-Origin'] = ['*']
   return headers
 }
 

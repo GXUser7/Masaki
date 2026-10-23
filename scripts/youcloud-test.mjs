@@ -118,6 +118,31 @@ try {
         setTimeout(() => res('нет ответа'), 20000)
       })`)
       check(String(playable).startsWith('ok'), 'ссылка yt-dlp играет во вкладке', playable)
+      // Волна плеера YouCloud слушает звук: сайт спрашивает его в CORS, а googlevideo так отвечает только
+      // YouTube — разрешение добавляет Masaki (readableMedia). Без него такой <audio> не заиграл бы вовсе.
+      // И с блокировщиком рекламы: он ставит свой onHeadersReceived, а слушатель у сессии один.
+      const readable = () =>
+        inSite(`new Promise((res) => {
+          const a = new Audio()
+          a.crossOrigin = 'anonymous'
+          a.preload = 'metadata'
+          a.onloadedmetadata = () => { try { a.captureStream(); res('ok') } catch (e) { res('захват: ' + e.name) } }
+          a.onerror = () => res('ошибка ' + (a.error && a.error.code))
+          a.src = ${JSON.stringify(streamUrl)}
+          setTimeout(() => res('нет ответа'), 20000)
+        })`)
+      // Сам googlevideo странице читать не даёт (fetch — не <audio>, его Masaki не трогает); если начнёт,
+      // разрешение Masaki станет не нужно.
+      const own = await inSite(`fetch(${JSON.stringify(streamUrl)}, { headers: { range: 'bytes=0-1' } }).then((r) => 'читается ' + r.status, () => 'не читается')`)
+      check(own === 'не читается', 'googlevideo сам чтение не разрешает', own)
+      const plain = await readable()
+      check(plain === 'ok', 'звук YouTube сайт может читать (волна плеера)', plain)
+      const blocking = await page.evaluate(() => window.masaki.adblock.set(true))
+      const withBlocker = await readable()
+      check(blocking?.ok && withBlocker === 'ok', 'и с блокировщиком рекламы', `${JSON.stringify(blocking)} ${withBlocker}`)
+      await page.evaluate(() => window.masaki.adblock.set(false))
+      const after = await readable()
+      check(after === 'ok', 'и после его выключения', after)
     }
     const denied = await ask({ kind: 'fetch', request: { url: 'https://example.com/' } })
     check(String(denied?.error).includes('not allowed'), 'чужой хост мост не пускает', denied?.error)
