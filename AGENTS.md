@@ -23,7 +23,8 @@ npm run test:import  # сборка + тест переноса из Chrome на
 npm run test:sync    # сборка + синхронизация двух профилей через подставной Google (scripts/mock-google.mjs)
 npm run test:passwords # сборка + менеджер паролей: CSV, автозаполнение, сохранение, шифрованная синхронизация
 npm run test:passkeys  # сборка + ключи доступа: создание, вход (окно и автозаполнение), подписи, синхронизация
-npm run test:youcloud  # сборка + YouCloud: мост, мини-плеер с обложкой, поиск из палитры (нужен дев-сервер YouCloud/web)
+npm run test:youcloud  # сборка + YouCloud: мост, сессия SoundCloud, мини-плеер, поиск из палитры (нужен дев-сервер YouCloud/web);
+                       # один раздел: node scripts/youcloud-test.mjs bridge|sc|player|palette
 npm run test:system  # сборка + управление для ИИ (порт 9222), ссылка из командной строки, регистрация браузером
 npm run test:profiles  # сборка + профили (окна-процессы, раздельные куки, удаление) и статус в Discord (подставной)
 npm run test:update  # автообновление: два установщика NSIS под тестовым именем, 0.0.1 → 0.0.2 (долго)
@@ -45,7 +46,8 @@ src/main/chromeImport.ts перенос из Chrome: закладки, ярлы�
 src/main/sync.ts         синхронизация через Google Диск: вход OAuth, папка приложения, слияние
 src/main/passwords.ts    менеджер паролей: хранение (safeStorage), импорт CSV, автозаполнение, предложения
 src/main/passkeys.ts     ключи доступа (passkey): свой аутентификатор — создание, подпись, хранение, синхронизация
-src/main/youcloud.ts     YouCloud: мост вместо его расширения (запросы к Яндексу/YouTube, входы вкладками)
+src/main/youcloud.ts     YouCloud: мост вместо его расширения (запросы к Яндексу/YouTube, входы вкладками,
+                         продление сессии SoundCloud в невидимом окне)
 src/main/ytdlp.ts        звук YouTube для YouCloud через yt-dlp (скачивает, обновляет, запускает, ретранслятор)
 src/main/defaultBrowser.ts Masaki среди браузеров Windows: регистрация в HKCU, проверка выбора пользователя
 src/main/profiles.ts     профили как в Chrome: папка данных профиля, список profiles.json, окна-процессы
@@ -459,9 +461,14 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
 
 0. До правок сверить локальный HEAD с удалённой веткой (`git ls-remote origin`) и проверить
    последний релиз GitHub; если удалённая версия новее, сначала разобраться с расхождением.
-1. `npm run typecheck`, затем `npm run smoke` (и `npm run test:addons`, если трогали меню, аддоны,
-   медиа). Снимки — в `test-output/*.png`, **смотреть их глазами**, а не только код возврата.
-2. Долгие команды — всегда под `timeout` (например `timeout 560 node scripts/smoke.mjs`).
+1. `npm run typecheck`, затем **проверять только то, что менялось** (решение пользователя 2026-10-23:
+   тестов слишком много, и они слишком долгие). Нужный раздел или шаг существующего теста
+   (`npx electron-vite build`, затем, например, `node scripts/youcloud-test.mjs sc`) или маленький
+   скрипт на свою правку — а не `npm run smoke`, `test:addons` и другие наборы целиком. Целиком —
+   только по просьбе пользователя. Снимки — в `test-output/*.png`, **смотреть их глазами**, а не
+   только код возврата.
+2. Долгие команды — всегда под `timeout` и в фоне, с выводом в файл журнала (не через `tail`: он
+   прячет, где встал тест).
 3. Сайты Google (поиск, AI Mode, вход) **не открывать из Playwright**: у автоматизации свой отпечаток,
    и Google отдаёт капчу на IP пользователя. Для них — самопроверка без автоматизации:
    ```bash
@@ -616,7 +623,7 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   отдельным чистым профилем — пустое окно там не значит, что данные пропали.
   Старый путь — `dist/win-unpacked`: если Masaki открыт, собирать в `dist/next`
   (`npx electron-builder --win dir -c.directories.output=dist/next`) и подменять после закрытия.
-- Перед выдачей: typecheck, smoke (и test:addons при необходимости), посмотреть снимки, собрать.
+- Перед выдачей: typecheck, проверка изменённого (см. «Проверка изменений»), посмотреть снимки, собрать.
 - Релиз на GitHub (github.com/GXUser7/Masaki) — **через GitHub Actions** (`.github/workflows/release.yml`,
   с 0.4.0; `gh` на компьютере пользователя нет): поднять `version` в package.json, закоммитить, запушить, затем
   `git tag -a v<версия> -F <заметки.md>` и `git push origin v<версия>`. Workflow собирает установщик Windows и

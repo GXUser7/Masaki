@@ -27,7 +27,7 @@ import { chromeBookmarks, chromeHistory, chromeProfiles, chromeShortcuts } from 
 import * as sync from './sync'
 import * as passwords from './passwords'
 import * as passkeys from './passkeys'
-import { initYouCloud, isYouCloudExtension, overrideHeaders, watchWebview, YOUCLOUD_HEADER_URLS } from './youcloud'
+import { initYouCloud, isYouCloudExtension, noteSoundCloudRequest, overrideHeaders, SOUNDCLOUD_API_URLS, watchWebview, YOUCLOUD_HEADER_URLS } from './youcloud'
 import * as extensions from './extensions'
 import { defaultBrowserState, makeDefault, refreshRegistration } from './defaultBrowser'
 import { parseTrack, setDiscordEnabled, setDiscordTrack } from './discord'
@@ -605,9 +605,11 @@ function describePermission(permission: string, asked: string[]): Omit<Permissio
 function setupBrowsingSession(): void {
   const ses = session.fromPartition(PARTITION)
   ses.setUserAgent(chromeUserAgent())
-  // Слушатель у сессии один на всё: вход в Google и заголовки запросов моста YouCloud.
-  ses.webRequest.onBeforeSendHeaders({ urls: ['https://accounts.google.com/*', ...YOUCLOUD_HEADER_URLS] }, (details, callback) => {
+  // Слушатель у сессии один на всё: вход в Google, заголовки запросов моста YouCloud и токен,
+  // с которым soundcloud.com ходит в свой API (им YouCloud продлевает истёкшую сессию).
+  ses.webRequest.onBeforeSendHeaders({ urls: ['https://accounts.google.com/*', ...YOUCLOUD_HEADER_URLS, ...SOUNDCLOUD_API_URLS] }, (details, callback) => {
     const headers = details.requestHeaders
+    noteSoundCloudRequest(headers)
     if (!GOOGLE_LOGIN.test(details.url)) {
       callback({ requestHeaders: overrideHeaders(details.url, headers) ?? headers })
       return

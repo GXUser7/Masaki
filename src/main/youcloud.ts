@@ -8,7 +8,7 @@
 // Отвечаем только вкладкам YouCloud (по фрейму, не со слов страницы) и ходим только к хостам
 // сервисов. Куки YouTube и токены не попадают на страницу: запрос подписывает главный процесс.
 
-import { ipcMain, session, webContents, type WebContents } from 'electron'
+import { BrowserWindow, ipcMain, session, webContents, type WebContents } from 'electron'
 import { createHash } from 'crypto'
 import fs from 'fs'
 import path from 'path'
@@ -18,8 +18,8 @@ export const YOUCLOUD_URL = 'https://youcloud.inkerror67.workers.dev/'
 /** Сайт и его дев-сервер — вкладки, которым отвечает мост. */
 export const YOUCLOUD_ORIGINS = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
 /** Какой версии расширения YouCloud равен мост (сайт сверяет, что он умеет): 0.7 — звук YouTube от yt-dlp,
- *  0.8 — и прямых трансляций (их плейлист HLS). */
-const BRIDGE_VERSION = '0.8.0'
+ *  0.8 — и прямых трансляций (их плейлист HLS), 0.9 — продлевает истёкшую сессию SoundCloud. */
+const BRIDGE_VERSION = '0.9.0'
 
 type Ops = Record<string, string | null>
 
@@ -36,6 +36,8 @@ const ALLOWED = [...PROFILES.flatMap((p) => p.domains), ...MEDIA]
 const YOUTUBE_HOSTS = ['music.youtube.com', 'www.youtube.com', 'youtubei.googleapis.com']
 /** Адреса, у которых главный процесс правит заголовки (onBeforeSendHeaders сессии вкладок). */
 export const YOUCLOUD_HEADER_URLS = ['https://*.yandex.net/*', 'https://music.youtube.com/*', 'https://www.youtube.com/*', 'https://youtubei.googleapis.com/*']
+/** API SoundCloud: в запросах soundcloud.com к нему — его текущий токен (Authorization: OAuth …). */
+export const SOUNDCLOUD_API_URLS = ['https://api-v2.soundcloud.com/*']
 
 // Яндекс Музыка: client_id Android-клиента; вход приходит на music.yandex.ru с токеном в адресе.
 const YANDEX_LOGIN = 'https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d'
@@ -260,14 +262,83 @@ export function watchWebview(contents: WebContents): void {
   contents.on('did-redirect-navigation', (e) => e.isMainFrame && seen(e.url))
 }
 
+// ---------- Сессия SoundCloud ----------
+
+const SOUNDCLOUD_SITE = 'https://soundcloud.com/discover'
+const RENEW_TIMEOUT_MS = 25_000
+let renewal: Promise<string | null> | null = null
+let renewWaiter: { stale: string; done: (token: string | null) => void } | null = null
+
+async function soundCloudCookie(): Promise<string | null> {
+  const value = await cookie('https://soundcloud.com/', 'oauth_token')
+  return value ? decodeURIComponent(value) : null
+}
+
+/**
+ * Токен SoundCloud вместо истёкшего [stale] — как его продлевает приложение YouCloud
+ * (SoundCloudSessionRefresher). Токен у сайта — собственный soundcloud.com, а тот продлевает его сам,
+ * пока жива его сессия в Masaki. Сначала его cookie oauth_token; если и там тот же — soundcloud.com
+ * в невидимом окне без звука: он продлит сессию, и новый токен придёт в его запросах к API (или в
+ * cookie). Null — сессии нет и там, поможет только вход. Годен ли токен, сайт проверит сам.
+ */
+function renewSoundCloud(stale: string): Promise<string | null> {
+  renewal ??= (async () => {
+    const now = await soundCloudCookie()
+    if (now && now !== stale) return now
+    return new Promise<string | null>((resolve) => {
+      const win = new BrowserWindow({
+        show: false,
+        skipTaskbar: true,
+        width: 1280,
+        height: 800,
+        webPreferences: { partition, sandbox: true, backgroundThrottling: false }
+      })
+      win.webContents.setAudioMuted(true)
+      win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+      const waiter = {
+        stale,
+        done: (token: string | null): void => {
+          if (renewWaiter !== waiter) return
+          renewWaiter = null
+          clearTimeout(timer)
+          if (!win.isDestroyed()) win.destroy()
+          resolve(token)
+        }
+      }
+      renewWaiter = waiter
+      const timer = setTimeout(() => waiter.done(null), RENEW_TIMEOUT_MS)
+      // Невидимое окно не должно держать Masaki открытым, когда пользователь закрыл свои.
+      for (const other of BrowserWindow.getAllWindows()) {
+        if (other !== win) other.once('closed', () => BrowserWindow.getAllWindows().every((w) => w === win) && waiter.done(null))
+      }
+      win.loadURL(SOUNDCLOUD_SITE).catch(() => undefined)
+    })
+  })().finally(() => (renewal = null))
+  return renewal
+}
+
+function renewedSoundCloud(token: string): void {
+  if (renewWaiter && token && token !== renewWaiter.stale) renewWaiter.done(token)
+}
+
+/** Из onBeforeSendHeaders сессии вкладок: запрос soundcloud.com к своему API, с его токеном. */
+export function noteSoundCloudRequest(headers: Record<string, string>): void {
+  if (!renewWaiter) return
+  const auth = Object.entries(headers).find(([k]) => k.toLowerCase() === 'authorization')?.[1]
+  if (auth?.startsWith('OAuth ')) renewedSoundCloud(auth.slice('OAuth '.length).trim())
+}
+
 function watchCookies(): void {
   ses().cookies.on('changed', (_e, c, _cause, removed) => {
     if (removed) return
     const domain = c.domain ?? ''
-    // SoundCloud после входа кладёт сессию в cookie oauth_token.
-    if (c.name === 'oauth_token' && /(^|\.)soundcloud\.com$/.test(domain.replace(/^\./, '')) && fresh('sc')) {
-      handOver('sc-token', decodeURIComponent(c.value))
-      finishLogin('sc')
+    // SoundCloud после входа кладёт сессию в cookie oauth_token, туда же — продлённую.
+    if (c.name === 'oauth_token' && /(^|\.)soundcloud\.com$/.test(domain.replace(/^\./, ''))) {
+      renewedSoundCloud(decodeURIComponent(c.value))
+      if (fresh('sc')) {
+        handOver('sc-token', decodeURIComponent(c.value))
+        finishLogin('sc')
+      }
     }
     // Вошли в Google: YouTube у сайта теперь «вошедший» — пусть перепроверит.
     if (c.name === 'SAPISID' && /youtube\.com$/.test(domain)) {
@@ -277,11 +348,13 @@ function watchCookies(): void {
   })
 }
 
-async function call(name: string, from: WebContents): Promise<Answer> {
+async function call(name: string, from: WebContents, args?: unknown): Promise<Answer> {
   switch (name) {
-    case 'sc-token': {
-      const value = await cookie('https://soundcloud.com/', 'oauth_token')
-      return { value: value ? decodeURIComponent(value) : null }
+    case 'sc-token':
+      return { value: await soundCloudCookie() }
+    case 'sc-renew': {
+      const stale = (args as { stale?: unknown } | undefined)?.stale
+      return { value: await renewSoundCloud(typeof stale === 'string' ? stale : '') }
     }
     case 'sc-login':
       openLogin('sc', SOUNDCLOUD_LOGIN, from)
@@ -342,7 +415,7 @@ export function initYouCloud(partitionName: string, h: Host): void {
     }
   })
   ipcMain.handle('yc:fetch', (e, req: FetchRequest) => (fromYouCloud(e) && req && typeof req === 'object' ? relay(req) : { error: 'not allowed' }))
-  ipcMain.handle('yc:call', (e, name: string) =>
-    fromYouCloud(e) ? call(String(name), e.sender).catch((err) => ({ error: String(err?.message ?? err) })) : { error: 'not allowed' }
+  ipcMain.handle('yc:call', (e, name: string, args?: unknown) =>
+    fromYouCloud(e) ? call(String(name), e.sender, args).catch((err) => ({ error: String(err?.message ?? err) })) : { error: 'not allowed' }
   )
 }
