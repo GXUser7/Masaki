@@ -133,6 +133,8 @@ if (process.env.MASAKI_DOWNLOADS) app.setPath('downloads', process.env.MASAKI_DO
 // файла, а переключатель в интерфейсе действует с перезапуска. Порт слушает только 127.0.0.1, а без
 // --remote-allow-origins к нему не подключиться со страницы сайта — только программой на этом компьютере.
 const aiPort = ((): number => {
+  // Порт один на компьютер, и он у основного окна; инкогнито агенту не показываем.
+  if (profiles.isIncognito()) return 0
   try {
     const saved = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')) as Partial<Settings>
     return saved.aiControl === true ? AI_PORT : 0
@@ -198,7 +200,8 @@ function startupLog(): void {
     // журнал не обязателен
   }
 }
-startupLog()
+// Адрес, с которым открыли инкогнито, в журнал на диске попасть не должен.
+if (!profiles.isIncognito()) startupLog()
 
 function send(c: Command): void {
   win?.webContents.send('command', c)
@@ -779,7 +782,7 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 24, y: 31 } } : { frame: false }),
     show: false,
     skipTaskbar: testHeadless,
-    title: 'Masaki',
+    title: profiles.isIncognito() ? 'Инкогнито — Masaki' : 'Masaki',
     icon: app.isPackaged ? undefined : path.join(__dirname, '../../build/icon.png'),
     backgroundColor: dark ? '#0D1513' : '#E3F1EE',
     webPreferences: {
@@ -788,7 +791,9 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
       backgroundThrottling: !testHeadless,
       offscreen: testHeadless,
       sandbox: true,
-      spellcheck: true
+      spellcheck: true,
+      // Интерфейс узнаёт, что он в окне инкогнито, до первой отрисовки (preload читает process.argv).
+      additionalArguments: profiles.isIncognito() ? ['--masaki-incognito'] : []
     }
   })
 
@@ -801,7 +806,8 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     else win?.show()
   })
   win.on('close', () => {
-    if (win) windowFile.write({ bounds: win.getNormalBounds(), maximized: win.isMaximized() }, 0)
+    // Размер окна инкогнито взят у профиля и обратно не пишется: папку сотрут при закрытии.
+    if (win && !profiles.isIncognito()) windowFile.write({ bounds: win.getNormalBounds(), maximized: win.isMaximized() }, 0)
   })
   if (process.env.MASAKI_SELFTEST_URL) runSelfTest()
   for (const ev of ['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'restore'] as const) {
@@ -1132,6 +1138,8 @@ function registerPasswordIpc(): void {
   ipcMain.handle('pw:logins', (e) => passwords.matchesFor(fromTab(e)))
   ipcMain.on('pw:submit', (e, d: { username: string; password: string }) => {
     const origin = fromTab(e)
+    // Инкогнито не предлагает сохранить пароль: его папка исчезнет вместе с окном.
+    if (profiles.isIncognito()) return
     if (origin && d && typeof d.password === 'string') passwords.onSubmit(e.sender, origin, { username: String(d.username ?? ''), password: d.password })
   })
   ipcMain.on('pw:username', (e, username: string) => {
@@ -1168,7 +1176,14 @@ function registerPasswordIpc(): void {
 
   // Ключи доступа: запросы WebAuthn из вкладок (сайт — по фрейму) и ответы пользователя из интерфейса.
   for (const op of ['create', 'get', 'abort'] as const) {
-    ipcMain.handle('pk:' + op, (e, json: string) => passkeys.request(e.sender, fromTab(e), op, String(json)))
+    ipcMain.handle('pk:' + op, (e, json: string) => {
+      // Ключ, созданный в инкогнито, пропал бы вместе с окном, а сайт ждал бы его всегда. Войти ключом —
+      // тоже нечем: ключи остались в профиле.
+      if (profiles.isIncognito() && op === 'create') {
+        return JSON.stringify({ ok: false, name: 'NotAllowedError', message: 'В окне инкогнито Masaki не создаёт ключи доступа — откройте сайт в обычном окне.' })
+      }
+      return passkeys.request(e.sender, fromTab(e), op, String(json))
+    })
   }
   ipcMain.handle('pk:conditional', (e) => (fromTab(e) ? passkeys.conditionalItems(e.sender) : []))
   const fromUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => !!win && e.sender === win.webContents
@@ -1249,6 +1264,8 @@ function registerIpc(): void {
 
   ipcMain.handle('session:load', () => sessionFile.read())
   ipcMain.on('session:save', (_e, s: SavedSession) => {
+    // Вкладки инкогнито не восстанавливаются и на диск не пишутся.
+    if (profiles.isIncognito()) return
     sessionFile.write(s, 800)
     lastTabs = s.tabs
     sync.onTabsChanged()
@@ -1256,7 +1273,7 @@ function registerIpc(): void {
 
   ipcMain.handle('history:list', () => history)
   ipcMain.on('history:add', (_e, entry: HistoryEntry) => {
-    if (!/^https?:/i.test(entry.url)) return
+    if (!/^https?:/i.test(entry.url) || profiles.isIncognito()) return
     const last = history[history.length - 1]
     if (last && last.url === entry.url) {
       last.title = entry.title || last.title
@@ -1455,6 +1472,11 @@ function registerIpc(): void {
     else profiles.openProfile(id)
   })
   ipcMain.handle('profiles:create', () => profiles.createProfile())
+  // Окно инкогнито (Ctrl+Shift+N, меню, «Открыть ссылку в окне инкогнито») — только из интерфейса Masaki.
+  ipcMain.on('incognito:open', (e, url: unknown) => {
+    if (e.sender !== win?.webContents) return
+    profiles.openIncognito(typeof url === 'string' ? url : undefined)
+  })
   ipcMain.on('profiles:rename', (_e, id: unknown, name: unknown) => {
     if (typeof id === 'string' && typeof name === 'string') profiles.renameProfile(id, name)
   })
@@ -1475,7 +1497,11 @@ function registerIpc(): void {
   })
   ipcMain.handle('sync:set-client', (_e, id: string, secret: string) => sync.setClient(String(id), String(secret)))
   ipcMain.on('sync:remove-client', () => sync.removeClient())
-  ipcMain.handle('sync:sign-in', (_e, external: boolean, hint: unknown) => sync.signIn(!!external, typeof hint === 'string' ? hint.slice(0, 320) : ''))
+  ipcMain.handle('sync:sign-in', (_e, external: boolean, hint: unknown) =>
+    profiles.isIncognito()
+      ? { ok: false, error: 'В окне инкогнито синхронизации нет — включите её в обычном окне Masaki.' }
+      : sync.signIn(!!external, typeof hint === 'string' ? hint.slice(0, 320) : '')
+  )
   ipcMain.on('sync:cancel', () => sync.cancelSignIn())
   ipcMain.handle('sync:sign-out', () => sync.signOut())
   ipcMain.handle('sync:now', () => sync.syncNow())
@@ -1727,16 +1753,30 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'crx', privileges: { standard: t
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
+  // Блокировка наша: прежнее инкогнито (если Masaki падал) стираем до того, как что-то прочитаем.
+  profiles.prepareIncognito()
   app.on('second-instance', (_e, argv) => {
     if (!win) return
     if (win.isMinimized()) win.restore()
     win.focus()
     const url = urlFromArgv(argv)
     if (url) send({ type: 'open-url', url })
+    // «Новое окно инкогнито», когда оно уже открыто, — новая вкладка в нём.
+    else if (profiles.isIncognito() && argv.includes('--incognito')) send({ type: 'new-tab' })
   })
 
   app.whenReady().then(async () => {
     settings = mergeSettings(await settingsFile.read())
+    // Инкогнито всегда тёмное и графитовое (сразу видно, где вы), без статуса в Discord и порта для ИИ.
+    if (profiles.isIncognito()) {
+      settings = {
+        ...settings,
+        scheme: 'dark',
+        palette: 'graphite',
+        aiControl: false,
+        addons: { ...settings.addons, discord: { ...settings.addons.discord, enabled: false } }
+      }
+    }
     setDiscordEnabled(settings.addons.discord.enabled)
     history = (await historyFile.read()) ?? []
     favicons = (await faviconFile.read()) ?? {}
@@ -1760,6 +1800,8 @@ if (!app.requestSingleInstanceLock()) {
       changed: () => sync.onPasswordsChanged(),
       backedUp: () => sync.getState().vault === 'ready'
     })
+    // У инкогнито синхронизация есть только «выключенная»: войти в неё нельзя (sync:sign-in), вкладки
+    // устройству не уходят (session:save не пишет).
     await startSync()
     await initDownloads({
       send: (d) => win?.webContents.send('download', d),
@@ -1777,9 +1819,24 @@ if (!app.requestSingleInstanceLock()) {
     void loadSavedExtensions()
     if (settings.addons.adblock.enabled) void applyAdblock(true)
     createWindow(await windowFile.read())
-    void refreshRegistration()
+    if (!profiles.isIncognito()) void refreshRegistration()
     updater.initUpdater((st) => win?.webContents.send('update-state', st))
   })
+
+  // Инкогнито закрывается: куки, хранилища сайтов и кэш стираем силами Chromium (его файлы открыты до
+  // выхода), свои файлы — после. Остатки папки сотрёт следующее окно инкогнито.
+  let incognitoWiped = false
+  app.on('before-quit', (e) => {
+    if (!profiles.isIncognito() || incognitoWiped) return
+    e.preventDefault()
+    incognitoWiped = true
+    const ses = session.fromPartition(PARTITION)
+    const wipe = Promise.all([ses.clearStorageData(), ses.clearCache(), ses.clearAuthCache(), ses.clearHostResolverCache()])
+    void Promise.race([wipe, new Promise((r) => setTimeout(r, 4000))])
+      .catch(() => {})
+      .finally(() => app.quit())
+  })
+  app.on('will-quit', () => profiles.wipeIncognitoFiles())
 
   app.on('before-quit', () => {
     settingsFile.flushSync()

@@ -34,7 +34,7 @@ function installed(): boolean {
 }
 
 function modeOf(): Pick<UpdateState, 'mode' | 'note'> {
-  if (profiles.currentProfile() !== 'default') return { mode: 'off', note: 'Обновления проверяет и скачивает основной профиль Masaki' }
+  if (profiles.currentProfile() !== 'default' || profiles.isIncognito()) return { mode: 'off', note: 'Обновления проверяет и скачивает основной профиль Masaki' }
   // Разработка и автотесты на GitHub не ходят.
   if (!FEED && (!app.isPackaged || process.env.MASAKI_PROFILE)) return { mode: 'off', note: 'Сборка для разработки — обновления выключены' }
   if (process.platform === 'win32') {

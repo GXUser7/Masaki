@@ -133,6 +133,8 @@ const api: MasakiApi = {
   discord: {
     setTrack: (t) => ipcRenderer.send('discord:track', t)
   },
+  incognito: process.argv.includes('--masaki-incognito'),
+  openIncognito: (url) => ipcRenderer.send('incognito:open', url),
   profiles: {
     list: () => ipcRenderer.invoke('profiles:list'),
     open: (id) => ipcRenderer.send('profiles:open', id),

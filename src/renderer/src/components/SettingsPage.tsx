@@ -276,7 +276,11 @@ export function SettingsPage(): React.JSX.Element {
 
         <section className="sy-section">
           <h2>Синхронизация</h2>
-          <SyncSection />
+          {window.masaki.incognito ? (
+            <p className="hint">В окне инкогнито синхронизации нет: ничего отсюда не уходит на Диск. Настройки, изменённые здесь, действуют, пока окно открыто.</p>
+          ) : (
+            <SyncSection />
+          )}
         </section>
 
         <section>

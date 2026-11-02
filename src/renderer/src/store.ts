@@ -725,7 +725,7 @@ export const useStore = create<Store>((set, get) => ({
       set({ profiles })
       // Окна профилей различаются в панели задач и Alt+Tab по заголовку.
       const me = profiles.find((p) => p.current)
-      document.title = profiles.length > 1 && me ? `${me.name} — Masaki` : 'Masaki'
+      document.title = window.masaki.incognito ? 'Инкогнито — Masaki' : profiles.length > 1 && me ? `${me.name} — Masaki` : 'Masaki'
     })
   },
 

@@ -529,6 +529,8 @@ export type Command =
   | { type: 'move-tab'; delta: -1 | 1 }
   /** Следующее или предыдущее совпадение поиска на странице; поиск закрыт — открыть его (F3, Ctrl+G). */
   | { type: 'find-next'; back?: boolean }
+  /** Новое окно инкогнито (Ctrl+Shift+N). */
+  | { type: 'incognito' }
 
 export interface WindowState {
   maximized: boolean
@@ -712,6 +714,10 @@ export interface MasakiApi {
     /** Что играет в YouCloud (null — ничего): главный процесс показывает это в Discord, если аддон включён. */
     setTrack(t: DiscordTrack | null): void
   }
+  /** Это окно инкогнито: временные куки, без истории, сессии и синхронизации. */
+  incognito: boolean
+  /** Открыть окно инкогнито (уже открыто — адрес или новая вкладка в нём). */
+  openIncognito(url?: string): void
   profiles: {
     list(): Promise<ProfileInfo[]>
     /** Открыть окно профиля (или показать, если уже открыто). */

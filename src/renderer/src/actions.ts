@@ -165,6 +165,9 @@ export function handleCommand(c: Command): void {
     case 'new-tab':
       s.newTab()
       break
+    case 'incognito':
+      window.masaki.openIncognito()
+      break
     case 'close-tab':
       s.closeTab()
       break

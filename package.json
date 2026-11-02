@@ -23,6 +23,7 @@
     "test:permissions": "electron-vite build && node scripts/permissions-test.mjs",
     "test:store": "node scripts/store-test.mjs",
     "test:copy": "electron-vite build && node scripts/copy-test.mjs",
+    "test:incognito": "electron-vite build && node scripts/incognito-test.mjs",
     "test:ai-image": "electron-vite build && node scripts/ai-image-test.mjs",
     "perf": "electron-vite build && node scripts/perf.mjs site",
     "test:sync": "electron-vite build && node scripts/sync-test.mjs",

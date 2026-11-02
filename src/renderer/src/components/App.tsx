@@ -97,8 +97,13 @@ export function App(): React.JSX.Element {
       useStore.getState().boot(s, session, history)
       void useStore.getState().loadDownloads()
       // Ссылка, с которой Masaki запустили (он — браузер по умолчанию): поверх восстановленных вкладок.
+      // Восстанавливать было нечего (первый запуск, окно инкогнито) — она занимает пустую новую вкладку.
       const launch = await window.masaki.system.launchUrl()
-      if (launch) useStore.getState().newTab(launch)
+      if (launch) {
+        const st = useStore.getState()
+        if (st.tabs.length === 1 && st.active().kind === 'newtab') st.navigate(launch, { raw: true, target: 'current' })
+        else st.newTab(launch)
+      }
       useStore.getState().loadAccounts()
       useStore.setState({ sync: await window.masaki.sync.state() })
       useStore.setState({ update: await window.masaki.update.state() })
@@ -283,6 +288,7 @@ export function App(): React.JSX.Element {
     settings.background !== 'shapes' && wallpaper ? 'wallbg' : '',
     active.kind === 'newtab' ? 'on-ntp' : '',
     paletteOpen ? 'pal-src-' + paletteAnchor : '',
+    window.masaki.incognito ? 'incognito' : '',
     htmlFullscreen ? 'htmlfs' : ''
   ].join(' ')
 

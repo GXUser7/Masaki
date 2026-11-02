@@ -56,6 +56,13 @@ export function openPageMenu(p: PageMenuParams): void {
     e.push(
       { kind: 'item', icon: 'add', label: 'Открыть ссылку в новой вкладке', run: () => S().newTab(p.linkURL, { background: true }) },
       { kind: 'item', icon: 'openInNew', label: 'Открыть ссылку и перейти', run: () => S().newTab(p.linkURL) },
+      {
+        kind: 'item',
+        icon: 'incognito',
+        label: 'Открыть ссылку в окне инкогнито',
+        disabled: !/^(https?|file):/i.test(p.linkURL),
+        run: () => window.masaki.openIncognito(p.linkURL)
+      },
       { kind: 'item', icon: 'download', label: 'Сохранить ссылку как…', run: act({ type: 'download', url: p.linkURL }) },
       { kind: 'item', icon: 'link', label: 'Копировать адрес ссылки', run: copy(p.linkURL, 'Адрес ссылки скопирован') }
     )

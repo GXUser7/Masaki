@@ -2764,6 +2764,89 @@ input {
   }
 }
 
+/* ---------- Окно инкогнито ---------- */
+/* Окно тёмное и графитовое (это решает главный процесс), а здесь — метки, по которым его не спутать с обычным. */
+.brand.incog {
+  /* «Инкогнито» длиннее «Masaki»: метка-чип помещается в шапку рядом с кнопками окна. */
+  min-width: 0;
+  gap: 6px;
+  padding: 5px 12px 5px 7px;
+  margin-right: 6px;
+  border-radius: 16px;
+  background: var(--sc);
+  color: var(--on-sc);
+  font-size: 14px;
+}
+.brand.incog svg {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  fill: var(--on-sc);
+  animation: none;
+}
+.cap-incog {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  margin: 0 2px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--sc);
+}
+.cap-incog svg {
+  width: 22px;
+  height: 22px;
+  fill: var(--on-sc);
+}
+.capz.small .cap-incog {
+  width: 26px;
+  height: 26px;
+}
+.capz.small .cap-incog svg {
+  width: 16px;
+  height: 16px;
+}
+.ntp-incog {
+  max-width: 620px;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 20px 16px 16px;
+  border-radius: var(--r-l, 24px);
+  background: var(--glass-pop);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.ntp-incog > svg {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  padding: 8px;
+  border-radius: 50%;
+  background: var(--sc);
+  fill: var(--on-sc);
+}
+.ntp-incog span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ntp-incog b {
+  font-size: 15px;
+  font-weight: 650;
+}
+.ntp-incog small {
+  font-size: 13px;
+  color: var(--on-sv);
+}
+/* Низкое окно: часы и ярлыки важнее пояснения. */
+@container (max-height: 560px) {
+  .ntp-incog {
+    display: none;
+  }
+}
+
 /* ---------- Плашка «Скопировано» ---------- */
 /* Внизу страницы, над доком; мышь не ловит — под ней страница. Что скопировано — второй строкой или картинкой. */
 .copy-toast {
