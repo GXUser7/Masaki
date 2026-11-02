@@ -61,7 +61,19 @@ window.start = (op, o) => {
       rawIdOk: b64u(c.rawId) === c.id,
       alg: op === 'create' ? r.getPublicKeyAlgorithm() : null,
       transports: op === 'create' ? r.getTransports() : null,
-      attach: c.authenticatorAttachment
+      attach: c.authenticatorAttachment,
+      // @github/webauthn-json (browser-ponyfill, им пользуется GitHub) переписывает toJSON у ответа; модули
+      // сайтов — строгий режим, неизменяемое свойство бросило бы TypeError.
+      assignable: (() => {
+        'use strict'
+        try {
+          const own = c.toJSON
+          c.toJSON = () => own.call(c)
+          return typeof c.toJSON() === 'object'
+        } catch (e) {
+          return String(e)
+        }
+      })()
     }
   }, (e) => (window.__r = { ok: false, name: e.name, message: e.message }))
   return true
@@ -149,12 +161,16 @@ function verifyGet(r, ch, key, userId) {
 
 // ---------- Masaki ----------
 async function launch(profile, tag) {
+  // Linux без связки ключей (CI, контейнер): safeStorage шифрует «как есть» — иначе Masaki отдал бы запрос
+  // системному WebAuthn. На Windows шифрует DPAPI, там это не нужно.
+  const linux = process.platform === 'linux'
   const app = await electron.launch({
-    args: [root],
+    args: [root, ...(linux ? ['--password-store=basic'] : [])],
     cwd: root,
     env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url },
     timeout: 60000
   })
+  if (linux) await app.evaluate(({ safeStorage }) => safeStorage.isEncryptionAvailable() || safeStorage.setUsePlainTextEncryption(true))
   const win = await app.firstWindow()
   win.on('console', (m) => logs.push(`[${tag} ${m.type()}] ${m.text()}`))
   win.on('pageerror', (e) => logs.push(`[${tag} pageerror] ${e.message}`))
@@ -237,6 +253,7 @@ try {
   let r = await result(A, 'создание ключа')
   check(r.ok, 'ключ создан: ' + (r.ok ? '' : r.name + ' ' + r.message))
   check(r.isPKC && r.isResp && r.tag === '[object PublicKeyCredential]', 'ответ — PublicKeyCredential с AuthenticatorAttestationResponse')
+  check(r.assignable === true, 'toJSON у ответа можно заменить, как у браузера (GitHub): ' + r.assignable)
   check(r.ext?.credProps?.rk === true && r.alg === -7 && r.attach === 'platform' && r.transports.includes('internal'), 'credProps, алгоритм, attachment и transports')
   const k1 = verifyCreate(r, ch)
   check((await A.win.locator('.pk-card').count()) === 0, 'окно закрылось')
@@ -264,6 +281,7 @@ try {
   await A.win.click('.pk-acc:has-text("Алиса")')
   r = await result(A, 'вход Алисы')
   check(r.ok && r.isPKC && r.isResp, 'вход: ответ — PublicKeyCredential с AuthenticatorAssertionResponse')
+  check(r.assignable === true, 'вход: toJSON у ответа можно заменить (GitHub): ' + r.assignable)
   verifyGet(r, ch, k1, alice.userId)
   ch = challenge()
   await start(A, 'get', { rpId: 'localhost', challenge: ch, allow: [k2.credId] })

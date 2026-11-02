@@ -34,8 +34,11 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
   type Desc = { type?: string; id: unknown; transports?: string[] }
   const descs = (list: unknown): { type?: string; id: string }[] =>
     Array.isArray(list) ? (list as Desc[]).map((d) => ({ type: d.type, id: enc(d.id) })) : []
+  // Свойства — записываемые: так их можно заменить, как у настоящего PublicKeyCredential (там это методы и
+  // поля прототипа). @github/webauthn-json (browser-ponyfill — на GitHub) делает credential.toJSON = …, и в
+  // строгом режиме неизменяемое свойство бросало TypeError — ключ создавался в Masaki, а до сайта не доходил.
   const define = (o: object, props: Record<string, unknown>): void => {
-    for (const k of Object.keys(props)) Object.defineProperty(o, k, { value: props[k], enumerable: true, configurable: true })
+    for (const k of Object.keys(props)) Object.defineProperty(o, k, { value: props[k], enumerable: true, configurable: true, writable: true })
   }
 
   type Wire = {
