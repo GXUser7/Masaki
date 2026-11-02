@@ -29,10 +29,12 @@ export default defineConfig({
   preload: {
     build: {
       rollupOptions: {
-        // index — мост для интерфейса Masaki, guest — маленький скрипт для страниц во вкладках.
+        // index — мост для интерфейса Masaki, guest — скрипт для страниц во вкладках, popup — для их
+        // всплывающих окон (вход через Google).
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
-          guest: resolve(__dirname, 'src/preload/guest.ts')
+          guest: resolve(__dirname, 'src/preload/guest.ts'),
+          popup: resolve(__dirname, 'src/preload/popup.ts')
         }
       }
     }

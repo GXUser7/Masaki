@@ -20,6 +20,7 @@ npm run test:permissions # сборка + разрешения: камера и 
 npm run test:store   # JsonFile без Electron: порядок записей, выход во время записи, ошибка записи
 npm run test:copy    # сборка + копирование из меню страницы, Ctrl+C, кнопка сайта, картинка и плашка «Скопировано»
 npm run test:incognito # сборка + окно инкогнито: вид, без истории, куки не в профиле и стираются, ссылка из обычного окна
+npm run test:google-signin # сборка + «Войти через Google» на сайтах: без FedCM, окно входа как Firefox, window.opener (подставной Google)
 npm run test:ai-image  # сборка + картинка в AI Mode из палитры (подставной Lens, к Google не ходит)
 npm run test:import  # сборка + тест переноса из Chrome на подставной папке Chrome
 npm run test:sync    # сборка + синхронизация двух профилей через подставной Google (scripts/mock-google.mjs)
@@ -551,6 +552,19 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   `onBeforeSendHeaders` + `navigator` через `preload/guest.ts`), иначе «браузер небезопасен».
   Остальные сайты видят обычный Chrome. Список аккаунтов — POST на `ListAccounts` с
   `Origin: https://www.google.com`.
+- **«Войти через Google» на сайтах** (Pinterest и др., 2026-11-02): Google Identity Services в Chrome ведёт вход
+  через FedCM (`navigator.credentials.get({ identity })`), а окно выбора аккаунта рисует браузер. У Electron его
+  нет: запрос доходит до списка аккаунтов и падает с NetworkError, Google считает это отменой — кнопка «ничего не
+  делала». Поэтому `--disable-features=FedCm` (main, до запуска): Google ведёт вход всплывающим окном, как в
+  Firefox. Окно (тип `window`, не webview) живёт в сессии вкладок и тоже должно быть «Firefox»: заголовки —
+  та же сессия, `navigator` — `matchGoogleUa`; первый документ окна Chromium грузит со старым UA (переход начат
+  родителем), поэтому окно входа один раз загружается заново (`googlePopup` в index.ts). `userAgentData` прячет
+  `preload/popup.ts` — он зарегистрирован на всю сессию (`registerPreloadScript`): preload из настроек окна,
+  открытого из webview, Electron не применяет. Под `protocol.handle` запросы идут мимо `onBeforeSendHeaders` —
+  заголовок в таком тесте не проверить.
+- **Preload-скрипты не делят модули**: общий импорт Vite выносит в `out/preload/chunks/…`, а preload в песочнице
+  `require` файлов не умеет — скрипт падает целиком (так сломался бы guest.ts всех вкладок). Общий код —
+  копией, с пометкой.
 - `onBeforeSendHeaders` у сессии может быть только один — его занимает вход в Google. Блокировщик
   (Ghostery) использует onBeforeRequest/onHeadersReceived; его включение сериализовано очередью.
 - Runtime-зависимости (`dependencies`) — только `@ghostery/adblocker-electron`, `electron-chrome-extensions`
