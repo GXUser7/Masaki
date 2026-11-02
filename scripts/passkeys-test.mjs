@@ -161,16 +161,12 @@ function verifyGet(r, ch, key, userId) {
 
 // ---------- Masaki ----------
 async function launch(profile, tag) {
-  // Linux без связки ключей (CI, контейнер): safeStorage шифрует «как есть» — иначе Masaki отдал бы запрос
-  // системному WebAuthn. На Windows шифрует DPAPI, там это не нужно.
-  const linux = process.platform === 'linux'
   const app = await electron.launch({
-    args: [root, ...(linux ? ['--password-store=basic'] : [])],
+    args: [root],
     cwd: root,
-    env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url },
+    env: { ...process.env, MASAKI_TEST_HEADLESS: process.env.MASAKI_TEST_HEADLESS ?? '1', MASAKI_TEST_INACTIVE: '1', MASAKI_PROFILE: profile, MASAKI_SYNC_MOCK: mock.url, MASAKI_TEST_PLAIN_STORAGE: '1' },
     timeout: 60000
   })
-  if (linux) await app.evaluate(({ safeStorage }) => safeStorage.isEncryptionAvailable() || safeStorage.setUsePlainTextEncryption(true))
   const win = await app.firstWindow()
   win.on('console', (m) => logs.push(`[${tag} ${m.type()}] ${m.text()}`))
   win.on('pageerror', (e) => logs.push(`[${tag} pageerror] ${e.message}`))

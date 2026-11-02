@@ -10,6 +10,7 @@ import {
   nativeImage,
   net,
   protocol,
+  safeStorage,
   screen,
   session,
   shell,
@@ -22,7 +23,7 @@ import fs from 'fs'
 import path from 'path'
 import { ElectronBlocker } from '@ghostery/adblocker-electron'
 import { JsonFile } from './store'
-import { keepTestWindowHidden, testFakeMedia, testHeadless } from './testMode'
+import { keepTestWindowHidden, testFakeMedia, testHeadless, testPlainStorage } from './testMode'
 import { chromeBookmarks, chromeHistory, chromeProfiles, chromeShortcuts } from './chromeImport'
 import * as sync from './sync'
 import * as passwords from './passwords'
@@ -144,6 +145,7 @@ const aiPort = ((): number => {
 })()
 if (aiPort) app.commandLine.appendSwitch('remote-debugging-port', String(aiPort))
 if (testFakeMedia) app.commandLine.appendSwitch('use-fake-device-for-media-stream')
+if (testPlainStorage) app.commandLine.appendSwitch('password-store', 'basic')
 // «Войти через Google» (Google Identity Services: Pinterest и многие другие) в Chrome идёт через FedCM —
 // navigator.credentials.get({ identity }), а окно выбора аккаунта рисует сам браузер. У Electron такого
 // окна нет: запрос доходит до списка аккаунтов и тут же падает с NetworkError, Google считает это отменой,
@@ -1810,6 +1812,7 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.whenReady().then(async () => {
+    if (testPlainStorage && !safeStorage.isEncryptionAvailable()) safeStorage.setUsePlainTextEncryption(true)
     settings = mergeSettings(await settingsFile.read())
     // Инкогнито всегда тёмное и графитовое (сразу видно, где вы), без статуса в Discord и порта для ИИ.
     if (profiles.isIncognito()) {

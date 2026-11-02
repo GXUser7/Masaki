@@ -189,8 +189,10 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   WebAuthn как есть (USB-ключи). В тестах эту кнопку не нажимать — откроется системное окно Windows.
 - Синхронизация — тот же `vault.json`, записи с `kind: 'passkey'` (закрытый ключ PKCS#8 base64url).
 - Тест — `scripts/passkeys-test.mjs` на http://localhost: подписи и форматы проверяет сам тест, как сервер.
-  На Linux без связки ключей тест включает `--password-store=basic` и `setUsePlainTextEncryption` — иначе
-  `safeStorage` недоступен и Masaki отдаёт запрос системному WebAuthn (он висит).
+  На Linux без связки ключей `safeStorage` недоступен (Masaki отдал бы запрос системному WebAuthn, он висит;
+  пароли и вход в синхронизацию не сохранились бы), поэтому тесты паролей, ключей и синхронизации ставят
+  `MASAKI_TEST_PLAIN_STORAGE=1`: с тестовым профилем на Linux main включает `--password-store=basic` и
+  `setUsePlainTextEncryption` до чтения профиля (`testPlainStorage` в testMode.ts). На Windows ничего не меняет.
 - **Свойства ответа — записываемые** (2026-11-02): `@github/webauthn-json/browser-ponyfill` (GitHub) делает
   `credential.toJSON = …`; у неизменяемого свойства в строгом режиме это TypeError — ключ сохранялся в Masaki,
   а GitHub его не получал, и вход «созданным ключом» не работал. Проверено связкой ponyfill +

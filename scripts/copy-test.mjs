@@ -6,7 +6,7 @@ import { _electron as electron } from 'playwright'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { clickGuest } from './electron-input.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -36,7 +36,7 @@ const guestId = () => page.evaluate(() => document.querySelector('webview.wv.on'
 const inTab = async (code) => app.evaluate(({ webContents }, [id, code]) => webContents.fromId(id).executeJavaScript(code), [await guestId(), code])
 const clip = () => app.evaluate(({ clipboard }) => clipboard.readText())
 const setClip = (t) => app.evaluate(({ clipboard }, t) => clipboard.writeText(t), t)
-const fileUrl = (f) => 'file:///' + f.split(path.sep).join('/').replace(/^\/+/, '')
+const fileUrl = (f) => pathToFileURL(f).href
 
 async function menuPick(x, y, label) {
   await clickGuest(app, await guestId(), x, y, { button: 'right' })
@@ -93,7 +93,8 @@ try {
       '<p><a id="a" href="https://example.com/путь">Ссылка на пример</a></p>' +
       '<input id="i" value="текст в поле" style="font:22px sans-serif;width:360px">' +
       '<p><button id="b" style="font:20px sans-serif" onclick="navigator.clipboard.writeText(\'из кнопки сайта\')">Копировать</button></p>' +
-      `<p><img id="img" width="96" height="64" src="${IMG}"></p></body>`
+      `<p><img id="img" width="96" height="64" src="${IMG}"></p>` +
+      `<p><video id="v" width="240" height="135" muted src="${pathToFileURL(path.join(root, 'scripts', 'fixtures', 'clip.webm')).href}"></video></p></body>`
   )
   // Команды интерфейс слушает после восстановления сессии — ждём, пока он нарисует вкладки.
   await page.waitForSelector('.tab, .dk-tab', { timeout: 20000 }).catch(() => {})
@@ -165,6 +166,16 @@ try {
   await page.waitForTimeout(400)
   await shot('copy-02-image')
   console.log('картинка: ок')
+
+  // 6б. «Скопировать кадр» видео — тоже с плашкой (координаты, как у «Копировать картинку», — сразу страницы).
+  await inTab(`new Promise((r) => { const v = document.getElementById('v'); if (v.readyState >= 2) r(); else v.addEventListener('loadeddata', () => r(), { once: true }) })`)
+  const vf = await inTab(`(() => { const b = document.getElementById('v').getBoundingClientRect(); return { x: b.left + 60, y: b.top + 40 } })()`)
+  await setClip('—')
+  await page.evaluate(([id, x, y]) => window.masaki.pageAction(id, { type: 'copy-frame', x, y }), [await guestId(), vf.x, vf.y])
+  await waitToast('Кадр скопирован')
+  const frame = await app.evaluate(async ({ clipboard }) => (await clipboard.read()).some((i) => i.types.includes('image/png')))
+  if (!frame) throw new Error('кадр видео не попал в буфер обмена')
+  console.log('кадр видео: ок')
 
   // 7. Меню закрыли без выбора (Esc) — фокус вернулся в поле страницы, печать идёт туда.
   await inTab(`(() => { const i = document.getElementById('i'); i.value = ''; i.focus() })()`)
