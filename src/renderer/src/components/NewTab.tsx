@@ -55,6 +55,18 @@ export function NewTab(): React.JSX.Element {
           AI Mode
         </button>
       </div>
+      {window.masaki.incognito && (
+        <div className="glass ntp-incog">
+          <Icon name="incognito" />
+          <span>
+            <b>Вы в режиме инкогнито</b>
+            <small>
+              Masaki не запомнит историю, вкладки и данные форм, а куки и входы на сайты удалит, когда вы закроете это окно.
+              Скачанные файлы останутся в папке «Загрузки». Сайты, провайдер и работодатель по-прежнему видят, что вы делаете.
+            </small>
+          </span>
+        </div>
+      )}
       <div ref={rd.box} className={'shortcuts' + (rd.dragging !== null ? ' rd-on' : '')} {...rd.boxProps}>
         {shortcuts.map((sc, i) => {
           const drag = rd.item(i, sc.url)

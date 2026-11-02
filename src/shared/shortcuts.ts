@@ -76,6 +76,9 @@ export function commandFor(input: KeyInput): Command | null {
         return shift ? { type: 'tab-search' } : null
       case 'KeyS':
         return shift ? null : { type: 'save-page' }
+      case 'KeyN':
+        // Как в Chrome: Ctrl+Shift+N — окно инкогнито. Отдельного «нового окна» у Masaki нет.
+        return shift ? { type: 'incognito' } : null
     }
     if (/^Digit[1-9]$/.test(code)) {
       const n = Number(code.slice(5))

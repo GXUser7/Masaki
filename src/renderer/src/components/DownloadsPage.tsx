@@ -205,6 +205,7 @@ function Row({ d, speed }: { d: DownloadInfo; speed: number }): React.JSX.Elemen
   }
   const copy = (): void => {
     void navigator.clipboard.writeText(d.url).then(() => {
+      useStore.getState().showCopied({ title: 'Ссылка на файл скопирована', text: d.url })
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1400)
     })

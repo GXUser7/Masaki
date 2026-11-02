@@ -10,6 +10,7 @@ import {
   nativeImage,
   net,
   protocol,
+  safeStorage,
   screen,
   session,
   shell,
@@ -22,7 +23,7 @@ import fs from 'fs'
 import path from 'path'
 import { ElectronBlocker } from '@ghostery/adblocker-electron'
 import { JsonFile } from './store'
-import { keepTestWindowHidden, testFakeMedia, testHeadless } from './testMode'
+import { keepTestWindowHidden, testFakeMedia, testHeadless, testPlainStorage } from './testMode'
 import { chromeBookmarks, chromeHistory, chromeProfiles, chromeShortcuts } from './chromeImport'
 import * as sync from './sync'
 import * as passwords from './passwords'
@@ -52,6 +53,7 @@ import {
   defaultSettings,
   type ChromeImportResult,
   type Command,
+  type CopiedInfo,
   type ExtensionInfo,
   type GoogleAccount,
   type HistoryEntry,
@@ -132,6 +134,8 @@ if (process.env.MASAKI_DOWNLOADS) app.setPath('downloads', process.env.MASAKI_DO
 // файла, а переключатель в интерфейсе действует с перезапуска. Порт слушает только 127.0.0.1, а без
 // --remote-allow-origins к нему не подключиться со страницы сайта — только программой на этом компьютере.
 const aiPort = ((): number => {
+  // Порт один на компьютер, и он у основного окна; инкогнито агенту не показываем.
+  if (profiles.isIncognito()) return 0
   try {
     const saved = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')) as Partial<Settings>
     return saved.aiControl === true ? AI_PORT : 0
@@ -141,6 +145,12 @@ const aiPort = ((): number => {
 })()
 if (aiPort) app.commandLine.appendSwitch('remote-debugging-port', String(aiPort))
 if (testFakeMedia) app.commandLine.appendSwitch('use-fake-device-for-media-stream')
+if (testPlainStorage) app.commandLine.appendSwitch('password-store', 'basic')
+// «Войти через Google» (Google Identity Services: Pinterest и многие другие) в Chrome идёт через FedCM —
+// navigator.credentials.get({ identity }), а окно выбора аккаунта рисует сам браузер. У Electron такого
+// окна нет: запрос доходит до списка аккаунтов и тут же падает с NetworkError, Google считает это отменой,
+// и кнопка «ничего не делает». Без FedCM Google ведёт вход всплывающим окном, как в Firefox и Safari.
+app.commandLine.appendSwitch('disable-features', 'FedCm')
 // Автотесты играют ролики и шум (мини-плеер, YouCloud) — в колонки пользователя звук не идёт.
 // Послушать при отладке: MASAKI_TEST_SOUND=1.
 if (testFakeMedia && process.env.MASAKI_TEST_SOUND !== '1') app.commandLine.appendSwitch('mute-audio')
@@ -197,7 +207,8 @@ function startupLog(): void {
     // журнал не обязателен
   }
 }
-startupLog()
+// Адрес, с которым открыли инкогнито, в журнал на диске попасть не должен.
+if (!profiles.isIncognito()) startupLog()
 
 function send(c: Command): void {
   win?.webContents.send('command', c)
@@ -325,7 +336,7 @@ function runPageAction(contents: WebContents, a: PageAction): void {
       contents.session.addWordToSpellCheckerDictionary(a.word)
       break
     case 'copy-image':
-      contents.copyImageAt(a.x, a.y)
+      void copyImage(contents, a.x, a.y)
       break
     case 'download':
       contents.downloadURL(a.url)
@@ -391,26 +402,74 @@ async function copyVideoFrame(contents: WebContents, x: number, y: number): Prom
     true
   )) as { data?: string; rect?: { x: number; y: number; w: number; h: number } } | null
   if (!res) return
-  if (res.data && res.data.length > 32) {
-    await writeImage(nativeImage.createFromDataURL(res.data))
-    return
-  }
-  if (res.rect) {
+  let img: Electron.NativeImage | null = null
+  if (res.data && res.data.length > 32) img = nativeImage.createFromDataURL(res.data)
+  else if (res.rect) {
     const z = contents.getZoomFactor()
-    const img = await contents.capturePage({
+    img = await contents.capturePage({
       x: Math.round(res.rect.x * z),
       y: Math.round(res.rect.y * z),
       width: Math.round(res.rect.w * z),
       height: Math.round(res.rect.h * z)
     })
-    await writeImage(img)
   }
+  if (!img || img.isEmpty()) return
+  await writeImage(img)
+  notifyCopied({ title: 'Кадр скопирован', image: thumbOf(img) })
 }
 
 /** В Electron 44 буфер обмена асинхронный, как в вебе: картинка кладётся через ClipboardItem. */
 async function writeImage(img: Electron.NativeImage): Promise<void> {
   const png = img.toPNG()
   await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })])
+}
+
+// ---------- Плашка «Скопировано» ----------
+// Что именно попало в буфер, интерфейс показывает плашкой внизу страницы. Читаем сам буфер, а не слова
+// страницы: сайт мог подменить текст в обработчике copy, и показать надо то, что вставится.
+
+function notifyCopied(c: CopiedInfo): void {
+  win?.webContents.send('copied', c)
+}
+
+/** Уменьшенная копия для плашки: в интерфейс не тащим многомегабайтный PNG. */
+function thumbOf(img: Electron.NativeImage): string {
+  const { width, height } = img.getSize()
+  const k = Math.min(1, 160 / Math.max(width, height, 1))
+  return (k < 1 ? img.resize({ width: Math.max(1, Math.round(width * k)), height: Math.max(1, Math.round(height * k)) }) : img).toDataURL()
+}
+
+/** Картинка из буфера обмена, если она там есть. */
+async function clipboardImage(): Promise<Electron.NativeImage | null> {
+  try {
+    if (!(await clipboard.has('image/png'))) return null
+    for (const item of await clipboard.read()) {
+      if (!item.types.includes('image/png')) continue
+      const blob = (await item.getType('image/png')) as Blob
+      const img = nativeImage.createFromBuffer(Buffer.from(await blob.arrayBuffer()))
+      if (!img.isEmpty()) return img
+    }
+  } catch {
+    // буфер занят другой программой — плашку просто не покажем
+  }
+  return null
+}
+
+/**
+ * «Копировать картинку» Chromium делает сам (берёт её из кэша страницы, со всеми куками сайта), но молча и
+ * не сразу. Ждём, пока картинка появится в буфере, и только тогда говорим «скопировано»: не вышло — молчим.
+ */
+async function copyImage(contents: WebContents, x: number, y: number): Promise<void> {
+  const had = await clipboard.has('image/png').catch(() => false)
+  contents.copyImageAt(x, y)
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 100))
+    if (contents.isDestroyed()) return
+    // Картинка в буфере была и раньше — новую от старой не отличить: подождав, верим, что легла новая.
+    if (had && i < 5) continue
+    const img = await clipboardImage()
+    if (img) return notifyCopied({ title: 'Картинка скопирована', image: thumbOf(img) })
+  }
 }
 
 async function saveAsPdf(contents: WebContents): Promise<void> {
@@ -632,6 +691,9 @@ function listenHeaders(ses: Electron.Session): void {
 function setupBrowsingSession(): void {
   const ses = session.fromPartition(PARTITION)
   ses.setUserAgent(chromeUserAgent())
+  // Всплывающим окнам вкладок preload из настроек окна Electron не даёт (окно открыто из webview), поэтому
+  // скрипт входа Google — на всю сессию: во вкладках он повторяет guest.ts, в окне «Войти через Google» — один.
+  ses.registerPreloadScript({ type: 'frame', id: 'masaki-popup', filePath: path.join(__dirname, '../preload/popup.js') })
   listenHeaders(ses)
   // Слушатель у сессии один на всё: вход в Google, заголовки запросов моста YouCloud и токен,
   // с которым soundcloud.com ходит в свой API (им YouCloud продлевает истёкшую сессию).
@@ -730,7 +792,7 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 24, y: 31 } } : { frame: false }),
     show: false,
     skipTaskbar: testHeadless,
-    title: 'Masaki',
+    title: profiles.isIncognito() ? 'Инкогнито — Masaki' : 'Masaki',
     icon: app.isPackaged ? undefined : path.join(__dirname, '../../build/icon.png'),
     backgroundColor: dark ? '#0D1513' : '#E3F1EE',
     webPreferences: {
@@ -739,7 +801,9 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
       backgroundThrottling: !testHeadless,
       offscreen: testHeadless,
       sandbox: true,
-      spellcheck: true
+      spellcheck: true,
+      // Интерфейс узнаёт, что он в окне инкогнито, до первой отрисовки (preload читает process.argv).
+      additionalArguments: profiles.isIncognito() ? ['--masaki-incognito'] : []
     }
   })
 
@@ -752,7 +816,8 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     else win?.show()
   })
   win.on('close', () => {
-    if (win) windowFile.write({ bounds: win.getNormalBounds(), maximized: win.isMaximized() }, 0)
+    // Размер окна инкогнито взят у профиля и обратно не пишется: папку сотрут при закрытии.
+    if (win && !profiles.isIncognito()) windowFile.write({ bounds: win.getNormalBounds(), maximized: win.isMaximized() }, 0)
   })
   if (process.env.MASAKI_SELFTEST_URL) runSelfTest()
   for (const ev of ['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'restore'] as const) {
@@ -969,7 +1034,47 @@ function askLens(contents: WebContents, query: string, image: string): boolean {
   return true
 }
 
+/**
+ * Окно, которое сейчас откроется из вкладки, идёт на вход Google. Его первый переход начат страницей-родителем
+ * раньше, чем о новом окне узнаёт web-contents-created, — did-start-navigation его не застаёт, поэтому адрес
+ * узнаём ещё в обработчике window.open.
+ */
+let googlePopup = 0
+
+/**
+ * navigator.userAgent на странице входа Google должен совпадать с заголовком (Firefox ESR), иначе Google
+ * видит подмену и пишет «браузер небезопасен». Заголовки меняет onBeforeSendHeaders всей сессии вкладок,
+ * а navigator — вот это, и для вкладок, и для всплывающих окон входа («Войти через Google» на сайтах).
+ */
+function matchGoogleUa(contents: WebContents): void {
+  contents.on('did-start-navigation', (e) => {
+    if (!e.isMainFrame || e.isSameDocument) return
+    const want = GOOGLE_LOGIN.test(e.url) ? FIREFOX_UA : chromeUserAgent()
+    if (contents.getUserAgent() !== want) contents.setUserAgent(want)
+  })
+}
+
 app.on('web-contents-created', (_e, contents) => {
+  // Всплывающее окно сайта (вход через Google, оплата) живёт в сессии вкладок, но это не webview.
+  if (contents.getType() === 'window' && contents.session === session.fromPartition(PARTITION)) {
+    const google = Date.now() < googlePopup
+    googlePopup = 0
+    // Первый документ окна Chromium загрузит со старым navigator.userAgent (переход начат страницей-родителем,
+    // подмена его не касается). Окно входа Google — один раз загружаем заново, уже как Firefox;
+    // window.opener у окна при этом остаётся.
+    if (google) {
+      contents.once('did-navigate', (_e, url) => {
+        if (!GOOGLE_LOGIN.test(url)) return
+        void contents
+          .executeJavaScript('navigator.userAgent')
+          .then((now: string) => {
+            if (now !== FIREFOX_UA && !contents.isDestroyed()) return contents.loadURL(url, { userAgent: FIREFOX_UA })
+          })
+          .catch(() => undefined)
+      })
+    }
+    matchGoogleUa(contents)
+  }
   if (contents.getType() !== 'webview') return
   attachShortcuts(contents, true)
   watchWebview(contents)
@@ -996,16 +1101,12 @@ app.on('web-contents-created', (_e, contents) => {
   // Применяет интерфейс (как Ctrl+=, с запоминанием в tab.zoom) в той вкладке, над которой крутили.
   contents.on('zoom-changed', (_ev, dir) => send({ type: 'zoom', delta: dir === 'in' ? 1 : -1, wcId: contents.id }))
   contents.on('context-menu', (_ev, p) => sendPageMenu(contents, p))
-  // navigator.userAgent на странице входа Google должен совпадать с заголовком.
-  contents.on('did-start-navigation', (e) => {
-    if (!e.isMainFrame || e.isSameDocument) return
-    const want = GOOGLE_LOGIN.test(e.url) ? FIREFOX_UA : chromeUserAgent()
-    if (contents.getUserAgent() !== want) contents.setUserAgent(want)
-  })
+  matchGoogleUa(contents)
   contents.setWindowOpenHandler(({ url, disposition, features }) => {
     // Настоящие всплывающие окна (вход через Google, оплата) остаются окнами,
     // чтобы у них работал window.opener. Всё остальное открывается вкладкой.
     if (disposition === 'new-window' && features) {
+      googlePopup = GOOGLE_LOGIN.test(url) ? Date.now() + 3000 : 0
       return {
         action: 'allow',
         overrideBrowserWindowOptions: { width: 520, height: 700, show: !testHeadless, autoHideMenuBar: true, backgroundColor: '#ffffff' }
@@ -1083,6 +1184,8 @@ function registerPasswordIpc(): void {
   ipcMain.handle('pw:logins', (e) => passwords.matchesFor(fromTab(e)))
   ipcMain.on('pw:submit', (e, d: { username: string; password: string }) => {
     const origin = fromTab(e)
+    // Инкогнито не предлагает сохранить пароль: его папка исчезнет вместе с окном.
+    if (profiles.isIncognito()) return
     if (origin && d && typeof d.password === 'string') passwords.onSubmit(e.sender, origin, { username: String(d.username ?? ''), password: d.password })
   })
   ipcMain.on('pw:username', (e, username: string) => {
@@ -1119,7 +1222,14 @@ function registerPasswordIpc(): void {
 
   // Ключи доступа: запросы WebAuthn из вкладок (сайт — по фрейму) и ответы пользователя из интерфейса.
   for (const op of ['create', 'get', 'abort'] as const) {
-    ipcMain.handle('pk:' + op, (e, json: string) => passkeys.request(e.sender, fromTab(e), op, String(json)))
+    ipcMain.handle('pk:' + op, (e, json: string) => {
+      // Ключ, созданный в инкогнито, пропал бы вместе с окном, а сайт ждал бы его всегда. Войти ключом —
+      // тоже нечем: ключи остались в профиле.
+      if (profiles.isIncognito() && op === 'create') {
+        return JSON.stringify({ ok: false, name: 'NotAllowedError', message: 'В окне инкогнито Masaki не создаёт ключи доступа — откройте сайт в обычном окне.' })
+      }
+      return passkeys.request(e.sender, fromTab(e), op, String(json))
+    })
   }
   ipcMain.handle('pk:conditional', (e) => (fromTab(e) ? passkeys.conditionalItems(e.sender) : []))
   const fromUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => !!win && e.sender === win.webContents
@@ -1200,6 +1310,8 @@ function registerIpc(): void {
 
   ipcMain.handle('session:load', () => sessionFile.read())
   ipcMain.on('session:save', (_e, s: SavedSession) => {
+    // Вкладки инкогнито не восстанавливаются и на диск не пишутся.
+    if (profiles.isIncognito()) return
     sessionFile.write(s, 800)
     lastTabs = s.tabs
     sync.onTabsChanged()
@@ -1207,7 +1319,7 @@ function registerIpc(): void {
 
   ipcMain.handle('history:list', () => history)
   ipcMain.on('history:add', (_e, entry: HistoryEntry) => {
-    if (!/^https?:/i.test(entry.url)) return
+    if (!/^https?:/i.test(entry.url) || profiles.isIncognito()) return
     const last = history[history.length - 1]
     if (last && last.url === entry.url) {
       last.title = entry.title || last.title
@@ -1316,7 +1428,43 @@ function registerIpc(): void {
     if (contents && !contents.isDestroyed()) runPageAction(contents, a)
   })
   ipcMain.on('ui:edit', (_e, cmd: 'cut' | 'copy' | 'paste' | 'selectAll' | 'undo' | 'redo') => win?.webContents[cmd]())
-  ipcMain.on('clipboard:write', (_e, text: string) => clipboard.writeText(text))
+  ipcMain.on('clipboard:write', (_e, text: unknown, title: unknown) => {
+    if (typeof text !== 'string' || !text) return
+    void clipboard.writeText(text).then(
+      () => notifyCopied({ title: typeof title === 'string' && title ? title.slice(0, 80) : 'Скопировано', text: text.slice(0, 2000) }),
+      () => {}
+    )
+  })
+  // Страница что-то скопировала (Ctrl+C, «Копировать» в меню, кнопка сайта): показать, что легло в буфер.
+  // Только вкладки этого окна; частые сообщения склеиваем — сайт не завалит окно плашками.
+  // Chromium пишет в буфер не сразу (проверки политик в браузере), поэтому ждём записи: текст совпал с
+  // выделенным (hint) или просто сменился — до полусекунды; то же самое скопировали снова — покажем как есть.
+  // Скопировали ещё раз, пока ждём, — показываем только последнее (и сайт, пишущий в буфер в цикле,
+  // не наплодит плашек).
+  let pageCopySeq = 0
+  const flat = (t: string): string => t.replace(/\s+/g, ' ').trim()
+  ipcMain.on('clip:page', (e, kind: unknown, hint: unknown) => {
+    const wc = e.sender
+    if (wc.getType() !== 'webview' || wc.hostWebContents !== win?.webContents) return
+    const seq = ++pageCopySeq
+    const want = typeof hint === 'string' ? flat(hint) : ''
+    const title = kind === 'cut' ? 'Вырезано' : 'Скопировано'
+    void (async () => {
+      const read = (): Promise<string> => clipboard.readText().catch(() => '')
+      const first = await read()
+      let text = first
+      for (let i = 0; i < 10 && !(want && flat(text) === want); i++) {
+        await new Promise((r) => setTimeout(r, 50))
+        if (seq !== pageCopySeq) return
+        text = await read()
+        if (text !== first) break
+      }
+      if (seq !== pageCopySeq) return
+      if (text) return notifyCopied({ title, text: text.slice(0, 2000) })
+      const img = await clipboardImage()
+      if (img && seq === pageCopySeq) notifyCopied({ title, image: thumbOf(img) })
+    })()
+  })
 
   ipcMain.handle('tab:capture', async (_e, wcId: number) => {
     const wc = webContents.fromId(Number(wcId))
@@ -1370,6 +1518,11 @@ function registerIpc(): void {
     else profiles.openProfile(id)
   })
   ipcMain.handle('profiles:create', () => profiles.createProfile())
+  // Окно инкогнито (Ctrl+Shift+N, меню, «Открыть ссылку в окне инкогнито») — только из интерфейса Masaki.
+  ipcMain.on('incognito:open', (e, url: unknown) => {
+    if (e.sender !== win?.webContents) return
+    profiles.openIncognito(typeof url === 'string' ? url : undefined)
+  })
   ipcMain.on('profiles:rename', (_e, id: unknown, name: unknown) => {
     if (typeof id === 'string' && typeof name === 'string') profiles.renameProfile(id, name)
   })
@@ -1390,7 +1543,11 @@ function registerIpc(): void {
   })
   ipcMain.handle('sync:set-client', (_e, id: string, secret: string) => sync.setClient(String(id), String(secret)))
   ipcMain.on('sync:remove-client', () => sync.removeClient())
-  ipcMain.handle('sync:sign-in', (_e, external: boolean, hint: unknown) => sync.signIn(!!external, typeof hint === 'string' ? hint.slice(0, 320) : ''))
+  ipcMain.handle('sync:sign-in', (_e, external: boolean, hint: unknown) =>
+    profiles.isIncognito()
+      ? { ok: false, error: 'В окне инкогнито синхронизации нет — включите её в обычном окне Masaki.' }
+      : sync.signIn(!!external, typeof hint === 'string' ? hint.slice(0, 320) : '')
+  )
   ipcMain.on('sync:cancel', () => sync.cancelSignIn())
   ipcMain.handle('sync:sign-out', () => sync.signOut())
   ipcMain.handle('sync:now', () => sync.syncNow())
@@ -1642,16 +1799,31 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'crx', privileges: { standard: t
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
+  // Блокировка наша: прежнее инкогнито (если Masaki падал) стираем до того, как что-то прочитаем.
+  profiles.prepareIncognito()
   app.on('second-instance', (_e, argv) => {
     if (!win) return
     if (win.isMinimized()) win.restore()
     win.focus()
     const url = urlFromArgv(argv)
     if (url) send({ type: 'open-url', url })
+    // «Новое окно инкогнито», когда оно уже открыто, — новая вкладка в нём.
+    else if (profiles.isIncognito() && argv.includes('--incognito')) send({ type: 'new-tab' })
   })
 
   app.whenReady().then(async () => {
+    if (testPlainStorage && !safeStorage.isEncryptionAvailable()) safeStorage.setUsePlainTextEncryption(true)
     settings = mergeSettings(await settingsFile.read())
+    // Инкогнито всегда тёмное и графитовое (сразу видно, где вы), без статуса в Discord и порта для ИИ.
+    if (profiles.isIncognito()) {
+      settings = {
+        ...settings,
+        scheme: 'dark',
+        palette: 'graphite',
+        aiControl: false,
+        addons: { ...settings.addons, discord: { ...settings.addons.discord, enabled: false } }
+      }
+    }
     setDiscordEnabled(settings.addons.discord.enabled)
     history = (await historyFile.read()) ?? []
     favicons = (await faviconFile.read()) ?? {}
@@ -1675,6 +1847,8 @@ if (!app.requestSingleInstanceLock()) {
       changed: () => sync.onPasswordsChanged(),
       backedUp: () => sync.getState().vault === 'ready'
     })
+    // У инкогнито синхронизация есть только «выключенная»: войти в неё нельзя (sync:sign-in), вкладки
+    // устройству не уходят (session:save не пишет).
     await startSync()
     await initDownloads({
       send: (d) => win?.webContents.send('download', d),
@@ -1692,9 +1866,24 @@ if (!app.requestSingleInstanceLock()) {
     void loadSavedExtensions()
     if (settings.addons.adblock.enabled) void applyAdblock(true)
     createWindow(await windowFile.read())
-    void refreshRegistration()
+    if (!profiles.isIncognito()) void refreshRegistration()
     updater.initUpdater((st) => win?.webContents.send('update-state', st))
   })
+
+  // Инкогнито закрывается: куки, хранилища сайтов и кэш стираем силами Chromium (его файлы открыты до
+  // выхода), свои файлы — после. Остатки папки сотрёт следующее окно инкогнито.
+  let incognitoWiped = false
+  app.on('before-quit', (e) => {
+    if (!profiles.isIncognito() || incognitoWiped) return
+    e.preventDefault()
+    incognitoWiped = true
+    const ses = session.fromPartition(PARTITION)
+    const wipe = Promise.all([ses.clearStorageData(), ses.clearCache(), ses.clearAuthCache(), ses.clearHostResolverCache()])
+    void Promise.race([wipe, new Promise((r) => setTimeout(r, 4000))])
+      .catch(() => {})
+      .finally(() => app.quit())
+  })
+  app.on('will-quit', () => profiles.wipeIncognitoFiles())
 
   app.on('before-quit', () => {
     settingsFile.flushSync()

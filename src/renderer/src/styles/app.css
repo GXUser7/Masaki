@@ -2763,6 +2763,190 @@ input {
     transform: translate(-50%, -24px) scale(0.94);
   }
 }
+
+/* ---------- Окно инкогнито ---------- */
+/* Окно тёмное и графитовое (это решает главный процесс), а здесь — метки, по которым его не спутать с обычным. */
+.brand.incog {
+  /* «Инкогнито» длиннее «Masaki»: метка-чип помещается в шапку рядом с кнопками окна. */
+  min-width: 0;
+  gap: 6px;
+  padding: 5px 12px 5px 7px;
+  margin-right: 6px;
+  border-radius: 16px;
+  background: var(--sc);
+  color: var(--on-sc);
+  font-size: 14px;
+}
+.brand.incog svg {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  fill: var(--on-sc);
+  animation: none;
+}
+.cap-incog {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  margin: 0 2px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--sc);
+}
+.cap-incog svg {
+  width: 22px;
+  height: 22px;
+  fill: var(--on-sc);
+}
+.capz.small .cap-incog {
+  width: 26px;
+  height: 26px;
+}
+.capz.small .cap-incog svg {
+  width: 16px;
+  height: 16px;
+}
+.ntp-incog {
+  max-width: 620px;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 20px 16px 16px;
+  border-radius: var(--r-l, 24px);
+  background: var(--glass-pop);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.ntp-incog > svg {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  padding: 8px;
+  border-radius: 50%;
+  background: var(--sc);
+  fill: var(--on-sc);
+}
+.ntp-incog span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ntp-incog b {
+  font-size: 15px;
+  font-weight: 650;
+}
+.ntp-incog small {
+  font-size: 13px;
+  color: var(--on-sv);
+}
+/* Низкое окно: часы и ярлыки важнее пояснения. */
+@container (max-height: 560px) {
+  .ntp-incog {
+    display: none;
+  }
+}
+
+/* ---------- Плашка «Скопировано» ---------- */
+/* Внизу страницы, над доком; мышь не ловит — под ней страница. Что скопировано — второй строкой или картинкой. */
+.copy-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 16;
+  min-width: 220px;
+  max-width: min(520px, calc(100% - 48px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px 8px 8px;
+  border-radius: 28px;
+  background: var(--glass-pop);
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: ctIn 0.5s var(--spring);
+  transition:
+    opacity 0.3s,
+    transform 0.3s;
+}
+.copy-toast.out {
+  opacity: 0;
+  transform: translate(-50%, 14px) scale(0.96);
+}
+@keyframes ctIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 26px) scale(0.9);
+  }
+}
+.collapsed .copy-toast {
+  bottom: 82px;
+}
+.collapsed.cap-small .copy-toast {
+  bottom: 58px;
+}
+.ct-ic {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--pc);
+  /* Галочка «вылупляется» из скруглённого квадрата в круг — тот же язык форм, что у кнопок. */
+  animation: ctPop 0.6s var(--snap) 0.06s both;
+}
+.ct-ic svg {
+  width: 20px;
+  height: 20px;
+  fill: var(--on-pc);
+}
+@keyframes ctPop {
+  from {
+    transform: scale(0.4) rotate(-40deg);
+    border-radius: 12px;
+  }
+}
+.ct-img {
+  width: 46px;
+  height: 46px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 16px;
+  background: var(--hov);
+}
+.ct-t {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.ct-t b {
+  font-weight: 650;
+  white-space: nowrap;
+}
+.ct-t em {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--on-sv);
+}
+.ct-t small {
+  font-size: 12.5px;
+  color: var(--on-sv);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+  .copy-toast,
+  .ct-ic {
+    animation: none;
+  }
+}
 .perm-ic {
   position: relative;
   width: 44px;

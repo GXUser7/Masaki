@@ -98,7 +98,8 @@ try {
   // Внутренним страницам куки не принадлежат: пункт меню отсутствует.
   await win.getByRole('button', { name: 'Меню', exact: true }).click()
   assert.equal(await win.getByRole('button', { name: 'Очистить куки текущего сайта', exact: true }).count(), 0)
-  await win.getByRole('button', { name: 'Закрыть меню', exact: true }).click()
+  // В угол подложки, а не в центр: меню выросло и может накрыть середину окна.
+  await win.getByRole('button', { name: 'Закрыть меню', exact: true }).click({ position: { x: 4, y: 4 } })
   await open('https://deep.a.masaki.test/nested/page')
   await seed([
     { url: 'https://masaki.test', domain: '.masaki.test', name: 'parent', httpOnly: true, secure: true },
@@ -169,7 +170,8 @@ try {
     return [localStorage.getItem('keep'), sessionStorage.getItem('keep'), await (await caches.match('/cached')).text(), dbValue]
   })()`), ['local-value', 'session-value', 'cache-value', 'db-value'])
   await shot('site-data-02-cleared')
-  await win.getByRole('button', { name: 'Закрыть меню', exact: true }).click()
+  // В угол подложки, а не в центр: меню выросло и может накрыть середину окна.
+  await win.getByRole('button', { name: 'Закрыть меню', exact: true }).click({ position: { x: 4, y: 4 } })
   console.log('ok — меню очищает parent, HttpOnly, path и поддомены; чужие сайты и другой профиль сохранены')
   console.log('ok — localStorage, sessionStorage, IndexedDB и CacheStorage сохранены; посторонний IPC отклонён')
   console.log('ok — разделённые куки текущего домена удалены; чужие CHIPS с его topLevelSite сохранены')

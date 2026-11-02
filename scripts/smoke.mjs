@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import zlib from 'node:zlib'
 import { clickGuest, guestMouse } from './electron-input.mjs'
 
@@ -46,7 +46,7 @@ async function inTab(code) {
   const id = await activeGuestId()
   return app.evaluate(({ webContents }, [id, code]) => webContents.fromId(id).executeJavaScript(code), [id, code])
 }
-const fileUrl = (f) => 'file:///' + f.split(path.sep).join('/')
+const fileUrl = (f) => pathToFileURL(f).href
 
 async function assertHidden() {
   if (process.env.MASAKI_TEST_HEADLESS === '0') return
@@ -249,7 +249,7 @@ const steps = {
     fs.writeFileSync(file, '<meta charset="utf-8"><body style="font:16px sans-serif;padding:24px">Страница просит местоположение<script>navigator.geolocation.getCurrentPosition(()=>{},()=>{})</script></body>')
     await app.evaluate(({ BrowserWindow }, url) => {
       BrowserWindow.getAllWindows()[0].webContents.send('command', { type: 'open-url', url })
-    }, 'file:///' + file.split(path.sep).join('/'))
+    }, fileUrl(file))
     await page.waitForSelector('.perm', { timeout: 10000 })
     await page.waitForTimeout(700)
     await shot('03a-permission')

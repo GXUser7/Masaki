@@ -347,7 +347,8 @@ function AccountChip(): React.JSX.Element {
   const profiles = useStore((s) => s.profiles)
   const a = accounts[0]
   const me = profiles.length > 1 ? profiles.find((p) => p.current) : undefined
-  const status = sync?.account ? syncStatusText(sync) : a ? a.email : 'в Google'
+  const incog = window.masaki.incognito
+  const status = incog ? 'инкогнито' : sync?.account ? syncStatusText(sync) : a ? a.email : 'в Google'
   // Когда профилей несколько, видно, чьё это окно.
   const sub = me ? `${me.name} · ${status}` : status
   return (
@@ -359,7 +360,9 @@ function AccountChip(): React.JSX.Element {
         useStore.getState().setPopover('accounts')
       }}
     >
-      <span className="achip-ava">{a?.photo ? <img src={a.photo} alt="" referrerPolicy="no-referrer" draggable={false} /> : <Icon name="person" />}</span>
+      <span className="achip-ava">
+        {a?.photo ? <img src={a.photo} alt="" referrerPolicy="no-referrer" draggable={false} /> : <Icon name={incog ? 'incognito' : 'person'} />}
+      </span>
       <span className="achip-t">
         <b>{a ? a.name || a.email : 'Войти'}</b>
         <small>{sub}</small>
@@ -525,12 +528,19 @@ export function Sidebar(): React.JSX.Element {
     <aside className="glass side" aria-label="Боковая панель">
       <Grain />
       <div className="side-top" title="Двойной щелчок — развернуть окно, тянуть — двигать">
-        <span className="brand" aria-hidden="true">
-          <svg viewBox="0 0 200 200">
-            <path d={shapes.cookie9} />
-          </svg>
-          Masaki
-        </span>
+        {window.masaki.incognito ? (
+          <span className="brand incog" aria-hidden="true">
+            <Icon name="incognito" />
+            Инкогнито
+          </span>
+        ) : (
+          <span className="brand" aria-hidden="true">
+            <svg viewBox="0 0 200 200">
+              <path d={shapes.cookie9} />
+            </svg>
+            Masaki
+          </span>
+        )}
         <div className="sp" />
         <button className="ib wb" aria-label="Свернуть панель" title="Свернуть панель · Ctrl+B" onClick={() => s().toggleSidebar()}>
           <Icon name="sidebar" />
@@ -996,6 +1006,11 @@ export function Dock(): React.JSX.Element {
         <button className="ib cap-side" aria-label="Показать панель" title="Показать панель · Ctrl+B" onClick={() => s().toggleSidebar()}>
           <Icon name="sidebar" />
         </button>
+        {window.masaki.incognito && (
+          <span className="cap-incog" title="Окно инкогнито: история не сохраняется, куки удалятся при закрытии">
+            <Icon name="incognito" />
+          </span>
+        )}
         <AddressBar where="cap" />
         <DownloadsButton dock />
         <MenuButton className="ib cap-more" />
@@ -1172,25 +1187,34 @@ export function Popover(): React.JSX.Element | null {
                 <Icon name="logout" /> Выйти из всех аккаунтов
               </button>
             )}
-            <div className="cm-sep" />
-            <ProfilesBlock close={close} />
-            <div className="cm-sep" />
-            <button
-              className={'mi sy-mi ' + (syncSt?.status ?? '')}
-              title={syncSt?.account ? 'Аккаунт синхронизации: ' + syncSt.account.email : undefined}
-              onClick={run(() => {
-                // Ключ уже есть (встроенный или свой) — настраивать нечего — сразу вход; итог (и ошибки) покажут настройки.
-                if (syncSt && !syncSt.account && (syncSt.client || syncSt.builtinKey) && syncSt.status !== 'waiting') {
-                  void window.masaki.sync.signIn(false, syncHint(accounts))
-                } else s().openSettings()
-              })}
-            >
-              <Icon name={syncSt?.status === 'error' || syncSt?.status === 'signin' ? 'warn' : 'sync'} />
-              <span className="sy-mi-t">
-                {syncSt?.account ? 'Синхронизация' : 'Включить синхронизацию'}
-                <small>{syncSt?.account ? syncStatusText(syncSt) : 'Избранное, история и вкладки на всех компьютерах'}</small>
-              </span>
-            </button>
+            {window.masaki.incognito ? (
+              <>
+                <div className="cm-sep" />
+                <div className="pop-empty">Окно инкогнито: входы в аккаунты действуют, пока оно открыто. Профили и синхронизация — в обычном окне.</div>
+              </>
+            ) : (
+              <>
+                <div className="cm-sep" />
+                <ProfilesBlock close={close} />
+                <div className="cm-sep" />
+                <button
+                  className={'mi sy-mi ' + (syncSt?.status ?? '')}
+                  title={syncSt?.account ? 'Аккаунт синхронизации: ' + syncSt.account.email : undefined}
+                  onClick={run(() => {
+                    // Ключ уже есть (встроенный или свой) — настраивать нечего — сразу вход; итог (и ошибки) покажут настройки.
+                    if (syncSt && !syncSt.account && (syncSt.client || syncSt.builtinKey) && syncSt.status !== 'waiting') {
+                      void window.masaki.sync.signIn(false, syncHint(accounts))
+                    } else s().openSettings()
+                  })}
+                >
+                  <Icon name={syncSt?.status === 'error' || syncSt?.status === 'signin' ? 'warn' : 'sync'} />
+                  <span className="sy-mi-t">
+                    {syncSt?.account ? 'Синхронизация' : 'Включить синхронизацию'}
+                    <small>{syncSt?.account ? syncStatusText(syncSt) : 'Избранное, история и вкладки на всех компьютерах'}</small>
+                  </span>
+                </button>
+              </>
+            )}
           </>
         ) : popover === 'downloads' ? (
           <>
@@ -1257,6 +1281,9 @@ export function Popover(): React.JSX.Element | null {
             )}
             <button className="mi" onClick={run(() => s().newTab())}>
               <Icon name="add" /> Новая вкладка <span className="kbd">Ctrl T</span>
+            </button>
+            <button className="mi" onClick={run(() => window.masaki.openIncognito())}>
+              <Icon name="incognito" /> Новое окно инкогнито <span className="kbd">Ctrl Shift N</span>
             </button>
             <button className="mi" disabled={t.kind !== 'web'} onClick={run(() => s().setFind({ open: true, focusTick: s().find.focusTick + 1 }))}>
               <Icon name="search" /> Найти на странице <span className="kbd">Ctrl F</span>

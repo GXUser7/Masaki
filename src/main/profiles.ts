@@ -28,6 +28,10 @@ const ID = /^[a-f0-9]{12}$/
 
 let base = ''
 let current = 'default'
+/** Окно инкогнито: временная папка данных, ничего из неё не остаётся после закрытия. */
+let incognito = false
+/** Папка профиля, из которого открыли инкогнито: оттуда берём вид (настройки, обои). */
+let sourceDir = ''
 
 const dirOf = (id: string): string => (id === 'default' ? base : path.join(base, 'Profiles', id))
 const listFile = (): string => path.join(base, 'profiles.json')
@@ -43,9 +47,76 @@ export function initProfile(baseDir: string, argv: string[]): void {
     current = arg
     app.setPath('userData', dirOf(arg))
   }
+  // Инкогнито, как в Chrome, — отдельное окно со своими куками, которые живут, пока оно открыто. У Masaki это
+  // отдельный процесс со своей папкой данных: у каждого профиля одна, поэтому все окна инкогнито профиля —
+  // одно окно (повторный запуск отдаёт ссылку ему), а блокировка «одной копии» не мешает основному окну.
+  if (argv.includes('--incognito')) {
+    incognito = true
+    sourceDir = dirOf(current)
+    const dir = process.env.MASAKI_PROFILE
+      ? path.join(base, 'Incognito-' + current)
+      : path.join(app.getPath('temp'), 'Masaki Incognito', app.getName() + '-' + current)
+    fs.mkdirSync(dir, { recursive: true })
+    app.setPath('userData', dir)
+  }
 }
 
 export const currentProfile = (): string => current
+export const isIncognito = (): boolean => incognito
+
+/** Свои у окна только эти файлы: что бы ни осталось в папке, всё остальное — данные прошлого инкогнито. */
+const LOCKS = /^(lockfile|Singleton)/
+
+/**
+ * Окно инкогнито получило папку (блокировка «одной копии» уже у нас): стираем всё, что осталось от прошлого
+ * раза (Masaki мог упасть), и берём из профиля только вид — настройки, обои, размер окна. Ни истории, ни
+ * паролей, ни входов на сайты.
+ */
+export function prepareIncognito(): void {
+  if (!incognito) return
+  const dir = app.getPath('userData')
+  for (const name of fs.readdirSync(dir)) {
+    if (LOCKS.test(name)) continue
+    try {
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true })
+    } catch {
+      // файл держит другая программа (антивирус) — не страшно, данных сайтов в нём уже нет
+    }
+  }
+  try {
+    for (const name of fs.readdirSync(sourceDir)) {
+      const look = ['settings.json', 'favicons.json', 'window.json'].includes(name) || name.startsWith('custom-wallpaper.')
+      if (look) fs.copyFileSync(path.join(sourceDir, name), path.join(dir, name))
+    }
+  } catch {
+    // у нового профиля настроек ещё нет — будут настройки по умолчанию
+  }
+}
+
+/** Закрывается окно инкогнито: удаляем файлы Masaki (вкладки, загрузки, настройки) — Chromium свои держит до выхода. */
+export function wipeIncognitoFiles(): void {
+  if (!incognito) return
+  const dir = app.getPath('userData')
+  for (const name of fs.readdirSync(dir)) {
+    if (!/\.(json|tmp)$/.test(name) && !name.startsWith('custom-wallpaper.')) continue
+    try {
+      fs.rmSync(path.join(dir, name), { force: true })
+    } catch {
+      // удалится при следующем открытии инкогнито
+    }
+  }
+}
+
+/** Открыть окно инкогнито этого профиля (уже открыто — получит адрес новой вкладкой). */
+export function openIncognito(url?: string): void {
+  const args = [
+    ...selfArgs(),
+    ...(current === 'default' ? [] : [`--profile=${current}`]),
+    '--incognito',
+    ...(url && /^(https?|file):\/\//i.test(url) ? [url] : [])
+  ]
+  spawn(process.execPath, args, { detached: true, stdio: 'ignore', env: process.env }).unref()
+}
 
 function read(): Stored[] {
   let list: Stored[] = []
@@ -74,6 +145,8 @@ export function listProfiles(): ProfileInfo[] {
 
 /** Аккаунт Google этого профиля → аватар и (если имя не меняли руками) имя в списке, как в Chrome. */
 export function noteAccount(a: GoogleAccount | undefined): void {
+  // Вход в Google в окне инкогнито — не аккаунт профиля.
+  if (incognito) return
   const list = read()
   const me = list.find((p) => p.id === current)
   if (!me) return
@@ -87,10 +160,15 @@ export function noteAccount(a: GoogleAccount | undefined): void {
   write(list)
 }
 
+/** Начало командной строки новой копии Masaki: путь к проекту в разработке и ключ песочницы, как у этой копии. */
+function selfArgs(): string[] {
+  return [...(app.isPackaged ? [] : [app.getAppPath()]), ...(app.commandLine.hasSwitch('no-sandbox') ? ['--no-sandbox'] : [])]
+}
+
 /** Открыть окно профиля. Уже открыт — новая копия передаст управление его окну и закроется. */
 export function openProfile(id: string): void {
   if (id !== 'default' && !ID.test(id)) return
-  const args = [...(app.isPackaged ? [] : [app.getAppPath()]), ...(id === 'default' ? [] : [`--profile=${id}`])]
+  const args = [...selfArgs(), ...(id === 'default' ? [] : [`--profile=${id}`])]
   spawn(process.execPath, args, { detached: true, stdio: 'ignore' }).unref()
 }
 

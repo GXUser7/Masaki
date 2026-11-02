@@ -131,7 +131,13 @@ function Row({ it, editing, onEdit }: { it: PasswordItem; editing: boolean; onEd
             className={'ib' + (copied ? ' on' : '')}
             aria-label="Скопировать пароль"
             title={copied ? 'Скопировано — через минуту уберётся из буфера' : 'Скопировать'}
-            onClick={() => void window.masaki.passwords.copy(it.id).then(setCopied)}
+            onClick={() =>
+              void window.masaki.passwords.copy(it.id).then((ok) => {
+                setCopied(ok)
+                // Сам пароль на плашке не показываем — только чей он.
+                if (ok) useStore.getState().showCopied({ title: 'Пароль скопирован', note: `${it.username || it.host} · уберётся из буфера через минуту` })
+              })
+            }
           >
             <Icon name={copied ? 'check' : 'copy'} />
           </button>

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type {
   ArchivedTab,
   AutofillRequest,
+  CopiedInfo,
   DownloadInfo,
   GoogleAccount,
   HistoryEntry,
@@ -214,8 +215,10 @@ interface Store {
   /** Адрес для QR-кода страницы. */
   qrUrl: string
   winMaximized: boolean
-  /** Открытое контекстное меню (стеклянное, рисуем сами). */
-  menu: { x: number; y: number; entries: MenuEntry[] } | null
+  /** Открытое контекстное меню (стеклянное, рисуем сами). restore — что сделать при закрытии (вернуть фокус вкладке). */
+  menu: { x: number; y: number; entries: MenuEntry[]; restore?: () => void } | null
+  /** Плашка «Скопировано» внизу страницы; id растёт — каждое копирование заново запускает показ. */
+  copied: (CopiedInfo & { id: number }) | null
   accounts: GoogleAccount[]
   /** Профили Masaki (как в Chrome) — в меню аккаунта. */
   profiles: ProfileInfo[]
@@ -302,8 +305,9 @@ interface Store {
   loadDownloads(): Promise<void>
   dropDownload(id: string): void
   setPopover(p: Store['popover']): void
-  openMenu(x: number, y: number, entries: MenuEntry[]): void
+  openMenu(x: number, y: number, entries: MenuEntry[], restore?: () => void): void
   closeMenu(): void
+  showCopied(c: CopiedInfo): void
   loadAccounts(): void
   loadProfiles(): void
   addPermission(p: PermissionPrompt): void
@@ -330,6 +334,7 @@ export const useStore = create<Store>((set, get) => ({
   qrUrl: '',
   winMaximized: false,
   menu: null,
+  copied: null,
   accounts: [],
   profiles: [],
   permissions: [],
@@ -683,12 +688,20 @@ export const useStore = create<Store>((set, get) => ({
     set({ popover: p, menu: null })
   },
 
-  openMenu(x, y, entries) {
-    set({ menu: { x, y, entries }, popover: null })
+  openMenu(x, y, entries, restore) {
+    // Меню поверх меню: прежнее закрывается как обычно, со своим restore.
+    if (get().menu) get().closeMenu()
+    set({ menu: { x, y, entries, restore }, popover: null })
   },
 
   closeMenu() {
+    const restore = get().menu?.restore
     set({ menu: null })
+    restore?.()
+  },
+
+  showCopied(c) {
+    set((s) => ({ copied: { ...c, id: (s.copied?.id ?? 0) + 1 } }))
   },
 
   addPermission(p) {
@@ -712,7 +725,7 @@ export const useStore = create<Store>((set, get) => ({
       set({ profiles })
       // Окна профилей различаются в панели задач и Alt+Tab по заголовку.
       const me = profiles.find((p) => p.current)
-      document.title = profiles.length > 1 && me ? `${me.name} — Masaki` : 'Masaki'
+      document.title = window.masaki.incognito ? 'Инкогнито — Masaki' : profiles.length > 1 && me ? `${me.name} — Masaki` : 'Masaki'
     })
   },
 

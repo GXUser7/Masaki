@@ -106,6 +106,16 @@ export interface PageMenuParams {
   extItems?: ExtMenuItem[]
 }
 
+/** Что попало в буфер обмена — для плашки «Скопировано». image — уменьшенная копия data:. */
+export interface CopiedInfo {
+  /** Заголовок плашки: «Скопировано», «Адрес ссылки скопирован», «Вырезано»… */
+  title: string
+  text?: string
+  image?: string
+  /** Подпись вместо самого текста — когда показывать его нельзя (пароль). */
+  note?: string
+}
+
 export type PageAction =
   | { type: 'edit'; cmd: 'cut' | 'copy' | 'paste' | 'selectAll' | 'undo' | 'redo' }
   | { type: 'replace'; word: string }
@@ -519,6 +529,8 @@ export type Command =
   | { type: 'move-tab'; delta: -1 | 1 }
   /** Следующее или предыдущее совпадение поиска на странице; поиск закрыт — открыть его (F3, Ctrl+G). */
   | { type: 'find-next'; back?: boolean }
+  /** Новое окно инкогнито (Ctrl+Shift+N). */
+  | { type: 'incognito' }
 
 export interface WindowState {
   maximized: boolean
@@ -702,6 +714,10 @@ export interface MasakiApi {
     /** Что играет в YouCloud (null — ничего): главный процесс показывает это в Discord, если аддон включён. */
     setTrack(t: DiscordTrack | null): void
   }
+  /** Это окно инкогнито: временные куки, без истории, сессии и синхронизации. */
+  incognito: boolean
+  /** Открыть окно инкогнито (уже открыто — адрес или новая вкладка в нём). */
+  openIncognito(url?: string): void
   profiles: {
     list(): Promise<ProfileInfo[]>
     /** Открыть окно профиля (или показать, если уже открыто). */
@@ -788,7 +804,10 @@ export interface MasakiApi {
   }
   pageAction(wcId: number, a: PageAction): void
   uiEdit(cmd: 'cut' | 'copy' | 'paste' | 'selectAll' | 'undo' | 'redo'): void
-  copyText(text: string): void
+  /** Текст в буфер обмена; после записи придёт onCopied с этим заголовком. */
+  copyText(text: string, title?: string): void
+  /** Что-то скопировали: страница (Ctrl+C, кнопка сайта, меню), картинка, адрес — показать плашку. */
+  onCopied(cb: (c: CopiedInfo) => void): () => void
   /** Положение курсора относительно окна — нужно там, где страница во вкладке «съедает» уход мыши. */
   cursor(): Promise<{ x: number; y: number }>
   suggest(q: string): Promise<string[]>

@@ -146,6 +146,7 @@ function commands(): PaletteCommand[] {
     { title: 'Печать', sub: 'Ctrl+P', icon: 'print', run: page({ type: 'print' }), hidden: !web },
     { title: 'QR-код страницы', sub: 'Открыть на телефоне', icon: 'qr', run: () => S().showQr(t.url), hidden: !web },
     { title: 'Поиск по вкладкам', sub: 'Ctrl+Shift+A', icon: 'search', run: () => S().openTabSearch() },
+    { title: 'Новое окно инкогнито', sub: 'Ctrl+Shift+N · история и куки не сохранятся', icon: 'incognito', run: () => window.masaki.openIncognito() },
     { title: 'Пароли', sub: 'Менеджер паролей', icon: 'key', run: () => S().openPasswords() },
     { title: 'Загрузки', sub: 'Все скачанные файлы · Ctrl+J', icon: 'download', run: () => S().openDownloads() },
     { title: 'Аддоны', sub: 'Прозрачные сайты, блокировщик, расширения', icon: 'extension', run: () => S().openAddons() },
