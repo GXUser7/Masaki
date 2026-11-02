@@ -52,6 +52,7 @@ import {
   defaultSettings,
   type ChromeImportResult,
   type Command,
+  type CopiedInfo,
   type ExtensionInfo,
   type GoogleAccount,
   type HistoryEntry,
@@ -325,7 +326,7 @@ function runPageAction(contents: WebContents, a: PageAction): void {
       contents.session.addWordToSpellCheckerDictionary(a.word)
       break
     case 'copy-image':
-      contents.copyImageAt(a.x, a.y)
+      void copyImage(contents, a.x, a.y)
       break
     case 'download':
       contents.downloadURL(a.url)
@@ -391,26 +392,74 @@ async function copyVideoFrame(contents: WebContents, x: number, y: number): Prom
     true
   )) as { data?: string; rect?: { x: number; y: number; w: number; h: number } } | null
   if (!res) return
-  if (res.data && res.data.length > 32) {
-    await writeImage(nativeImage.createFromDataURL(res.data))
-    return
-  }
-  if (res.rect) {
+  let img: Electron.NativeImage | null = null
+  if (res.data && res.data.length > 32) img = nativeImage.createFromDataURL(res.data)
+  else if (res.rect) {
     const z = contents.getZoomFactor()
-    const img = await contents.capturePage({
+    img = await contents.capturePage({
       x: Math.round(res.rect.x * z),
       y: Math.round(res.rect.y * z),
       width: Math.round(res.rect.w * z),
       height: Math.round(res.rect.h * z)
     })
-    await writeImage(img)
   }
+  if (!img || img.isEmpty()) return
+  await writeImage(img)
+  notifyCopied({ title: 'Кадр скопирован', image: thumbOf(img) })
 }
 
 /** В Electron 44 буфер обмена асинхронный, как в вебе: картинка кладётся через ClipboardItem. */
 async function writeImage(img: Electron.NativeImage): Promise<void> {
   const png = img.toPNG()
   await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })])
+}
+
+// ---------- Плашка «Скопировано» ----------
+// Что именно попало в буфер, интерфейс показывает плашкой внизу страницы. Читаем сам буфер, а не слова
+// страницы: сайт мог подменить текст в обработчике copy, и показать надо то, что вставится.
+
+function notifyCopied(c: CopiedInfo): void {
+  win?.webContents.send('copied', c)
+}
+
+/** Уменьшенная копия для плашки: в интерфейс не тащим многомегабайтный PNG. */
+function thumbOf(img: Electron.NativeImage): string {
+  const { width, height } = img.getSize()
+  const k = Math.min(1, 160 / Math.max(width, height, 1))
+  return (k < 1 ? img.resize({ width: Math.max(1, Math.round(width * k)), height: Math.max(1, Math.round(height * k)) }) : img).toDataURL()
+}
+
+/** Картинка из буфера обмена, если она там есть. */
+async function clipboardImage(): Promise<Electron.NativeImage | null> {
+  try {
+    if (!(await clipboard.has('image/png'))) return null
+    for (const item of await clipboard.read()) {
+      if (!item.types.includes('image/png')) continue
+      const blob = (await item.getType('image/png')) as Blob
+      const img = nativeImage.createFromBuffer(Buffer.from(await blob.arrayBuffer()))
+      if (!img.isEmpty()) return img
+    }
+  } catch {
+    // буфер занят другой программой — плашку просто не покажем
+  }
+  return null
+}
+
+/**
+ * «Копировать картинку» Chromium делает сам (берёт её из кэша страницы, со всеми куками сайта), но молча и
+ * не сразу. Ждём, пока картинка появится в буфере, и только тогда говорим «скопировано»: не вышло — молчим.
+ */
+async function copyImage(contents: WebContents, x: number, y: number): Promise<void> {
+  const had = await clipboard.has('image/png').catch(() => false)
+  contents.copyImageAt(x, y)
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 100))
+    if (contents.isDestroyed()) return
+    // Картинка в буфере была и раньше — новую от старой не отличить: подождав, верим, что легла новая.
+    if (had && i < 5) continue
+    const img = await clipboardImage()
+    if (img) return notifyCopied({ title: 'Картинка скопирована', image: thumbOf(img) })
+  }
 }
 
 async function saveAsPdf(contents: WebContents): Promise<void> {
@@ -1316,7 +1365,43 @@ function registerIpc(): void {
     if (contents && !contents.isDestroyed()) runPageAction(contents, a)
   })
   ipcMain.on('ui:edit', (_e, cmd: 'cut' | 'copy' | 'paste' | 'selectAll' | 'undo' | 'redo') => win?.webContents[cmd]())
-  ipcMain.on('clipboard:write', (_e, text: string) => clipboard.writeText(text))
+  ipcMain.on('clipboard:write', (_e, text: unknown, title: unknown) => {
+    if (typeof text !== 'string' || !text) return
+    void clipboard.writeText(text).then(
+      () => notifyCopied({ title: typeof title === 'string' && title ? title.slice(0, 80) : 'Скопировано', text: text.slice(0, 2000) }),
+      () => {}
+    )
+  })
+  // Страница что-то скопировала (Ctrl+C, «Копировать» в меню, кнопка сайта): показать, что легло в буфер.
+  // Только вкладки этого окна; частые сообщения склеиваем — сайт не завалит окно плашками.
+  // Chromium пишет в буфер не сразу (проверки политик в браузере), поэтому ждём записи: текст совпал с
+  // выделенным (hint) или просто сменился — до полусекунды; то же самое скопировали снова — покажем как есть.
+  // Скопировали ещё раз, пока ждём, — показываем только последнее (и сайт, пишущий в буфер в цикле,
+  // не наплодит плашек).
+  let pageCopySeq = 0
+  const flat = (t: string): string => t.replace(/\s+/g, ' ').trim()
+  ipcMain.on('clip:page', (e, kind: unknown, hint: unknown) => {
+    const wc = e.sender
+    if (wc.getType() !== 'webview' || wc.hostWebContents !== win?.webContents) return
+    const seq = ++pageCopySeq
+    const want = typeof hint === 'string' ? flat(hint) : ''
+    const title = kind === 'cut' ? 'Вырезано' : 'Скопировано'
+    void (async () => {
+      const read = (): Promise<string> => clipboard.readText().catch(() => '')
+      const first = await read()
+      let text = first
+      for (let i = 0; i < 10 && !(want && flat(text) === want); i++) {
+        await new Promise((r) => setTimeout(r, 50))
+        if (seq !== pageCopySeq) return
+        text = await read()
+        if (text !== first) break
+      }
+      if (seq !== pageCopySeq) return
+      if (text) return notifyCopied({ title, text: text.slice(0, 2000) })
+      const img = await clipboardImage()
+      if (img && seq === pageCopySeq) notifyCopied({ title, image: thumbOf(img) })
+    })()
+  })
 
   ipcMain.handle('tab:capture', async (_e, wcId: number) => {
     const wc = webContents.fromId(Number(wcId))

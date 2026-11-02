@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   Command,
+  CopiedInfo,
   DownloadInfo,
   ExtInstallPrompt,
   HistoryEntry,
@@ -201,7 +202,8 @@ const api: MasakiApi = {
   },
   pageAction: (wcId, a) => ipcRenderer.send('page:action', wcId, a),
   uiEdit: (cmd) => ipcRenderer.send('ui:edit', cmd),
-  copyText: (text) => ipcRenderer.send('clipboard:write', text),
+  copyText: (text, title) => ipcRenderer.send('clipboard:write', text, title),
+  onCopied: (cb) => listen<CopiedInfo>('copied', cb),
   cursor: () => ipcRenderer.invoke('cursor'),
   suggest: (q) => ipcRenderer.invoke('suggest', q),
   wallpaper: () => ipcRenderer.invoke('wallpaper'),

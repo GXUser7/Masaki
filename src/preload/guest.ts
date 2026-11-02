@@ -471,6 +471,57 @@ contextBridge.executeInMainWorld({
   args: [(type: string, message: string, value?: string): JsAnswer => ipcRenderer.sendSync('js:dialog', { type, message, value }) as JsAnswer]
 })
 
+// 6в. Копирование: Masaki показывает плашку «Скопировано» с тем, что легло в буфер. Сам буфер читает
+// главный процесс (сайт мог подменить текст в обработчике copy), отсюда — «скопировали» и что было
+// выделено: Chromium пишет в буфер не сразу, и по подсказке главный процесс понимает, что запись дошла.
+// Кнопки «Копировать» на сайтах пишут через navigator.clipboard — без события copy, их видно только
+// из мира страницы.
+function selectedText(): string {
+  const el = document.activeElement
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    try {
+      return el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0)
+    } catch {
+      // у полей вроде email выделения нет
+    }
+  }
+  return window.getSelection()?.toString() ?? ''
+}
+for (const kind of ['copy', 'cut'] as const) {
+  window.addEventListener(
+    kind,
+    (e) => {
+      if (!e.isTrusted) return
+      const hint = selectedText().slice(0, 2000)
+      setTimeout(() => ipcRenderer.send('clip:page', kind, hint))
+    },
+    true
+  )
+}
+contextBridge.executeInMainWorld({
+  func: (report: (hint: string) => void) => {
+    const proto = window.Clipboard?.prototype as unknown as Record<string, unknown> | undefined
+    if (!proto) return
+    for (const name of ['writeText', 'write']) {
+      const orig = proto[name]
+      if (typeof orig !== 'function') continue
+      // Имя функции — как у настоящей: некоторые сайты сверяют его.
+      const wrapped = {
+        [name](this: unknown, ...args: unknown[]): unknown {
+          const p = (orig as (...a: unknown[]) => Promise<void>).apply(this, args)
+          p.then(
+            () => report(name === 'writeText' && typeof args[0] === 'string' ? args[0].slice(0, 2000) : ''),
+            () => {}
+          )
+          return p
+        }
+      }[name]
+      Object.defineProperty(proto, name, { value: wrapped, writable: true, configurable: true, enumerable: true })
+    }
+  },
+  args: [(hint: string): void => ipcRenderer.send('clip:page', 'copy', String(hint ?? '').slice(0, 2000))]
+})
+
 // 7. Что играет: Media Session сайта — в мини-плеер Masaki (обложка, название, «следующий»).
 // Команды мини-плеера приходят сюда (webview.send) и зовут обработчики сайта, как медиаклавиши.
 let mediaRun: ((action: string, time: number) => void) | null = null

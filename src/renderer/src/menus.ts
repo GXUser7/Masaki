@@ -18,21 +18,29 @@ function short(text: string, n = 28): string {
 /**
  * Меню страницы. Electron отдаёт координаты клика уже в системе окна — по ним ставим меню,
  * а для «Просмотреть код» и «Копировать картинку» переводим их в координаты самой страницы.
+ *
+ * Меню — часть интерфейса Masaki, и пока оно открыто, фокус у интерфейса, а не у страницы. Команды правки
+ * (копировать, вставить, отменить…) Chromium выполняет в сфокусированном фрейме окна: без фокуса страницы
+ * «Копировать» уходило в само меню и ничего не копировало. Поэтому, закрываясь, меню возвращает фокус
+ * вкладке (как Chrome после своего меню) — и только потом выполняется пункт.
  */
 export function openPageMenu(p: PageMenuParams): void {
   let left = 0
   let top = 0
+  let guest: Electron.WebviewTag | null = null
   for (const el of document.querySelectorAll<Electron.WebviewTag>('webview')) {
     try {
       if (el.getWebContentsId() !== p.wcId) continue
       const r = el.getBoundingClientRect()
       left = r.left
       top = r.top
+      guest = el
       break
     } catch {
       // этот webview ещё не готов
     }
   }
+  const copy = (text: string, title: string) => () => window.masaki.copyText(text, title)
   const act = (a: Parameters<typeof window.masaki.pageAction>[1]) => () => window.masaki.pageAction(p.wcId, a)
   const e: MenuEntry[] = []
   const sep = (): void => {
@@ -49,9 +57,9 @@ export function openPageMenu(p: PageMenuParams): void {
       { kind: 'item', icon: 'add', label: 'Открыть ссылку в новой вкладке', run: () => S().newTab(p.linkURL, { background: true }) },
       { kind: 'item', icon: 'openInNew', label: 'Открыть ссылку и перейти', run: () => S().newTab(p.linkURL) },
       { kind: 'item', icon: 'download', label: 'Сохранить ссылку как…', run: act({ type: 'download', url: p.linkURL }) },
-      { kind: 'item', icon: 'link', label: 'Копировать адрес ссылки', run: () => window.masaki.copyText(p.linkURL) }
+      { kind: 'item', icon: 'link', label: 'Копировать адрес ссылки', run: copy(p.linkURL, 'Адрес ссылки скопирован') }
     )
-    if (p.linkText.trim()) e.push({ kind: 'item', icon: 'copy', label: 'Копировать текст ссылки', run: () => window.masaki.copyText(p.linkText.trim()) })
+    if (p.linkText.trim()) e.push({ kind: 'item', icon: 'copy', label: 'Копировать текст ссылки', run: copy(p.linkText.trim(), 'Текст ссылки скопирован') })
     sep()
   }
   // Видео и аудио — как в Chrome: картинка в картинке, кадр, повтор, элементы управления.
@@ -75,7 +83,7 @@ export function openPageMenu(p: PageMenuParams): void {
         { kind: 'sep' },
         { kind: 'item', icon: 'download', label: video ? 'Сохранить видео как…' : 'Сохранить аудио как…', run: act({ type: 'download', url: p.srcURL }) },
         { kind: 'item', icon: 'openInNew', label: video ? 'Открыть видео в новой вкладке' : 'Открыть аудио в новой вкладке', run: () => S().newTab(p.srcURL) },
-        { kind: 'item', icon: 'link', label: video ? 'Копировать адрес видео' : 'Копировать адрес аудио', run: () => window.masaki.copyText(p.srcURL) }
+        { kind: 'item', icon: 'link', label: video ? 'Копировать адрес видео' : 'Копировать адрес аудио', run: copy(p.srcURL, video ? 'Адрес видео скопирован' : 'Адрес аудио скопирован') }
       )
     }
     sep()
@@ -85,7 +93,7 @@ export function openPageMenu(p: PageMenuParams): void {
       { kind: 'item', icon: 'image', label: 'Открыть картинку в новой вкладке', run: () => S().newTab(p.srcURL, { background: true }) },
       { kind: 'item', icon: 'download', label: 'Сохранить картинку', run: act({ type: 'download', url: p.srcURL }) },
       { kind: 'item', icon: 'copy', label: 'Копировать картинку', run: act({ type: 'copy-image', x: gx, y: gy }) },
-      { kind: 'item', icon: 'link', label: 'Копировать адрес картинки', run: () => window.masaki.copyText(p.srcURL) },
+      { kind: 'item', icon: 'link', label: 'Копировать адрес картинки', run: copy(p.srcURL, 'Адрес картинки скопирован') },
       { kind: 'item', icon: 'lens', label: 'Найти картинку через Google Lens', disabled: p.srcURL.startsWith('data:') || p.srcURL.startsWith('blob:'), run: lens(p.srcURL) }
     )
     sep()
@@ -111,7 +119,7 @@ export function openPageMenu(p: PageMenuParams): void {
     const base = p.pageURL.split('#')[0]
     e.push(
       { kind: 'item', icon: 'copy', label: 'Копировать', kbd: 'Ctrl C', run: act({ type: 'edit', cmd: 'copy' }) },
-      { kind: 'item', icon: 'link', label: 'Копировать ссылку на выделенное', run: () => window.masaki.copyText(base + '#:~:text=' + encodeURIComponent(text.slice(0, 300))) },
+      { kind: 'item', icon: 'link', label: 'Копировать ссылку на выделенное', run: copy(base + '#:~:text=' + encodeURIComponent(text.slice(0, 300)), 'Ссылка на выделенное скопирована') },
       { kind: 'item', icon: 'search', label: `Найти в Google «${short(text)}»`, run: () => S().newTab(searchUrl(text)) },
       { kind: 'item', icon: 'sparkle', label: `Спросить AI Mode о «${short(text)}»`, run: () => S().newTab(aiModeUrl(text)) },
       {
@@ -173,7 +181,9 @@ export function openPageMenu(p: PageMenuParams): void {
     sep()
   }
   e.push({ kind: 'item', icon: 'code', label: 'Просмотреть код элемента', kbd: 'F12', run: act({ type: 'inspect', x: p.x - left, y: p.y - top }) })
-  S().openMenu(p.x, p.y, e)
+  S().openMenu(p.x, p.y, e, () => {
+    if (guest?.isConnected) guest.focus()
+  })
 }
 
 /** Меню кнопки расширения: закрепить, параметры, управление, удалить. */
@@ -305,7 +315,7 @@ export function openTileMenu(x: number, y: number, list: 'favorites' | 'shortcut
     },
     { kind: 'sep' },
     { kind: 'item', icon: 'add', label: 'Открыть в новой вкладке', run: () => S().newTab(item.url) },
-    { kind: 'item', icon: 'link', label: 'Копировать адрес', run: () => window.masaki.copyText(item.url) },
+    { kind: 'item', icon: 'link', label: 'Копировать адрес', run: () => window.masaki.copyText(item.url, 'Адрес скопирован') },
     { kind: 'sep' },
     {
       kind: 'item',
@@ -324,11 +334,20 @@ export function openInputMenu(x: number, y: number, el: HTMLInputElement | HTMLT
     el.focus()
     window.masaki.uiEdit(cmd)
   }
-  S().openMenu(x, y, [
-    { kind: 'item', icon: 'cut', label: 'Вырезать', kbd: 'Ctrl X', disabled: !hasSel, run: edit('cut') },
-    { kind: 'item', icon: 'copy', label: 'Копировать', kbd: 'Ctrl C', disabled: !hasSel, run: edit('copy') },
-    { kind: 'item', icon: 'paste', label: 'Вставить', kbd: 'Ctrl V', run: edit('paste') },
-    { kind: 'sep' },
-    { kind: 'item', icon: 'selectAll', label: 'Выделить всё', kbd: 'Ctrl A', run: edit('selectAll') }
-  ])
+  // Закрыли меню без выбора — фокус обратно в поле, как было до правого клика.
+  const restore = (): void => {
+    if (el.isConnected) el.focus()
+  }
+  S().openMenu(
+    x,
+    y,
+    [
+      { kind: 'item', icon: 'cut', label: 'Вырезать', kbd: 'Ctrl X', disabled: !hasSel, run: edit('cut') },
+      { kind: 'item', icon: 'copy', label: 'Копировать', kbd: 'Ctrl C', disabled: !hasSel, run: edit('copy') },
+      { kind: 'item', icon: 'paste', label: 'Вставить', kbd: 'Ctrl V', run: edit('paste') },
+      { kind: 'sep' },
+      { kind: 'item', icon: 'selectAll', label: 'Выделить всё', kbd: 'Ctrl A', run: edit('selectAll') }
+    ],
+    restore
+  )
 }

@@ -7,6 +7,7 @@ import { applyTokens, paletteFromImage, tokensFor, type PalettePair } from '../l
 import { captureThumb, takeStageBefore, useStore, wv } from '../store'
 import { Dock, ErrorView, FindBar, Popover, Sidebar } from './Chrome'
 import { ContextMenu } from './Menu'
+import { CopyToast } from './CopyToast'
 import { AddonsPage } from './AddonsPage'
 import { PasswordsPage } from './PasswordsPage'
 import { DownloadsPage } from './DownloadsPage'
@@ -123,8 +124,23 @@ export function App(): React.JSX.Element {
       if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) openInputMenu(e.clientX, e.clientY, t)
     }
     window.addEventListener('contextmenu', onContext)
+    // Копирование в полях самого интерфейса (палитра, поиск, настройки) — та же плашка, что у страниц.
+    const onCopy = (e: ClipboardEvent): void => {
+      const t = document.activeElement
+      let text = ''
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) {
+        if (t.type === 'password') return
+        text = t.value.slice(t.selectionStart ?? 0, t.selectionEnd ?? 0)
+      } else text = window.getSelection()?.toString() ?? ''
+      if (text.trim()) useStore.getState().showCopied({ title: e.type === 'cut' ? 'Вырезано' : 'Скопировано', text })
+    }
+    document.addEventListener('copy', onCopy)
+    document.addEventListener('cut', onCopy)
     const offs = [
       () => window.removeEventListener('contextmenu', onContext),
+      () => document.removeEventListener('copy', onCopy),
+      () => document.removeEventListener('cut', onCopy),
+      window.masaki.onCopied((c) => useStore.getState().showCopied(c)),
       window.masaki.onPageMenu(openPageMenu),
       window.masaki.permissions.onPrompt((p) => useStore.getState().addPermission(p)),
       window.masaki.permissions.onDismiss((id) => useStore.getState().dropPermission(id)),
@@ -319,6 +335,7 @@ export function App(): React.JSX.Element {
           <PasskeySheet />
           <PageDialog />
           <ExtInstallSheet />
+          <CopyToast />
           <Dock />
         </div>
       </div>
