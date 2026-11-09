@@ -63,8 +63,18 @@ export function useSearchDrop(): { active: boolean; props: HTMLAttributes<HTMLEl
   const generation = useRef(0)
   useEffect(() => {
     const end = (): void => setActive(false)
+    const escape = (e: KeyboardEvent): void => { if (e.key === 'Escape') end() }
     window.addEventListener('dragend', end)
-    return () => { generation.current++; window.removeEventListener('dragend', end) }
+    window.addEventListener('drop', end)
+    window.addEventListener('blur', end)
+    window.addEventListener('keydown', escape)
+    return () => {
+      generation.current++
+      window.removeEventListener('dragend', end)
+      window.removeEventListener('drop', end)
+      window.removeEventListener('blur', end)
+      window.removeEventListener('keydown', escape)
+    }
   }, [])
   const over = (e: DragEvent<HTMLElement>): void => {
     if (e.defaultPrevented || !canSearchDrop(e.dataTransfer)) return

@@ -5,6 +5,7 @@ import { pickAutofill } from './PasswordUi'
 import { hostOf } from '../lib/url'
 import { captureThumb, markReady, registerWebview, unregisterWebview, useStore, type Tab } from '../store'
 import { syncGlass } from '../lib/glass'
+import { cancelGoogleAccountEntry, continueGoogleAccountEntry } from '../lib/googleAccount'
 import { isYouCloud, parseMedia, sendYouCloudTheme } from '../lib/youcloud'
 
 /** Не чаще раза за столько мс док меняет размер: дольше, чем перетекание (0,45 с). */
@@ -128,6 +129,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
       ['did-stop-loading', () => {
         up({ loading: false })
         syncNav()
+        continueGoogleAccountEntry(id)
         // Снимок для превью, пока вкладка видна: потом, в фоне, она не рисуется.
         window.setTimeout(() => {
           if (store().activeId === id) captureThumb(id)
@@ -209,6 +211,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
     for (const [name, fn] of handlers) el.addEventListener(name, fn as EventListener)
     return () => {
       for (const [name, fn] of handlers) el.removeEventListener(name, fn as EventListener)
+      cancelGoogleAccountEntry(id)
       unregisterWebview(id)
     }
   }, [id])

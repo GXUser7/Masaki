@@ -19,11 +19,13 @@ import { hostOf } from '../lib/url'
 import { formatBytes } from '../lib/format'
 import { moveTiles, tileKeys, useReorder } from '../lib/reorder'
 import { useSearchDrop } from '../lib/searchDrop'
+import { openGoogleAccount } from '../lib/googleAccount'
 import { siteCookieDomain } from '../../../shared/site'
 import type { DownloadInfo, ExtAction, ExtensionInfo, TabGroup, UpdateState } from '../../../shared/types'
 import { actionFor, actionIcon, badgeColor, pressAction, STORE_URL, togglePin, useExtensions } from '../lib/extensions'
 import { useStore, wv, type Tab } from '../store'
 import { Icon } from './Icon'
+import { SearchDropHint } from './SearchDropHint'
 import { AddressLabel, Grain, ProgressRing, ShapeTile, TabFav, useHoverOverPage } from './parts'
 import { LoadFill, MiniPlayer, WinButtons } from './Extras'
 import { openYouCloud } from '../lib/youcloud'
@@ -530,7 +532,7 @@ export function Sidebar(): React.JSX.Element {
   return (
     <aside className={'glass side' + (drop.active ? ' search-drop' : '')} aria-label="Боковая панель" {...drop.props}>
       <Grain />
-      {drop.active && <div className="search-drop-hint"><Icon name="search" />Отпустите для поиска</div>}
+      <SearchDropHint active={drop.active} />
       <div className="side-top" title="Двойной щелчок — развернуть окно, тянуть — двигать">
         {window.masaki.incognito ? (
           <span className="brand incog" aria-hidden="true">
@@ -1006,7 +1008,7 @@ export function Dock(): React.JSX.Element {
       onPointerMove={hot ? undefined : wake}
       onPointerLeave={calm}
     >
-      {drop.active && <div className="search-drop-hint"><Icon name="search" />Отпустите для поиска</div>}
+      <SearchDropHint active={drop.active} />
       <DockTabs tiny={tiny} hot={hot} />
       <div className="glass capsule">
         <Grain />
@@ -1179,13 +1181,7 @@ export function Popover(): React.JSX.Element | null {
             <div className="cm-sep" />
             <button
               className="mi"
-              onClick={run(() =>
-                s().newTab(
-                  accounts.length
-                    ? 'https://accounts.google.com/AddSession?continue=https%3A%2F%2Fwww.google.com%2F'
-                    : 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fwww.google.com%2F'
-                )
-              )}
+              onClick={run(openGoogleAccount)}
             >
               <Icon name="personAdd" /> {accounts.length ? 'Добавить аккаунт' : 'Войти в аккаунт Google'}
             </button>

@@ -1801,6 +1801,8 @@ if (!app.requestSingleInstanceLock()) {
         ...settings,
         scheme: 'dark',
         palette: 'graphite',
+        // Цветные обои просвечивают через стекло и маскируют приватное окно под обычное.
+        background: 'shapes',
         aiControl: false,
         addons: { ...settings.addons, discord: { ...settings.addons.discord, enabled: false } }
       }
