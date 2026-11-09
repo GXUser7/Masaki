@@ -679,7 +679,7 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   (`npx electron-builder --win dir -c.directories.output=dist/next`) и подменять после закрытия.
 - Перед выдачей: typecheck, проверка изменённого (см. «Проверка изменений»), посмотреть снимки, собрать.
 - Релиз на GitHub (github.com/GXUser7/Masaki) — **через GitHub Actions** (`.github/workflows/release.yml`,
-  с 0.4.0; `gh` на компьютере пользователя нет): поднять `version` в package.json, закоммитить, запушить, затем
+  с 0.4.0; `gh` также доступен для проверки Actions и файлов выпуска): поднять `version` в package.json, закоммитить, запушить, затем
   `git tag -a v<версия> -F <заметки.md>` и `git push origin v<версия>`. Workflow собирает установщик Windows и
   сборки Mac (arm64 и x64, dmg и zip) с ключом Google из секретов `MASAKI_GOOGLE_CLIENT_ID/SECRET` и публикует
   релиз: заметки — из сообщения тега (по-русски, «## Что нового» как у прошлых), SHA-256 дописывает сам.
