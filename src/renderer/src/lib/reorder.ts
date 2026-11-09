@@ -116,6 +116,7 @@ export function useReorder(keys: string[], onMove: (from: number, to: number) =>
       'data-rk': keys[i],
       onDragStart: (e) => {
         e.dataTransfer.effectAllowed = 'copyMove'
+        e.dataTransfer.setData('application/x-masaki-reorder', 'tile')
         // Плитку можно бросить и на страницу или в другую программу — это ссылка.
         e.dataTransfer.setData('text/uri-list', url)
         e.dataTransfer.setData('text/plain', url)

@@ -12,13 +12,15 @@ const icons: Record<PermissionPrompt['kind'], IconName> = {
   media: 'camera',
   notifications: 'bell',
   clipboard: 'paste',
-  other: 'lock'
+  other: 'lock',
+  external: 'openInNew'
 }
 
 /** Запрос сайта на доступ — стеклянная плашка над страницей вместо системного окна Windows. */
 export function PermissionBar(): React.JSX.Element | null {
   const prompts = useStore((s) => s.permissions)
-  const p = prompts[0]
+  const activeId = useStore((s) => s.activeId)
+  const p = prompts.find((x) => x.wcId === undefined || tabIdOfWebContents(x.wcId) === activeId || (x.kind === 'external' && tabIdOfWebContents(x.wcId) === null))
   if (!p) return null
   const answer = (allow: boolean, remember: boolean) => () => {
     window.masaki.permissions.answer(p.id, allow, remember)
@@ -35,18 +37,23 @@ export function PermissionBar(): React.JSX.Element | null {
       </span>
       <span className="perm-t">
         <b>{p.origin}</b> {p.text}
+        {p.externalUrl && <small className="external-url">{p.externalUrl}</small>}
         {prompts.length > 1 && <small>Ещё запросов: {prompts.length - 1}</small>}
       </span>
       <span className="perm-acts">
         <button className="perm-btn ghost" onClick={answer(false, true)}>
-          Запретить
+          {p.kind === 'external' ? 'Отмена' : 'Запретить'}
         </button>
-        <button className="perm-btn tonal-b" onClick={answer(true, false)}>
-          Только сейчас
-        </button>
-        <button className="perm-btn primary" onClick={answer(true, true)}>
-          Разрешить
-        </button>
+        {(p.kind !== 'external' || p.externalUrl) && (
+          <button className="perm-btn tonal-b" onClick={answer(true, false)}>
+            {p.kind === 'external' ? 'Открыть приложение' : 'Только сейчас'}
+          </button>
+        )}
+        {p.kind !== 'external' && (
+          <button className="perm-btn primary" onClick={answer(true, true)}>
+            Разрешить
+          </button>
+        )}
       </span>
     </div>
   )

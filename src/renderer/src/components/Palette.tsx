@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { askAiWithImage } from '../actions'
 import { shapes } from '../lib/shapes'
 import { hostOf, looksLikeAddress, resolveInput } from '../lib/url'
+import { canSearchDrop, normalizeSearchImage, readSearchDrop } from '../lib/searchDrop'
 import { toggleGlass } from '../lib/glass'
 import { mediaAction, mediaPlaying, musicTab, openYouCloud, youcloudKnown } from '../lib/youcloud'
 import { useStore, wv } from '../store'
@@ -182,14 +183,16 @@ export function Palette(): React.JSX.Element {
   const input = useRef<HTMLInputElement>(null)
   const [place, setPlace] = useState<CSSProperties | null>(null)
   // Картинка для AI Mode (data:image/…): вставка Ctrl+V, перетаскивание или кнопка. С ней палитра — в AI Mode.
-  const [image, setImage] = useState<string | null>(null)
+  const [image, setImage] = useState<string | null>(palette.image ?? null)
   const picker = useRef<HTMLInputElement>(null)
   const attach = (file: File | null | undefined): boolean => {
     if (!file || !file.type.startsWith('image/') || file.size > 20 * 1024 * 1024) return false
     const reader = new FileReader()
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result !== 'string') return
-      setImage(reader.result)
+      const decoded = await normalizeSearchImage(reader.result)
+      if (!decoded || !input.current) return
+      setImage(decoded)
       useStore.getState().setAi(true)
       setSel(0)
       input.current?.focus()
@@ -398,11 +401,18 @@ export function Palette(): React.JSX.Element {
         style={place ?? undefined}
         role="dialog"
         aria-label="Адрес, поиск и AI Mode"
-        onDragOver={(e) => {
-          if (palette.mode !== 'tabs' && [...e.dataTransfer.items].some((i) => i.kind === 'file' && i.type.startsWith('image/'))) e.preventDefault()
-        }}
+        onDragEnter={(e) => { if (palette.mode !== 'tabs' && canSearchDrop(e.dataTransfer)) e.preventDefault() }}
+        onDragOver={(e) => { if (palette.mode !== 'tabs' && canSearchDrop(e.dataTransfer)) e.preventDefault() }}
         onDrop={(e) => {
-          if (palette.mode !== 'tabs' && attach(imageIn(e.dataTransfer))) e.preventDefault()
+          if (palette.mode === 'tabs' || !canSearchDrop(e.dataTransfer)) return
+          e.preventDefault()
+          void readSearchDrop(e.dataTransfer).then((content) => {
+            if (!content || !input.current) return
+            setText(content.text)
+            if (content.image) { setImage(content.image); useStore.getState().setAi(true) }
+            setSel(0)
+            input.current.focus()
+          })
         }}
       >
         <Grain />

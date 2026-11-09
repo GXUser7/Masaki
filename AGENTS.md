@@ -26,6 +26,7 @@ npm run test:import  # сборка + тест переноса из Chrome на
 npm run test:sync    # сборка + синхронизация двух профилей через подставной Google (scripts/mock-google.mjs)
 npm run test:passwords # сборка + менеджер паролей: CSV, автозаполнение, сохранение, шифрованная синхронизация
 npm run test:passkeys  # сборка + ключи доступа: создание, вход (окно и автозаполнение), подписи, синхронизация
+npm run test:browser-compat # сборка + автозаполнение, Google, URI приложений, перенос в поиск, первые кадры панели
 npm run test:youcloud  # сборка + YouCloud: мост, сессия SoundCloud, мини-плеер, поиск из палитры (нужен дев-сервер YouCloud/web);
                        # один раздел: node scripts/youcloud-test.mjs bridge|sc|player|palette
 npm run test:system  # сборка + управление для ИИ (порт 9222), ссылка из командной строки, регистрация браузером
@@ -566,11 +567,13 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   нет: запрос доходит до списка аккаунтов и падает с NetworkError, Google считает это отменой — кнопка «ничего не
   делала». Поэтому `--disable-features=FedCm` (main, до запуска): Google ведёт вход всплывающим окном, как в
   Firefox. Окно (тип `window`, не webview) живёт в сессии вкладок и тоже должно быть «Firefox»: заголовки —
-  та же сессия, `navigator` — `matchGoogleUa`; первый документ окна Chromium грузит со старым UA (переход начат
-  родителем), поэтому окно входа один раз загружается заново (`googlePopup` в index.ts). `userAgentData` прячет
-  `preload/popup.ts` — он зарегистрирован на всю сессию (`registerPreloadScript`): preload из настроек окна,
-  открытого из webview, Electron не применяет. Под `protocol.handle` запросы идут мимо `onBeforeSendHeaders` —
-  заголовок в таком тесте не проверить.
+  та же сессия, `navigator` — сессионный `preload/popup.ts` до первого скрипта страницы. Смена UA через
+  `did-start-navigation` была слишком поздней и для новой вкладки из меню аккаунта: первый документ мог видеть
+  Chrome, а заголовок — Firefox. Поэтому UA самого webContents больше не переключается, окно не перезагружается;
+  только на accounts.google.com preload согласует userAgent/appVersion/vendor/userAgentData с заголовком.
+  Он зарегистрирован на всю сессию (`registerPreloadScript`): preload из настроек окна, открытого из webview,
+  Electron не применяет. Под `protocol.handle` запросы идут мимо `onBeforeSendHeaders` — заголовок в таком тесте
+  не проверить. Узкая регрессия: `node scripts/browser-compat-test.mjs google`.
 - **Preload-скрипты не делят модули**: общий импорт Vite выносит в `out/preload/chunks/…`, а preload в песочнице
   `require` файлов не умеет — скрипт падает целиком (так сломался бы guest.ts всех вкладок). Общий код —
   копией, с пометкой.

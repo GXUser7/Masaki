@@ -213,6 +213,7 @@ function finish(r: Req, res: Result): void {
   reqs.delete(r.key)
   clearTimeout(r.timer)
   if (r.prompt) hooks.ui('passkey-prompt-close', r.prompt.id)
+  if (r.conditional && !r.wc.isDestroyed()) r.wc.send('pk:conditional-changed')
   r.done(res)
 }
 
@@ -342,7 +343,11 @@ export function request(wc: WebContents, origin: string | undefined, op: string,
     }
     reqs.set(key, r)
     watch(wc)
-    if (conditional) return // ждёт выбора в списке у поля входа, без таймаута — как в Chrome
+    if (conditional) {
+      // Запрос часто начинается после фокуса/загрузки настроек сайта: обновляем уже открытое поле.
+      wc.send('pk:conditional-changed')
+      return // ждёт выбора в списке у поля входа, без таймаута — как в Chrome
+    }
 
     const timeout = Math.min(Math.max(Number(pk.timeout) || 300_000, 30_000), 600_000)
     r.timer = setTimeout(() => finish(r, notAllowed()), timeout)
@@ -413,7 +418,7 @@ function doCreate(r: Req): Result {
         authenticatorData: b64u(authData),
         publicKey: b64u(publicKey.export({ type: 'spki', format: 'der' }) as Buffer),
         publicKeyAlgorithm: o.alg,
-        transports: ['hybrid', 'internal']
+        transports: ['internal']
       },
       clientExtensionResults: o.credProps ? { credProps: { rk: true } } : {}
     }

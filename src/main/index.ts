@@ -28,6 +28,8 @@ import { chromeBookmarks, chromeHistory, chromeProfiles, chromeShortcuts } from 
 import * as sync from './sync'
 import * as passwords from './passwords'
 import * as passkeys from './passkeys'
+import { answerExternal, initExternalProtocols, requestExternal, watchExternalProtocols } from './externalProtocols'
+import { searchImage } from './searchImage'
 import {
   initYouCloud,
   isYouCloudExtension,
@@ -690,6 +692,7 @@ function listenHeaders(ses: Electron.Session): void {
 
 function setupBrowsingSession(): void {
   const ses = session.fromPartition(PARTITION)
+  initExternalProtocols((channel, payload) => win?.webContents.send(channel, payload))
   ses.setUserAgent(chromeUserAgent())
   // Всплывающим окнам вкладок preload из настроек окна Electron не даёт (окно открыто из webview), поэтому
   // скрипт входа Google — на всю сессию: во вкладках он повторяет guest.ts, в окне «Войти через Google» — один.
@@ -726,6 +729,13 @@ function setupBrowsingSession(): void {
 
   // Вопрос задаёт интерфейс Masaki (стеклянная плашка), а не системное окно Windows.
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (permission === 'openExternal') {
+      // Chromium тоже запрашивает это право для URI, прошедших мимо событий навигации.
+      // Открытие после ответа выполняем сами, чтобы не было двух запусков приложения.
+      callback(false)
+      if (wc) requestExternal(wc, (details as Electron.OpenExternalPermissionRequest).externalURL ?? '')
+      return
+    }
     if (alwaysAllowed.has(permission)) return callback(true)
     if (!win) return callback(false)
     const origin = originOf(details.requestingUrl)
@@ -1034,48 +1044,14 @@ function askLens(contents: WebContents, query: string, image: string): boolean {
   return true
 }
 
-/**
- * Окно, которое сейчас откроется из вкладки, идёт на вход Google. Его первый переход начат страницей-родителем
- * раньше, чем о новом окне узнаёт web-contents-created, — did-start-navigation его не застаёт, поэтому адрес
- * узнаём ещё в обработчике window.open.
- */
-let googlePopup = 0
-
-/**
- * navigator.userAgent на странице входа Google должен совпадать с заголовком (Firefox ESR), иначе Google
- * видит подмену и пишет «браузер небезопасен». Заголовки меняет onBeforeSendHeaders всей сессии вкладок,
- * а navigator — вот это, и для вкладок, и для всплывающих окон входа («Войти через Google» на сайтах).
- */
-function matchGoogleUa(contents: WebContents): void {
-  contents.on('did-start-navigation', (e) => {
-    if (!e.isMainFrame || e.isSameDocument) return
-    const want = GOOGLE_LOGIN.test(e.url) ? FIREFOX_UA : chromeUserAgent()
-    if (contents.getUserAgent() !== want) contents.setUserAgent(want)
-  })
-}
-
 app.on('web-contents-created', (_e, contents) => {
   // Всплывающее окно сайта (вход через Google, оплата) живёт в сессии вкладок, но это не webview.
   if (contents.getType() === 'window' && contents.session === session.fromPartition(PARTITION)) {
-    const google = Date.now() < googlePopup
-    googlePopup = 0
-    // Первый документ окна Chromium загрузит со старым navigator.userAgent (переход начат страницей-родителем,
-    // подмена его не касается). Окно входа Google — один раз загружаем заново, уже как Firefox;
-    // window.opener у окна при этом остаётся.
-    if (google) {
-      contents.once('did-navigate', (_e, url) => {
-        if (!GOOGLE_LOGIN.test(url)) return
-        void contents
-          .executeJavaScript('navigator.userAgent')
-          .then((now: string) => {
-            if (now !== FIREFOX_UA && !contents.isDestroyed()) return contents.loadURL(url, { userAgent: FIREFOX_UA })
-          })
-          .catch(() => undefined)
-      })
-    }
-    matchGoogleUa(contents)
+    watchExternalProtocols(contents)
+    contents.setWindowOpenHandler(({ url }) => ({ action: requestExternal(contents, url) ? 'deny' : 'allow' }))
   }
   if (contents.getType() !== 'webview') return
+  watchExternalProtocols(contents)
   attachShortcuts(contents, true)
   watchWebview(contents)
   extensions.trackTab(contents)
@@ -1101,12 +1077,11 @@ app.on('web-contents-created', (_e, contents) => {
   // Применяет интерфейс (как Ctrl+=, с запоминанием в tab.zoom) в той вкладке, над которой крутили.
   contents.on('zoom-changed', (_ev, dir) => send({ type: 'zoom', delta: dir === 'in' ? 1 : -1, wcId: contents.id }))
   contents.on('context-menu', (_ev, p) => sendPageMenu(contents, p))
-  matchGoogleUa(contents)
   contents.setWindowOpenHandler(({ url, disposition, features }) => {
+    if (requestExternal(contents, url)) return { action: 'deny' }
     // Настоящие всплывающие окна (вход через Google, оплата) остаются окнами,
     // чтобы у них работал window.opener. Всё остальное открывается вкладкой.
     if (disposition === 'new-window' && features) {
-      googlePopup = GOOGLE_LOGIN.test(url) ? Date.now() + 3000 : 0
       return {
         action: 'allow',
         overrideBrowserWindowOptions: { width: 520, height: 700, show: !testHeadless, autoHideMenuBar: true, backgroundColor: '#ffffff' }
@@ -1417,6 +1392,10 @@ function registerIpc(): void {
     if (!contents || contents.isDestroyed() || contents.getType() !== 'webview' || contents.hostWebContents !== win?.webContents) return false
     return askLens(contents, query.trim().slice(0, 2000), image)
   })
+  ipcMain.handle('search:image', (e, source: unknown) => {
+    if (!downloadUi(e) || typeof source !== 'string') return null
+    return searchImage(session.fromPartition(PARTITION), source)
+  })
   ipcMain.handle('site:clear-data', (_e, origin: string) => {
     if (!/^https?:\/\/[^/]+$/.test(String(origin))) return
     return session.fromPartition(PARTITION).clearStorageData({ origin })
@@ -1633,7 +1612,9 @@ function registerIpc(): void {
   ipcMain.on('ext:active-tab', (_e, wcId: number) => extensions.selectTab(Number(wcId)))
   ipcMain.on('ext:menu-click', (_e, index: number) => extensions.clickMenuItem(Number(index)))
 
-  ipcMain.on('permission:answer', (_e, id: string, allow: boolean, remember: boolean) => {
+  ipcMain.on('permission:answer', (e, id: string, allow: boolean, remember: boolean) => {
+    if (!downloadUi(e) || typeof id !== 'string') return
+    if (answerExternal(id, allow === true)) return
     const done = pendingPermissions.get(id)
     pendingPermissions.delete(id)
     done?.(allow, remember)

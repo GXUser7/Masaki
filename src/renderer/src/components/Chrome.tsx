@@ -18,6 +18,7 @@ import QRCode from 'qrcode'
 import { hostOf } from '../lib/url'
 import { formatBytes } from '../lib/format'
 import { moveTiles, tileKeys, useReorder } from '../lib/reorder'
+import { useSearchDrop } from '../lib/searchDrop'
 import { siteCookieDomain } from '../../../shared/site'
 import type { DownloadInfo, ExtAction, ExtensionInfo, TabGroup, UpdateState } from '../../../shared/types'
 import { actionFor, actionIcon, badgeColor, pressAction, STORE_URL, togglePin, useExtensions } from '../lib/extensions'
@@ -458,6 +459,7 @@ function TabList(): React.JSX.Element {
           window.clearTimeout(hover.current)
           useStore.setState({ preview: null })
           e.dataTransfer.effectAllowed = 'move'
+          e.dataTransfer.setData('application/x-masaki-reorder', 'tab')
           e.dataTransfer.setData('text/uri-list', tab.url)
           setDrag({ id: tab.id, over: idx })
         }}
@@ -510,6 +512,7 @@ function TabList(): React.JSX.Element {
 }
 
 export function Sidebar(): React.JSX.Element {
+  const drop = useSearchDrop()
   const tabs = useStore((s) => s.tabs)
   const favorites = useStore((s) => s.settings.favorites)
   const themed = useStore((s) => s.settings.favThemed)
@@ -525,8 +528,9 @@ export function Sidebar(): React.JSX.Element {
   })
 
   return (
-    <aside className="glass side" aria-label="Боковая панель">
+    <aside className={'glass side' + (drop.active ? ' search-drop' : '')} aria-label="Боковая панель" {...drop.props}>
       <Grain />
+      {drop.active && <div className="search-drop-hint"><Icon name="search" />Отпустите для поиска</div>}
       <div className="side-top" title="Двойной щелчок — развернуть окно, тянуть — двигать">
         {window.masaki.incognito ? (
           <span className="brand incog" aria-hidden="true">
@@ -960,6 +964,7 @@ function useMorph(tiny: boolean): boolean {
  * наведи — вернётся.
  */
 export function Dock(): React.JSX.Element {
+  const drop = useSearchDrop()
   const small = useStore((st) => st.capsuleSmall)
   const [ref, hot, enter] = useHoverOverPage()
   const s = useStore.getState
@@ -995,11 +1000,13 @@ export function Dock(): React.JSX.Element {
   return (
     <div
       ref={ref}
-      className={'capz' + (tiny ? ' small' : '') + (morph ? ' morph' : '')}
+      className={'capz' + (tiny ? ' small' : '') + (morph ? ' morph' : '') + (drop.active ? ' search-drop' : '')}
+      {...drop.props}
       onPointerEnter={wake}
       onPointerMove={hot ? undefined : wake}
       onPointerLeave={calm}
     >
+      {drop.active && <div className="search-drop-hint"><Icon name="search" />Отпустите для поиска</div>}
       <DockTabs tiny={tiny} hot={hot} />
       <div className="glass capsule">
         <Grain />

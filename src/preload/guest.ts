@@ -33,19 +33,7 @@ window.addEventListener('DOMContentLoaded', () => {
 window.addEventListener('load', scheduleCanvas, true)
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', scheduleCanvas)
 
-// 1. На странице входа Google прячем признаки Chromium, чтобы вход не упирался в «Возможно, этот браузер
-// или приложение небезопасны». Заголовки и user agent для этого адреса подменяет главный процесс (Firefox ESR).
-if (location.hostname === 'accounts.google.com') {
-  contextBridge.executeInMainWorld({
-    func: () => {
-      try {
-        Object.defineProperty(Navigator.prototype, 'userAgentData', { get: () => undefined, configurable: true })
-      } catch {
-        // свойство уже переопределено
-      }
-    }
-  })
-}
+// 1. Вход Google настраивает сессионный preload popup.ts до первого скрипта документа.
 
 // 2. Ключи доступа (passkey): WebAuthn страницы обслуживает менеджер ключей Masaki в главном процессе.
 // В мир страницы уходит только функция-мост: какие запросы пропускать, решает главный процесс.
@@ -73,6 +61,9 @@ let shown = false
 /** Пока вписываем логин и пароль, фокус прыгает по полям — список при этом не показываем. */
 let filling = false
 let hideTimer: ReturnType<typeof setTimeout> | undefined
+// Поздний ответ IPC не должен возвращать меню после выбора аккаунта или ухода из поля.
+let focusRequest = 0
+const filledValues = new WeakMap<HTMLInputElement, string>()
 
 const TEXTY = new Set(['text', 'email', 'tel', ''])
 const WEBAUTHN = /(^|\s)webauthn(\s|$)/i
@@ -137,6 +128,7 @@ ipcRenderer.on('pk:used', () => {
 })
 
 function hide(): void {
+  focusRequest++
   clearTimeout(hideTimer)
   if (!shown) return
   shown = false
@@ -166,30 +158,46 @@ function show(f: Fields, list: Item[]): void {
   })
 }
 
-document.addEventListener(
-  'focusin',
-  (e) => {
-    const t = e.target
-    if (filling || !(t instanceof HTMLInputElement)) return
-    // Поле входа по ключу доступа (autocomplete="username webauthn") — ключи сайта в том же списке.
-    const webauthn = WEBAUTHN.test(t.getAttribute('autocomplete') ?? '')
-    const f = fieldsFor(t) ?? (webauthn && isTexty(t) ? { user: t, pass: null, focus: t } : null)
-    if (!f) return
-    const pk: Promise<Item[]> = webauthn ? ipcRenderer.invoke('pk:conditional').catch(() => []) : Promise.resolve([])
-    void Promise.all([loadItems(), pk]).then(([list, ks]) => {
-      keys = Array.isArray(ks) ? ks : []
-      if ((!list.length && !keys.length) || document.activeElement !== t) return
-      active = f
-      show(f, list)
-    })
-  },
-  true
-)
+function offerFor(t: HTMLInputElement, explicit = false): void {
+  if (filling || (!explicit && filledValues.get(t) === t.value)) return
+  // Поле входа по ключу доступа (autocomplete="username webauthn") — ключи сайта в том же списке.
+  const webauthn = WEBAUTHN.test(t.getAttribute('autocomplete') ?? '')
+  const f = fieldsFor(t) ?? (webauthn && isTexty(t) ? { user: t, pass: null, focus: t } : null)
+  if (!f) return
+  const pk: Promise<Item[]> = webauthn ? ipcRenderer.invoke('pk:conditional').catch(() => []) : Promise.resolve([])
+  const request = ++focusRequest
+  void Promise.all([loadItems(), pk]).then(([list, ks]) => {
+    if (request !== focusRequest || filling || !t.isConnected || document.activeElement !== t) return
+    keys = Array.isArray(ks) ? ks : []
+    if (!list.length && !keys.length) return hide()
+    active = f
+    show(f, list)
+  })
+}
+
+document.addEventListener('focusin', (e) => {
+  if (e.target instanceof HTMLInputElement) offerFor(e.target)
+  else hide()
+}, true)
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target
+  if (!(t instanceof HTMLInputElement) || !fieldsFor(t)) return hide()
+  // Повторный щелчок по уже заполненному полю позволяет выбрать другой аккаунт.
+  // Ждём штатного фокуса, но не открываем ничего при программном focus() после заполнения.
+  setTimeout(() => { if (document.activeElement === t) offerFor(t, true) }, 0)
+}, true)
+ipcRenderer.on('pk:conditional-changed', () => {
+  const t = document.activeElement
+  if (t instanceof HTMLInputElement && WEBAUTHN.test(t.autocomplete)) offerFor(t)
+})
 
 document.addEventListener(
   'input',
   (e) => {
-    if (!filling && active && e.target === active.focus && (items?.length || keys.length)) show(active, items ?? [])
+    if (!filling && active && e.target === active.focus && (items?.length || keys.length)) {
+      filledValues.delete(active.focus)
+      show(active, items ?? [])
+    }
   },
   true
 )
@@ -197,6 +205,7 @@ document.addEventListener(
 document.addEventListener(
   'focusout',
   () => {
+    focusRequest++
     // Клик по списку в интерфейсе тоже уводит фокус со страницы — даём ему успеть.
     clearTimeout(hideTimer)
     hideTimer = setTimeout(hide, 250)
@@ -223,8 +232,14 @@ ipcRenderer.on('pw:fill', (_e, d: { username: string; password: string }) => {
   if (!f) return
   filling = true
   try {
-    if (f.user && d.username) setValue(f.user, d.username)
-    if (f.pass) setValue(f.pass, d.password)
+    if (f.user && d.username) {
+      filledValues.set(f.user, d.username)
+      setValue(f.user, d.username)
+    }
+    if (f.pass) {
+      filledValues.set(f.pass, d.password)
+      setValue(f.pass, d.password)
+    }
   } finally {
     filling = false
   }

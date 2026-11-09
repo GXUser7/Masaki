@@ -85,6 +85,7 @@ export interface PaletteState {
   open: boolean
   anchor: PaletteAnchor
   text: string
+  image?: string
   /** Выделить текст при открытии (когда подставлен адрес страницы). */
   select: boolean
   /** Куда открывать результат: в текущую вкладку или в новую. */
@@ -276,7 +277,7 @@ interface Store {
   activateIndex(index: number): void
   navigate(text: string, opts?: { ai?: boolean; target?: 'current' | 'new'; raw?: boolean }): void
   /** ai — открыть палитру сразу в режиме AI Mode; по умолчанию — как в настройках. */
-  openPalette(withUrl: boolean, target?: 'current' | 'new', typed?: string, ai?: boolean): void
+  openPalette(withUrl: boolean, target?: 'current' | 'new', typed?: string, ai?: boolean, image?: string): void
   closePalette(): void
   toggleSidebar(): void
   setAi(on: boolean): void
@@ -505,12 +506,12 @@ export const useStore = create<Store>((set, get) => ({
     get().updateTab(tab.id, { ...blankTab('web', url), id: tab.id })
   },
 
-  openPalette(withUrl, target = 'current', typed, ai) {
+  openPalette(withUrl, target = 'current', typed, ai, image) {
     const tab = get().active()
     const url = withUrl && tab.kind === 'web' ? tab.url : ''
     const anchor: PaletteAnchor = tab.kind === 'newtab' ? 'ntp' : get().settings.sidebarCollapsed ? 'dock' : 'side'
     set({
-      palette: { open: true, anchor, text: typed ?? url, select: !typed && !!url, target, mode: 'all' },
+      palette: { open: true, anchor, text: typed ?? url, image, select: !typed && !!url, target, mode: 'all' },
       popover: null,
       ai: ai ?? get().settings.aiDefault
     })
@@ -518,7 +519,7 @@ export const useStore = create<Store>((set, get) => ({
 
   // AI Mode живёт только пока открыта палитра: закрыли — вернулись к режиму из настроек.
   closePalette() {
-    set((s) => ({ palette: { ...s.palette, open: false }, ai: s.settings.aiDefault }))
+    set((s) => ({ palette: { ...s.palette, open: false, image: undefined }, ai: s.settings.aiDefault }))
   },
 
   toggleSidebar() {

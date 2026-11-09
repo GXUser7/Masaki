@@ -251,6 +251,7 @@ try {
   check(r.isPKC && r.isResp && r.tag === '[object PublicKeyCredential]', 'ответ — PublicKeyCredential с AuthenticatorAttestationResponse')
   check(r.assignable === true, 'toJSON у ответа можно заменить, как у браузера (GitHub): ' + r.assignable)
   check(r.ext?.credProps?.rk === true && r.alg === -7 && r.attach === 'platform' && r.transports.includes('internal'), 'credProps, алгоритм, attachment и transports')
+  check(!r.transports.includes('hybrid'), 'менеджер не заявляет неподдерживаемый вход с телефона')
   const k1 = verifyCreate(r, ch)
   check((await A.win.locator('.pk-card').count()) === 0, 'окно закрылось')
   const storeFile = path.join(profiles[0], 'passkeys.json')
@@ -289,10 +290,11 @@ try {
 
   console.log('A: вход из списка у поля (conditional)')
   ch = challenge()
+  // Сайт начинает conditional-запрос ПОСЛЕ фокуса в поле: список должен обновиться сам.
+  await clickIn(A, '#u')
   await start(A, 'get', { rpId: 'localhost', challenge: ch, mediation: 'conditional' })
   await A.win.waitForTimeout(300)
   check((await A.win.locator('.pk-card').count()) === 0, 'conditional не открывает окно')
-  await clickIn(A, '#u')
   await A.win.waitForSelector('.af-menu .af-pk', { timeout: 8000 })
   check((await A.win.locator('.af-pk').count()) === 2, 'в списке у поля оба ключа')
   await A.win.waitForTimeout(700)
@@ -301,6 +303,15 @@ try {
   r = await result(A, 'conditional-вход')
   verifyGet(r, ch, k1, alice.userId)
   check((await A.win.locator('.af-menu').count()) === 0, 'список закрылся')
+
+  await start(A, 'get', { rpId: 'localhost', challenge: challenge(), mediation: 'conditional' })
+  await clickIn(A, '#u')
+  await A.win.waitForSelector('.af-menu .af-pk')
+  await inTab(A, '__ctl.abort()')
+  r = await result(A, 'отмена conditional-запроса')
+  check(!r.ok && r.name === 'AbortError', 'conditional abort → AbortError')
+  await A.win.waitForSelector('.af-menu', { state: 'detached' })
+  check(true, 'отменённый conditional-запрос убирает ключи из уже открытого поля')
 
   console.log('A: отказ, abort, «уже есть», «нет ключей», чужой RP ID')
   await start(A, 'create', { ...alice, rpId: 'localhost', challenge: challenge(), algs: [-7] })
@@ -336,6 +347,8 @@ try {
   check(!r.ok && r.name === 'SecurityError', 'ключ для чужого домена → SecurityError без окна')
   check((await A.win.locator('.pk-card').count()) === 0, 'окно для чужого домена не показано')
 
+  // Узкий прогон WebAuthn не включает страницу менеджера и синхронизацию двух профилей.
+  if (!process.argv.includes('--local-only')) {
   console.log('A: страница паролей')
   await command(A.app, { type: 'palette', withUrl: false })
   await A.win.waitForSelector('.cmd')
@@ -388,6 +401,7 @@ try {
   check(true, 'ключ, удалённый на B, пропал и на A')
   await A2.app.close()
   current = null
+  }
 } catch (e) {
   failures.push(e.message)
   console.error('ОШИБКА:', e.message)

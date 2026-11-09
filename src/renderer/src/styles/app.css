@@ -3057,11 +3057,8 @@ input {
 .capz {
   will-change: transform, opacity;
 }
-/* Пока панель едет, матовое размытие под ней не пересчитываем на каждом кадре. */
-.app.animating .side {
-  backdrop-filter: none;
-  background: var(--glass-pop);
-}
+/* Фон и размытие панели одинаковы во всех кадрах: замена на --glass-pop во время
+   FLIP давала серую вспышку на полсекунды. Движение по-прежнему идёт через transform. */
 
 /* ---------- Палитры и свой цвет ---------- */
 .set-col {
@@ -6918,3 +6915,22 @@ svg[data-ic='history'] > path {
     animation: none;
   }
 }
+/* При переносе с сайта цель видна, но подсказка не забирает drop у панели/дока. */
+.search-drop-hint {
+  position: absolute;
+  inset: 8px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  border: 2px dashed var(--primary);
+  border-radius: var(--r-l);
+  background: var(--glass-pop);
+  color: var(--primary);
+  pointer-events: none;
+  text-align: center;
+}
+.capz .search-drop-hint { inset: auto 20% 8px; min-height: 56px; }
+.external-url { max-width: 60vw; overflow-wrap: anywhere; }

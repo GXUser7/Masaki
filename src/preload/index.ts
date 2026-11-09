@@ -125,6 +125,7 @@ const api: MasakiApi = {
   favicon: (url) => ipcRenderer.invoke('favicon', url),
   faviconData: (iconUrl) => ipcRenderer.invoke('favicon:data', iconUrl),
   aiImage: (wcId, query, image) => ipcRenderer.invoke('ai:image', wcId, query, image),
+  searchImage: (url) => ipcRenderer.invoke('search:image', url),
   learnFavicon: (pageUrl, iconUrl) => ipcRenderer.send('favicon:learn', pageUrl, iconUrl),
   onFaviconUpdated: (cb) => listen<string>('favicon-updated', cb),
   google: {

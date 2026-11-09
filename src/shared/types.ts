@@ -54,8 +54,10 @@ export interface JsDialog {
 export interface PermissionPrompt {
   id: string
   origin: string
-  kind: 'location' | 'camera' | 'mic' | 'media' | 'notifications' | 'clipboard' | 'other'
+  kind: 'location' | 'camera' | 'mic' | 'media' | 'notifications' | 'clipboard' | 'other' | 'external'
   text: string
+  wcId?: number
+  externalUrl?: string
 }
 
 export interface SitePermission {
@@ -704,6 +706,8 @@ export interface MasakiApi {
   faviconData(iconUrl: string): Promise<string | null>
   /** Спросить AI Mode о картинке (data:image/…) во вкладке wcId: через Google Lens, ответ — AI Mode с вопросом. */
   aiImage(wcId: number, query: string, image: string): Promise<boolean>
+  /** Байты картинки для переноса в поиск; renderer декодирует веб-форматы до показа. */
+  searchImage(url: string): Promise<string | null>
   /** Запомнить значок, который сайт сам показал во вкладке: он точнее значка из сервиса Google. */
   learnFavicon(pageUrl: string, iconUrl: string): void
   onFaviconUpdated(cb: (host: string) => void): () => void
