@@ -690,7 +690,7 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
 
 ## macOS (экспериментально)
 
-- Собирается в GitHub Actions (`.github/workflows/macos.yml`, macos-14): `npm ci`, typecheck,
+- Собирается в GitHub Actions (`.github/workflows/macos.yml`, macos-15): `npm ci`, typecheck,
   `electron-builder --mac dmg zip --arm64 --x64`, артефакт **Masaki-mac**. Подписи Apple нет — ad hoc
   (`mac.identity: "-"`, hardenedRuntime выключен), иначе на Apple Silicon не запустится. Локально — `npm run dist:mac`.
 - Отличия в коде — только по `process.platform === 'darwin'` (на Windows ничего не меняется): окно с

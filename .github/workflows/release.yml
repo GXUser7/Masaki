@@ -40,7 +40,8 @@ jobs:
           if-no-files-found: error
 
   mac:
-    runs-on: macos-14
+    # macos-14 отключён GitHub 02.11.2026; стандартный macos-15 — поддерживаемый Arm64 runner.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
