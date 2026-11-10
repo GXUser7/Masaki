@@ -277,7 +277,7 @@ export function App(): React.JSX.Element {
 
   if (!booted || !active) return <div className={'app ' + (dark ? 'dark' : 'light')} />
 
-  // YouCloud прозрачен сам (в Masaki у него нет своего фона): под ним то же стекло, что у панели.
+  // Прозрачный режим YouCloud оставляет обои открытыми; стекло рисуется только под его карточками.
   const yc = active.kind === 'web' && youcloudTransparent(active.url)
   const cls = [
     'app',
@@ -296,6 +296,7 @@ export function App(): React.JSX.Element {
 
   // Две вкладки рядом показываются, только когда активна одна из них.
   const sp = split && (split.a === active.id || split.b === active.id) ? split : null
+  const clearYouCloud = yc || !!(sp && tabs.some((t) => (t.id === sp.a || t.id === sp.b) && youcloudTransparent(t.url)))
   const pane = (id: string): 'a' | 'b' | undefined => (sp ? (sp.a === id ? 'a' : sp.b === id ? 'b' : undefined) : undefined)
   // Новая вкладка с картинкой фона: картинка чёткая, как экран блокировки Pixel, а не серое пятно.
   const photo = active.kind === 'newtab' && settings.background !== 'shapes' && wallpaper
@@ -313,8 +314,9 @@ export function App(): React.JSX.Element {
             className={
               'card' +
               (active.kind === 'web' ? ' page' : ' glass') +
-              (active.kind === 'web' && (active.glassBg || yc) ? ' glassy' : '') +
-              (active.kind === 'web' && (yc || matchesPanel(active.glassBg, dark)) ? ' match' : '') +
+              (active.kind === 'web' && active.glassBg && !clearYouCloud ? ' glassy' : '') +
+              (active.kind === 'web' && matchesPanel(active.glassBg, dark) && !clearYouCloud ? ' match' : '') +
+              (clearYouCloud ? ' yc-clear' : '') +
               (photo ? ' photo' : '') +
               (sp ? ' split' : '')
             }
@@ -324,7 +326,7 @@ export function App(): React.JSX.Element {
                 : undefined
             }
           >
-            {active.kind === 'web' && (yc || matchesPanel(active.glassBg, dark)) && <Grain />}
+            {active.kind === 'web' && matchesPanel(active.glassBg, dark) && !clearYouCloud && <Grain />}
             {webTabs.map((t) => (
               <WebView key={t.id} tab={t} active={t.id === active.id} pane={pane(t.id)} ratio={sp?.ratio ?? 0.5} />
             ))}

@@ -558,8 +558,13 @@ ipcRenderer.on('media:action', (_e, action: string, time: number) => {
 // расширения — сообщениями window с меткой yc; сайт узнаёт, что он в Masaki, по host.
 const YOUCLOUD = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
 if (YOUCLOUD.includes(location.origin)) {
+  let transparent = ipcRenderer.sendSync('yc:appearance', location.host.replace(/^www\./, '')) !== false
   // Сразу, до первой отрисовки: сайт знает, что он в Masaki, и не рисует своего фона.
-  const mark = (): void => document.documentElement?.setAttribute('data-host', 'masaki')
+  const mark = (): void => {
+    if (!document.documentElement) return
+    document.documentElement.dataset.host = 'masaki'
+    document.documentElement.dataset.masakiBackground = transparent ? 'transparent' : 'original'
+  }
   if (document.documentElement) mark()
   else
     new MutationObserver((_, o) => {
@@ -569,11 +574,12 @@ if (YOUCLOUD.includes(location.origin)) {
     }).observe(document, { childList: true })
   const opaque = document.createElement('style')
   opaque.textContent = ':root[data-host="masaki"] { background: var(--surface, Canvas) !important; }'
-  const appearance = (transparent: boolean): void => {
+  const appearance = (on: boolean): void => {
+    transparent = on
+    mark()
     if (transparent) opaque.remove()
     else if (document.documentElement && !opaque.isConnected) document.documentElement.appendChild(opaque)
   }
-  const transparent = ipcRenderer.sendSync('yc:appearance', location.host.replace(/^www\./, '')) !== false
   if (document.documentElement) appearance(transparent)
   else new MutationObserver((_, observer) => {
     if (!document.documentElement) return
@@ -603,6 +609,9 @@ if (YOUCLOUD.includes(location.origin)) {
     const d = event.data
     if (!d || typeof d !== 'object' || d.yc !== 'page') return
     if (d.kind === 'ping') hello()
+    else if (d.kind === 'glass' && transparent && Array.isArray(d.panels) && d.panels.length <= 64) {
+      ipcRenderer.sendToHost('yc:glass', { width: d.width, height: d.height, panels: d.panels })
+    }
     else if (d.kind === 'fetch') answer(d.id, ipcRenderer.invoke('yc:fetch', d.request))
     else if (d.kind === 'call') answer(d.id, ipcRenderer.invoke('yc:call', String(d.name), d.args && typeof d.args === 'object' ? { ...d.args } : undefined))
     else if (d.kind === 'yt-stream') answer(d.id, ipcRenderer.invoke('yc:yt-stream', String(d.videoId), !!d.fresh, !!d.live))
@@ -612,7 +621,7 @@ if (YOUCLOUD.includes(location.origin)) {
   // Тема браузера: сайт берёт её цвет и светлоту (шлёт интерфейс Masaki).
   ipcRenderer.on('yc:theme', (_e, t: Theme) => {
     if (!t || typeof t.seed !== 'string') return
-    theme = { seed: t.seed.slice(0, 32), dark: !!t.dark }
+    theme = { seed: t.seed.slice(0, 32), dark: !!t.dark, transparent: t.transparent !== false }
     appearance(t.transparent !== false)
     reply({ kind: 'event', event: 'theme', ...theme })
   })

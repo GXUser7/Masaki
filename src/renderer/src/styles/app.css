@@ -252,6 +252,24 @@ input {
 .wv.on {
   visibility: visible;
 }
+.card.page.yc-clear,
+.wv.yc-clear {
+  background: transparent;
+}
+.card.page.yc-clear {
+  backdrop-filter: none;
+  isolation: auto;
+}
+.yc-host-glass {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  visibility: hidden;
+}
+.yc-host-glass.on { visibility: visible; }
+.yc-host-glass > div { position: absolute; }
 
 /* Полноэкранное видео: прячем всё, кроме страницы. */
 .htmlfs .lay {

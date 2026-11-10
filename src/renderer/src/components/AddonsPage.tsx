@@ -91,17 +91,18 @@ export function AddonsPage(): React.JSX.Element {
         >
           <div className="addon-body set-row">
             <span>
-              Прозрачность YouCloud
-              <small>Показывать обои Masaki сквозь YouCloud. Можно выключить независимо от прозрачности остальных сайтов.</small>
+              Фон YouCloud
+              <small>Прозрачный показывает фон Masaki. Оригинальный — фигуры и оформление YouCloud.</small>
             </span>
-            <Toggle
-              label="Прозрачность YouCloud"
-              on={!glass.exclude.includes(hostOf(YOUCLOUD_URL))}
-              onChange={(on) => {
-                const hosts = [hostOf(YOUCLOUD_URL), 'localhost:5190']
-                setGlass({ exclude: on ? glass.exclude.filter((h) => !hosts.includes(h)) : [...new Set([...glass.exclude, ...hosts])] })
-              }}
-            />
+            <div className="seg" role="radiogroup" aria-label="Фон YouCloud">
+              {([[true, 'Прозрачный'], [false, 'Оригинальный']] as const).map(([on, label]) => {
+                const checked = !glass.exclude.includes(hostOf(YOUCLOUD_URL)) === on
+                return <button key={label} role="radio" aria-checked={checked} className={checked ? 'on' : ''} onClick={() => {
+                  const hosts = [hostOf(YOUCLOUD_URL), 'localhost:5190']
+                  setGlass({ exclude: on ? glass.exclude.filter((h) => !hosts.includes(h)) : [...new Set([...glass.exclude, ...hosts])] })
+                }}>{checked && <Icon name="check" />}{label}</button>
+              })}
+            </div>
           </div>
           {glass.enabled && (
             <div className="addon-body">

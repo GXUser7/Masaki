@@ -163,7 +163,9 @@ export function openPageMenu(p: PageMenuParams): void {
     const g = S().settings.addons.glass
     if ((g.enabled || isYouCloud(p.pageURL)) && web) {
       const off = g.exclude.includes(hostOf(p.pageURL))
-      e.push({ kind: 'item', icon: 'layers', label: off ? 'Вернуть прозрачность на этом сайте' : 'Выключить прозрачность на этом сайте', run: () => toggleGlassForSite(p.pageURL) })
+      const label = isYouCloud(p.pageURL) ? off ? 'Прозрачный фон YouCloud' : 'Оригинальный фон YouCloud'
+        : off ? 'Вернуть прозрачность на этом сайте' : 'Выключить прозрачность на этом сайте'
+      e.push({ kind: 'item', icon: 'layers', label, run: () => toggleGlassForSite(p.pageURL) })
     }
     sep()
   }

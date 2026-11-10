@@ -1,4 +1,4 @@
-import { createElement, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { createElement, Fragment, useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { AutofillRequest } from '../../../shared/types'
 import { finishSwipe } from './Extras'
 import { pickAutofill } from './PasswordUi'
@@ -7,6 +7,7 @@ import { captureThumb, markReady, registerWebview, unregisterWebview, useStore, 
 import { syncGlass } from '../lib/glass'
 import { cancelGoogleAccountEntry, continueGoogleAccountEntry } from '../lib/googleAccount'
 import { isYouCloud, parseMedia, sendYouCloudTheme, youcloudTransparent } from '../lib/youcloud'
+import { paintHostGlass, parseHostGlass, type HostGlass } from '../lib/youcloudGlass'
 
 /** Не чаще раза за столько мс док меняет размер: дольше, чем перетекание (0,45 с). */
 const DOCK_HOLD = 500
@@ -31,6 +32,8 @@ function setDockSmall(tabId: string, small: boolean): void {
 /** Webview существует только у загруженной вкладки; выгрузка удаляет её гостевой процесс. */
 export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: boolean; pane?: 'a' | 'b'; ratio?: number }): React.JSX.Element {
   const ref = useRef<Electron.WebviewTag | null>(null)
+  const glassRef = useRef<HTMLDivElement | null>(null)
+  const geometry = useRef<HostGlass | null>(null)
   const [canvas, setCanvas] = useState<string>()
   const id = tab.id
   const transparent = youcloudTransparent(tab.url)
@@ -40,6 +43,8 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
     const el = ref.current
     if (!el) return
     registerWebview(id, el)
+    const resize = new ResizeObserver(() => paintHostGlass(glassRef.current, geometry.current))
+    if (glassRef.current) resize.observe(glassRef.current)
     const store = useStore.getState
     const up = (patch: Partial<Tab>): void => store().updateTab(id, patch)
     const syncNav = (): void => {
@@ -86,6 +91,12 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
         (e: Electron.IpcMessageEvent) => {
           const st = store()
           switch (e.channel) {
+            case 'yc:glass':
+              if (isYouCloud(el.getURL()) && youcloudTransparent(el.getURL())) {
+                geometry.current = parseHostGlass(e.args[0])
+                paintHostGlass(glassRef.current, geometry.current)
+              }
+              break
             case 'page:canvas': {
               const color = e.args[0]
               if (typeof color === 'string' && /^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$/.test(color)) setCanvas(color)
@@ -148,6 +159,8 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
         'did-navigate',
         (e: Electron.DidNavigateEvent) => {
           if (e.url === 'about:blank' && tab.resumeKey) return
+          geometry.current = null
+          paintHostGlass(glassRef.current, null)
           const prev = store().tabs.find((x) => x.id === id)
           const sameHost = prev && hostOf(prev.url) === hostOf(e.url)
           // Новый документ — прежний плеер страницы ушёл вместе с ним.
@@ -221,23 +234,34 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
     ]
     for (const [name, fn] of handlers) el.addEventListener(name, fn as EventListener)
     return () => {
+      resize.disconnect()
       for (const [name, fn] of handlers) el.removeEventListener(name, fn as EventListener)
       cancelGoogleAccountEntry(id)
       unregisterWebview(id)
     }
   }, [id])
 
-  return createElement('webview', {
+  useEffect(() => {
+    if (!transparent) geometry.current = null
+    paintHostGlass(glassRef.current, geometry.current)
+  }, [transparent, active, pane, ratio])
+
+  const paneStyle: CSSProperties = pane === 'a' ? { width: `calc(${ratio * 100}% - 4px)` }
+    : pane === 'b' ? { left: `calc(${ratio * 100}% + 4px)`, width: 'auto', right: 0 } : {}
+
+  return createElement(Fragment, null,
+    createElement('div', { ref: glassRef, className: 'yc-host-glass' + (transparent && (active || pane) ? ' on' : ''), style: paneStyle, 'aria-hidden': true }),
+    createElement('webview', {
     ref,
     src: resumeSrc.current ?? tab.initialUrl,
     partition: 'persist:frost', // старое имя сессии: в ней куки и входы, не менять
     allowpopups: 'true',
     webpreferences: 'spellcheck=yes',
-    className: 'wv' + (active || pane ? ' on' : '') + (tab.glassBg || transparent ? ' clear' : '') + (pane ? ' pane' : '') + (pane && active ? ' focused' : ''),
+    className: 'wv' + (active || pane ? ' on' : '') + (tab.glassBg || transparent ? ' clear' : '') + (transparent ? ' yc-clear' : '') + (pane ? ' pane' : '') + (pane && active ? ' focused' : ''),
     style: {
       '--site-canvas': tab.glassBg ? `rgb(${tab.glassBg})` : transparent ? 'var(--page)' : canvas,
-      ...(pane === 'a' ? { width: `calc(${ratio * 100}% - 4px)` } : pane === 'b' ? { left: `calc(${ratio * 100}% + 4px)`, width: 'auto', right: 0 } : {})
+      ...paneStyle
     } as CSSProperties & { '--site-canvas'?: string },
     'data-tab': id
-  })
+  }))
 }
