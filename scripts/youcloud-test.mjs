@@ -217,7 +217,7 @@ try {
       const before = await page.locator('.mplayer.rich .mp-t b').first().textContent().catch(() => null)
       check(!!before, 'мини-плеер показывает название трека', before ?? '')
       check((await page.locator('.mplayer.rich .mp-art img').count()) > 0, 'в мини-плеере обложка')
-      check((await page.locator('.mplayer.rich.tinted').count()) > 0, 'мини-плеер в цвете обложки')
+      check((await page.locator('.mplayer.rich.tinted').count()) === 0, 'мини-плеер использует общую тему Masaki')
       await shot('yc-02-miniplayer')
       const next = page.locator('.mplayer.rich .mp-ib[aria-label="Следующий трек"]').first()
       check((await next.count()) > 0, 'есть «следующий трек» сайта')

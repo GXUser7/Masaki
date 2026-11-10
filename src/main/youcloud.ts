@@ -8,19 +8,22 @@
 // Отвечаем только вкладкам YouCloud (по фрейму, не со слов страницы) и ходим только к хостам
 // сервисов. Куки YouTube и токены не попадают на страницу: запрос подписывает главный процесс.
 
-import { BrowserWindow, ipcMain, session, webContents, type WebContents } from 'electron'
+import { app, BrowserWindow, ipcMain, session, webContents, type WebContents } from 'electron'
 import { createHash } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import * as ytdlp from './ytdlp'
+import { SoundCloudPageWrites } from './soundcloudWrites'
 
 export const YOUCLOUD_URL = 'https://youcloud.inkerror67.workers.dev/'
 /** Сайт и его дев-сервер — вкладки, которым отвечает мост. */
 export const YOUCLOUD_ORIGINS = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
 /** Какой версии расширения YouCloud равен мост (сайт сверяет, что он умеет): 0.7 — звук YouTube от yt-dlp,
  *  0.8 — и прямых трансляций (их плейлист HLS), 0.9 — продлевает истёкшую сессию SoundCloud,
- *  0.10 — даёт сайту читать звук YouTube (волна полноэкранного плеера его слышит). */
-const BRIDGE_VERSION = '0.10.0'
+ *  0.10 — даёт сайту читать звук YouTube, 0.11 — лайки и капча SoundCloud в одной браузерной странице. */
+const BRIDGE_VERSION = '0.11.0'
+const BRIDGE_CAPABILITIES = ['sc-page-writes']
+let soundCloudPages: SoundCloudPageWrites
 
 type Ops = Record<string, string | null>
 
@@ -379,6 +382,10 @@ function watchCookies(): void {
 
 async function call(name: string, from: WebContents, args?: unknown): Promise<Answer> {
   switch (name) {
+    case 'sc-request':
+      return soundCloudPages.request(from, args)
+    case 'sc-captcha':
+      return soundCloudPages.showChallenge(from, args)
     case 'sc-token':
       return { value: await soundCloudCookie() }
     case 'sc-renew': {
@@ -425,12 +432,14 @@ export function isYouCloudExtension(dir: string): boolean {
 export function initYouCloud(partitionName: string, h: Host): void {
   partition = partitionName
   host = h
+  soundCloudPages = new SoundCloudPageWrites(partition)
+  app.once('before-quit', () => soundCloudPages.dispose())
   watchCookies()
   ipcMain.handle('yc:hello', (e) => {
     if (!fromYouCloud(e)) return null
     // Открыли YouCloud — yt-dlp скачивается заранее, чтобы первый трек YouTube не ждал.
     ytdlp.prepare()
-    return { version: BRIDGE_VERSION, tokens: waitingTokens.splice(0) }
+    return { version: BRIDGE_VERSION, capabilities: BRIDGE_CAPABILITIES, tokens: waitingTokens.splice(0) }
   })
   // Звук YouTube: ссылку находит yt-dlp, с IP и входом этого браузера. fresh — прежняя не заиграла;
   // live — сайт знает, что это прямая трансляция.

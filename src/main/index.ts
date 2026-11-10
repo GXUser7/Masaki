@@ -1506,7 +1506,7 @@ function registerIpc(): void {
     if (typeof id === 'string' && typeof name === 'string') profiles.renameProfile(id, name)
   })
   ipcMain.handle('profiles:remove', (_e, id: unknown) => (typeof id === 'string' ? profiles.removeProfile(id) : { ok: false }))
-  // Обложка того, что играет: картинкой data: — интерфейс берёт из неё цвет мини-плеера.
+  // Обложка того, что играет: картинкой data:; цвета мини-плеера остаются из темы Masaki.
   ipcMain.handle('media:art', (_e, url: string) => (/^https?:\/\//i.test(String(url)) ? fetchAsDataUrl(String(url), 1_500_000) : null))
 
   ipcMain.handle('sync:state', () => sync.getState())

@@ -100,12 +100,6 @@ async function scanIcon(src: string): Promise<IconScan> {
   return { broken: false, palette: paletteOf(best), lightGlyph }
 }
 
-/** Цвета из картинки (обложка мини-плеера); подложка тут ни к чему. */
-async function colorsFromIcon(src: string): Promise<TileColors | null> {
-  const scan = await scanIcon(src)
-  return scan.palette ? colorsOf(scan.palette, false) : null
-}
-
 // ---------- Свой цвет плитки ----------
 
 const colorCache = new Map<string, TileColors>()
@@ -262,20 +256,20 @@ export function useSiteIcon(url: string, color?: string): { src: string | null; 
   return { src, colors }
 }
 
-// ---------- Цвет обложки ----------
-// Мини-плеер окрашивается в цвет обложки того, что играет, — как плеер YouCloud и Android.
+// ---------- Обложка мини-плеера ----------
+// Загружаем картинку через main; цвета плеера остаются из общей темы Masaki.
 
-const artCache = new Map<string, { src: string | null; colors: TileColors | null } | null>()
+const artCache = new Map<string, string | null>()
 const artListeners = new Set<() => void>()
 
 async function loadArt(url: string): Promise<void> {
   const src = await window.masaki.mediaArt(url).catch(() => null)
-  artCache.set(url, { src, colors: src ? await colorsFromIcon(src) : null })
+  artCache.set(url, src)
   artListeners.forEach((fn) => fn())
 }
 
-/** Обложка картинкой data: и цвета из неё; пока грузится — null. */
-export function useArtColors(url: string | undefined): { src: string | null; colors: TileColors | null } | null {
+/** Обложка картинкой data:; пока грузится — null. */
+export function useMediaArt(url: string | undefined): string | null {
   const [, force] = useState(0)
   useEffect(() => {
     const fn = (): void => force((n) => n + 1)

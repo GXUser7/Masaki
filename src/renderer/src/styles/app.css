@@ -4457,13 +4457,6 @@ input {
   overflow: hidden;
   transition: background-color 0.6s ease;
 }
-/* Цвет обложки: в тёмной теме — тёмный тон её палитры, в светлой — светлый, поверх стекла. */
-.mplayer.rich.tinted {
-  background: color-mix(in oklab, var(--mp-l) 72%, var(--glass-hi));
-}
-.dark .mplayer.rich.tinted {
-  background: color-mix(in oklab, var(--mp-d) 66%, var(--glass-hi));
-}
 .mplayer.rich .mp-main {
   padding: 0;
 }

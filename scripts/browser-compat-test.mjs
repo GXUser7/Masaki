@@ -70,7 +70,8 @@ async function drop(selector, payload, preview) {
     const accepted = await gesture.evaluate((g) => g.accepted)
     if (preview) {
       await page.waitForSelector(`${selector} .search-drop-hint.on`)
-      await page.waitForTimeout(450)
+      // Приход лупы длится 550 мс: её повёрнутый bounding box ещё не равен размеру значка.
+      await page.waitForTimeout(650)
       const target = await page.locator(`${selector} .search-drop-hint`).evaluate((el) => {
         const icon = el.querySelector('svg[data-ic]').getBoundingClientRect()
         const card = el.getBoundingClientRect()
@@ -79,7 +80,7 @@ async function drop(selector, payload, preview) {
           moving: el.getAnimations({ subtree: true }).some((a) => a.playState === 'running'),
           reduced: matchMedia('(prefers-reduced-motion: reduce)').matches }
       })
-      assert.ok(target.icon.every((s) => s >= 24 && s <= 30), 'лупа ограничена размером значка')
+      assert.ok(target.icon.every((s) => s >= 24 && s <= 30), 'лупа ограничена размером значка: ' + JSON.stringify(target.icon))
       assert.ok(target.card[1] < 240 && target.card[0] <= 344, 'подсказка не закрывает всю панель')
       assert.equal(target.pointer, 'none', 'подсказка не перехватывает перенос')
       assert.equal(target.moving, !target.reduced, 'форма M3 учитывает уменьшение движения')
@@ -111,6 +112,7 @@ try {
     app.getApplicationNameForProtocol = () => 'Telegram'
     globalThis.__compatRequests = []
     globalThis.__compatNavigations = []
+    globalThis.__compatLensUploads = 0
     app.on('web-contents-created', (_event, contents) => {
       if (contents.getType() === 'webview') contents.on('did-navigate', (_event, url) => globalThis.__compatNavigations.push({ url, id: contents.id }))
     })
@@ -121,6 +123,14 @@ try {
       if (url.pathname.includes('ListAccounts')) return new Response(JSON.stringify(['gaia.l.a', globalThis.__compatGoogleState === 'signedin' ? [[null, null, 'Тестовый аккаунт', 'alice@example.test', '', null, null, 0]] : []]))
       if (url.pathname === '/test.png') return new Response(Buffer.from(png, 'base64'), { headers: { 'content-type': 'image/png' } })
       if (url.pathname === '/oversize.png') return new Response('x', { headers: { 'content-length': '30000000' } })
+      if (url.origin === 'https://lens.google.com' && url.pathname === '/v3/upload') {
+        const body = Buffer.from(await request.arrayBuffer())
+        if (request.method === 'POST' && body.includes(Buffer.from('name="encoded_image"')) && body.includes(Buffer.from('PNG'))) {
+          globalThis.__compatLensUploads++
+          return new Response(null, { status: 302, headers: { location: 'https://www.google.com/search?vsrid=DROP-FIXTURE&udm=26' } })
+        }
+        return new Response('Invalid local image upload', { status: 400 })
+      }
       const first = `<script>window.firstNavigator = { ua: navigator.userAgent, uad: !!navigator.userAgentData, vendor: navigator.vendor, referrer: document.referrer }; if (opener) { opener.postMessage(firstNavigator, '*'); setTimeout(() => close(), 100) }</script>`
       if (url.origin === 'https://www.google.com' && url.pathname === '/') {
         const state = globalThis.__compatGoogleState
@@ -289,6 +299,62 @@ try {
     await shot('drop-text')
     await page.press('.cmd-in input', 'Enter')
     await waitFor(async () => await page.locator('.side .tab').count() === count + 1, 'поиск в новой вкладке')
+
+    // Вкладка и её дочерняя кнопка должны передавать внешний перенос тому же поиску, что пустая панель.
+    for (const [index, selector] of ['.side', '.side .tab.on .tt', '.side .tab:not(.on) .tab-main'].entries()) {
+      const query = `перенос поверх панели и вкладок ${index}`
+      const before = await page.locator('.side .tab').count()
+      const source = await guestId()
+      assert.equal(await drop(selector, { text: { 'text/plain': query } }), true)
+      await page.waitForSelector('.cmd-in input')
+      assert.equal(await page.locator('.cmd-in input:not([type=file])').inputValue(), query)
+      assert.equal(await guestId(), source, 'перенос на неактивную вкладку не переключает её')
+      if (index === 1) await shot('drop-text-over-tab')
+      await page.press('.cmd-in input', 'Enter')
+      await waitFor(async () => await inTab('new URL(location.href).searchParams.get("q")').catch(() => '') === query, 'поиск перенесённого текста')
+      assert.equal(await page.locator('.side .tab').count(), before + 1)
+
+      const uploads = await app.evaluate(() => globalThis.__compatLensUploads)
+      const image = index === 1
+        ? { text: { 'text/html': '<img src="https://images.test/test.png">', 'text/uri-list': 'https://images.test/test.png' } }
+        : { file: png }
+      assert.equal(await drop(selector, image), true)
+      await page.waitForSelector('.pal-pic img')
+      assert.match(await page.locator('.pal-pic img').getAttribute('src'), /^data:image\/png;/)
+      assert.equal(await page.locator('.cmd-in .chip.on').count(), 1)
+      if (index === 1) await shot('drop-image-over-tab')
+      await page.press('.cmd-in input', 'Enter')
+      await waitFor(async () => await inTab('new URL(location.href).searchParams.get("vsrid")').catch(() => '') === 'DROP-FIXTURE', 'результаты перенесённой картинки')
+      assert.equal(await inTab('new URL(location.href).searchParams.get("udm")'), '50')
+      assert.equal(await app.evaluate(() => globalThis.__compatLensUploads), uploads + 1, 'в локальный Lens дошла картинка')
+      assert.equal(await page.locator('.side .tab').count(), before + 2)
+    }
+
+    // Внутренняя перестановка по-прежнему меняет порядок и не открывает палитру поиска.
+    const order = await page.evaluate(() => [...document.querySelectorAll('.side .tab')].map((el, i) => (el.dataset.dropTestOrder = String(i))))
+    const internal = await page.evaluateHandle(() => {
+      const from = document.querySelector('.side .tab')
+      const dt = new DataTransfer()
+      from.dispatchEvent(new DragEvent('dragstart', { dataTransfer: dt, bubbles: true, cancelable: true }))
+      return { from, dt }
+    })
+    try {
+      await page.waitForSelector('.side .tab.dragging')
+      await internal.evaluate(({ dt }) => {
+        const target = document.querySelector('.side .tab:last-child')
+        const rect = target.getBoundingClientRect()
+        target.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, clientX: rect.left + rect.width / 2, clientY: rect.bottom - 1, bubbles: true, cancelable: true }))
+      })
+      await page.waitForSelector('.side .tab.drop-below')
+      await internal.evaluate(({ from, dt }) => {
+        document.querySelector('.side .tab:last-child').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+        from.dispatchEvent(new DragEvent('dragend', { dataTransfer: dt, bubbles: true }))
+      })
+      await waitFor(async () => await page.locator('.side .tab:last-child').getAttribute('data-drop-test-order') === order[0], 'перестановка первой вкладки в конец')
+      assert.deepEqual(await page.locator('.side .tab').evaluateAll((els) => els.map(el => el.dataset.dropTestOrder)), [...order.slice(1), order[0]])
+      assert.equal(await page.locator('.cmd').count(), 0)
+    } finally { await internal.dispose() }
+
     await command({ type: 'toggle-sidebar' })
     await page.waitForSelector('.app.collapsed')
     await page.waitForTimeout(650)
@@ -321,7 +387,7 @@ try {
     await page.waitForSelector('.cmd-in input')
     await page.press('.cmd-in input', 'Escape')
     await page.emulateMedia({ reducedMotion: 'no-preference' })
-    console.log('ok — перенос: текст, новая вкладка, файл в док, картинка со страницы, отдельный жест перестановки, лимиты')
+    console.log('ok — перенос: текст и картинка над пустой панелью, активной/неактивной вкладкой; поиск и Lens; внутренняя перестановка; док и лимиты')
   }
   if (selected('dock')) {
     const settings = await page.evaluate(() => window.masaki.settings.get())

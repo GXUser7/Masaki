@@ -3,7 +3,7 @@ import { goBack, goForward } from '../actions'
 import { shapes } from '../lib/shapes'
 import { hostOf } from '../lib/url'
 import { useStore, wv, type Tab } from '../store'
-import { useArtColors } from '../lib/iconColor'
+import { useMediaArt } from '../lib/iconColor'
 import { mediaAction } from '../lib/youcloud'
 import { Icon } from './Icon'
 import { Grain, TabFav } from './parts'
@@ -224,7 +224,7 @@ function MediaProgress({ tab, p }: { tab: Tab; p: number | null }): React.JSX.El
 export function MiniPlayer({ dock = false }: { dock?: boolean }): React.JSX.Element | null {
   const { tab, playing, toggle } = useBackgroundAudio()
   const m = tab?.media
-  const art = useArtColors(m?.artwork || undefined)
+  const art = useMediaArt(m?.artwork || undefined)
   const p = useMediaPos(tab, playing)
   if (!tab) return null
   if (!m?.title) {
@@ -250,13 +250,12 @@ export function MiniPlayer({ dock = false }: { dock?: boolean }): React.JSX.Elem
       </div>
     )
   }
-  const c = art?.colors
   // --mp-p — где трек: кольцо вокруг обложки в сжатом доке.
-  const style = { '--mp-p': p ?? 0, ...(c ? { '--mp-l': c.light.fill, '--mp-d': c.dark.fill } : {}) } as React.CSSProperties
+  const style = { '--mp-p': p ?? 0 } as React.CSSProperties
   return (
-    <div className={'mplayer rich' + (dock ? ' dock' : '') + (playing ? ' playing' : '') + (c ? ' tinted' : '')} style={style}>
+    <div className={'mplayer rich' + (dock ? ' dock' : '') + (playing ? ' playing' : '')} style={style}>
       <button className="mp-art" title="Перейти на вкладку" onClick={() => S().activate(tab.id)}>
-        {m.artwork ? <img src={art?.src ?? m.artwork} alt="" draggable={false} /> : <TabFav tab={tab} />}
+        {m.artwork ? <img src={art ?? m.artwork} alt="" draggable={false} /> : <TabFav tab={tab} />}
       </button>
       <button className="mp-main" title={m.title + (m.artist ? ' — ' + m.artist : '') + ' · перейти на вкладку'} onClick={() => S().activate(tab.id)}>
         <span className="mp-t">

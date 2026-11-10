@@ -473,8 +473,10 @@ function TabList(): React.JSX.Element {
           if (over !== drag.over) setDrag({ ...drag, over })
         }}
         onDrop={(e) => {
+          // Внешний текст и картинки обрабатывает поиск на всей боковой панели.
+          if (!drag) return
           e.preventDefault()
-          if (drag) s().moveTab(drag.id, drag.over)
+          s().moveTab(drag.id, drag.over)
           setDrag(null)
         }}
         onDragEnd={() => setDrag(null)}
