@@ -1,7 +1,7 @@
 {
   "name": "masaki",
   "productName": "Masaki",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Masaki — браузер для Windows на Chromium с матовым стеклом и Material 3 Expressive",
   "main": "out/main/index.js",
   "private": true,
