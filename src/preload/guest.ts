@@ -567,7 +567,20 @@ if (YOUCLOUD.includes(location.origin)) {
       mark()
       o.disconnect()
     }).observe(document, { childList: true })
-  type Theme = { seed: string; dark: boolean }
+  const opaque = document.createElement('style')
+  opaque.textContent = ':root[data-host="masaki"] { background: var(--surface, Canvas) !important; }'
+  const appearance = (transparent: boolean): void => {
+    if (transparent) opaque.remove()
+    else if (document.documentElement && !opaque.isConnected) document.documentElement.appendChild(opaque)
+  }
+  const transparent = ipcRenderer.sendSync('yc:appearance', location.host.replace(/^www\./, '')) !== false
+  if (document.documentElement) appearance(transparent)
+  else new MutationObserver((_, observer) => {
+    if (!document.documentElement) return
+    appearance(transparent)
+    observer.disconnect()
+  }).observe(document, { childList: true })
+  type Theme = { seed: string; dark: boolean; transparent?: boolean }
   let theme: Theme | null = null
   type Hello = { version: string; capabilities?: string[]; tokens?: { kind: string; token: string; expiresIn?: number }[] } | null
   const reply = (data: Record<string, unknown>): void => window.postMessage({ yc: 'ext', ...data }, location.origin)
@@ -600,6 +613,7 @@ if (YOUCLOUD.includes(location.origin)) {
   ipcRenderer.on('yc:theme', (_e, t: Theme) => {
     if (!t || typeof t.seed !== 'string') return
     theme = { seed: t.seed.slice(0, 32), dark: !!t.dark }
+    appearance(t.transparent !== false)
     reply({ kind: 'event', event: 'theme', ...theme })
   })
   hello()

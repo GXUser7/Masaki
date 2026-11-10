@@ -41,6 +41,10 @@ export interface Tab {
   url: string
   /** Адрес, с которым webview создаётся; дальше навигация идёт через loadURL. */
   initialUrl: string
+  /** Пока true, webview не существует: вкладка ждёт выбора или выгружена из памяти. */
+  sleeping: boolean
+  /** Ключ истории навигации, которая хранится только в памяти главного процесса. */
+  resumeKey?: string
   title: string
   favicon?: string
   loading: boolean
@@ -166,7 +170,8 @@ function blankTab(kind: TabKind = 'newtab', url = NEWTAB_URL): Tab {
     url,
     initialUrl: url,
     title: kind === 'newtab' ? 'Новая вкладка' : kind === 'web' ? hostOf(url) : internalPages[kind].title,
-    loading: kind === 'web',
+    sleeping: kind === 'web',
+    loading: false,
     canBack: false,
     canFwd: false,
     audible: false,
@@ -268,7 +273,7 @@ interface Store {
   setSettings(patch: Partial<Settings>): void
   active(): Tab
   updateTab(id: string, patch: Partial<Tab>): void
-  newTab(url?: string, opts?: { background?: boolean }): string
+  newTab(url?: string, opts?: { background?: boolean; eager?: boolean }): string
   /** remember=false — не класть в «вернуть закрытую вкладку» (пустые служебные вкладки). */
   closeTab(id?: string, remember?: boolean): void
   reopenTab(): void
@@ -393,6 +398,8 @@ export const useStore = create<Store>((set, get) => ({
 
   newTab(url = NEWTAB_URL, opts = {}) {
     const tab = tabFor(url)
+    // chrome.tabs.create должен получить живой webContents для дальнейших команд расширения.
+    if (opts.eager && tab.kind === 'web') { tab.sleeping = false; tab.loading = true }
     // Уходим с вкладки — снимок для превью, пока она ещё видна.
     if (!opts.background && get().activeId) captureThumb(get().activeId)
     set((s) => {
@@ -779,6 +786,29 @@ export const useStore = create<Store>((set, get) => ({
     set({ tabs, closed, activeId: tabs.some((t) => t.id === s.activeId) ? s.activeId : id })
   }
 }))
+
+// Все способы смены вкладки (закрытие, расширение, пара «рядом») проходят через одно правило.
+// Отсчёт простоя начинается при уходе с экрана, а не с момента загрузки страницы.
+useStore.subscribe((s, prev) => {
+  if (s.tabs === prev.tabs && s.activeId === prev.activeId && s.split === prev.split) return
+  const visible = (state: Store, id: string): boolean => id === state.activeId ||
+    !!(state.split && (state.split.a === state.activeId || state.split.b === state.activeId) &&
+      (state.split.a === id || state.split.b === id))
+  const now = Date.now()
+  let changed = false
+  const tabs = s.tabs.map((t) => {
+    const wake = t.kind === 'web' && t.sleeping && visible(s, t.id)
+    const left = visible(prev, t.id) && !visible(s, t.id)
+    if (!wake && !left) return t
+    changed = true
+    return { ...t, ...(wake ? { sleeping: false, loading: true } : {}), lastActive: now }
+  })
+  if (changed) useStore.setState({ tabs })
+  const resumeKeys = new Set(s.tabs.map((t) => t.resumeKey))
+  for (const t of prev.tabs) {
+    if (t.resumeKey && !resumeKeys.has(t.resumeKey)) window.masaki.tabMemory.forget(t.resumeKey)
+  }
+})
 
 // ---------- Сохранение сессии ----------
 

@@ -3,6 +3,7 @@
 // для самого сайта, preload/media-page.ts — что играет на странице).
 
 import { useStore, wv, type Tab, type TabMedia } from '../store'
+import { hostOf } from './url'
 
 export const YOUCLOUD_URL = 'https://youcloud.inkerror67.workers.dev/'
 const ORIGINS = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
@@ -13,6 +14,10 @@ export function isYouCloud(url: string): boolean {
   } catch {
     return false
   }
+}
+
+export function youcloudTransparent(url: string): boolean {
+  return isYouCloud(url) && !useStore.getState().settings.addons.glass.exclude.includes(hostOf(url))
 }
 
 /**
@@ -68,6 +73,11 @@ export function openYouCloud(query?: string): void {
   s.activate(open.id)
   const el = wv(open.id)
   if (route && el) void el.executeJavaScript(`location.hash = ${JSON.stringify(route)}`).catch(() => undefined)
+  else if (route) {
+    const url = new URL(open.url)
+    url.hash = route
+    s.updateTab(open.id, { url: url.href, initialUrl: url.href, resumeKey: undefined })
+  }
 }
 
 /** Тема Masaki для сайта: его цвет «по умолчанию» и светлота — те же, что у браузера вокруг. */
@@ -85,7 +95,7 @@ export function sendYouCloudTheme(tabId?: string): void {
   for (const tab of useStore.getState().tabs) {
     if (tab.kind !== 'web' || !isYouCloud(tab.url) || (tabId && tab.id !== tabId)) continue
     try {
-      wv(tab.id)?.send('yc:theme', t)
+      wv(tab.id)?.send('yc:theme', { ...t, transparent: youcloudTransparent(tab.url) })
     } catch {
       // webview ещё не готов — тему отдаст dom-ready
     }

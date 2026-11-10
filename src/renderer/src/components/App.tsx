@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
-import { isYouCloud, sendYouCloudTheme, startDiscordPresence } from '../lib/youcloud'
+import { sendYouCloudTheme, startDiscordPresence, youcloudTransparent } from '../lib/youcloud'
+import { startTabMemory } from '../lib/tabMemory'
 import { handleCommand } from '../actions'
 import { commandFor } from '../../../shared/shortcuts'
 import { shapes } from '../lib/shapes'
@@ -205,7 +206,7 @@ export function App(): React.JSX.Element {
     applyTokens(document.documentElement, tokensFor(settings.palette, dark, dynamic, settings.customColor))
     // YouCloud во вкладках берёт тему браузера: сменилась палитра или светлота — и у него тоже.
     sendYouCloudTheme()
-  }, [settings.palette, settings.customColor, dark, dynamic])
+  }, [settings.palette, settings.customColor, dark, dynamic, settings.addons.glass.exclude])
 
   // Сворачивание панели: страница сразу встаёт на новое место (один пересчёт вёрстки сайта),
   // а плавность даёт сдвиг уже готовой картинки — его считает видеокарта.
@@ -253,6 +254,7 @@ export function App(): React.JSX.Element {
     }
   }, [activeId, activeKind])
   // Архив: раз в 10 минут убираем вкладки, которые давно не открывали (если включено в настройках).
+  useEffect(startTabMemory, [])
   useEffect(() => {
     const t = window.setInterval(() => useStore.getState().archiveStale(), 10 * 60_000)
     return () => window.clearInterval(t)
@@ -269,14 +271,14 @@ export function App(): React.JSX.Element {
 
   // Webview рисуем в порядке создания: перестановка узла в DOM перезагрузила бы страницу.
   const webTabs = useMemo(
-    () => tabs.filter((t) => t.kind === 'web').sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1))),
+    () => tabs.filter((t) => t.kind === 'web' && !t.sleeping).sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1))),
     [tabs]
   )
 
   if (!booted || !active) return <div className={'app ' + (dark ? 'dark' : 'light')} />
 
   // YouCloud прозрачен сам (в Masaki у него нет своего фона): под ним то же стекло, что у панели.
-  const yc = active.kind === 'web' && isYouCloud(active.url)
+  const yc = active.kind === 'web' && youcloudTransparent(active.url)
   const cls = [
     'app',
     window.masaki.platform === 'darwin' ? 'mac' : '',

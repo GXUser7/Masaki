@@ -69,6 +69,10 @@ const api: MasakiApi = {
     load: () => ipcRenderer.invoke('session:load'),
     save: (s) => ipcRenderer.send('session:save', s)
   },
+  tabMemory: {
+    save: (id) => ipcRenderer.invoke('tab-memory:save', id),
+    forget: (key) => ipcRenderer.send('tab-memory:forget', key)
+  },
   history: {
     list: () => ipcRenderer.invoke('history:list'),
     add: (e) => ipcRenderer.send('history:add', e),

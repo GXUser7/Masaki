@@ -6,7 +6,7 @@ import { hostOf } from '../lib/url'
 import { captureThumb, markReady, registerWebview, unregisterWebview, useStore, type Tab } from '../store'
 import { syncGlass } from '../lib/glass'
 import { cancelGoogleAccountEntry, continueGoogleAccountEntry } from '../lib/googleAccount'
-import { isYouCloud, parseMedia, sendYouCloudTheme } from '../lib/youcloud'
+import { isYouCloud, parseMedia, sendYouCloudTheme, youcloudTransparent } from '../lib/youcloud'
 
 /** Не чаще раза за столько мс док меняет размер: дольше, чем перетекание (0,45 с). */
 const DOCK_HOLD = 500
@@ -28,11 +28,13 @@ function setDockSmall(tabId: string, small: boolean): void {
   useStore.setState({ capsuleSmall: small })
 }
 
-/** Одна вкладка = один <webview>. Неактивные просто скрыты и продолжают жить, как в Chrome. */
+/** Webview существует только у загруженной вкладки; выгрузка удаляет её гостевой процесс. */
 export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: boolean; pane?: 'a' | 'b'; ratio?: number }): React.JSX.Element {
   const ref = useRef<Electron.WebviewTag | null>(null)
   const [canvas, setCanvas] = useState<string>()
   const id = tab.id
+  const transparent = youcloudTransparent(tab.url)
+  const resumeSrc = useRef(tab.resumeKey ? 'about:blank#masaki-resume=' + tab.resumeKey : null)
 
   useEffect(() => {
     const el = ref.current
@@ -53,6 +55,13 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
         'dom-ready',
         () => {
           markReady(id)
+          if (tab.resumeKey && el.getURL() === 'about:blank') {
+            // Снимок уже исчез (например, после перезагрузки интерфейса): хотя бы вернём адрес.
+            up({ resumeKey: undefined })
+            void el.loadURL(tab.url).catch(() => undefined)
+            return
+          }
+          if (tab.resumeKey) up({ resumeKey: undefined })
           syncNav()
           if (store().activeId === id) window.masaki.extensions.activeTab(el.getWebContentsId())
           const t = store().tabs.find((x) => x.id === id)
@@ -138,6 +147,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
       [
         'did-navigate',
         (e: Electron.DidNavigateEvent) => {
+          if (e.url === 'about:blank' && tab.resumeKey) return
           const prev = store().tabs.find((x) => x.id === id)
           const sameHost = prev && hostOf(prev.url) === hostOf(e.url)
           // Новый документ — прежний плеер страницы ушёл вместе с ним.
@@ -159,6 +169,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
       [
         'page-title-updated',
         (e: Electron.PageTitleUpdatedEvent) => {
+          if (tab.resumeKey && el.getURL() === 'about:blank') return
           up({ title: e.title })
           store().addHistory(el.getURL(), e.title)
         }
@@ -218,13 +229,13 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
 
   return createElement('webview', {
     ref,
-    src: tab.initialUrl,
+    src: resumeSrc.current ?? tab.initialUrl,
     partition: 'persist:frost', // старое имя сессии: в ней куки и входы, не менять
     allowpopups: 'true',
     webpreferences: 'spellcheck=yes',
-    className: 'wv' + (active || pane ? ' on' : '') + (tab.glassBg || isYouCloud(tab.url) ? ' clear' : '') + (pane ? ' pane' : '') + (pane && active ? ' focused' : ''),
+    className: 'wv' + (active || pane ? ' on' : '') + (tab.glassBg || transparent ? ' clear' : '') + (pane ? ' pane' : '') + (pane && active ? ' focused' : ''),
     style: {
-      '--site-canvas': tab.glassBg ? `rgb(${tab.glassBg})` : isYouCloud(tab.url) ? 'var(--page)' : canvas,
+      '--site-canvas': tab.glassBg ? `rgb(${tab.glassBg})` : transparent ? 'var(--page)' : canvas,
       ...(pane === 'a' ? { width: `calc(${ratio * 100}% - 4px)` } : pane === 'b' ? { left: `calc(${ratio * 100}% + 4px)`, width: 'auto', right: 0 } : {})
     } as CSSProperties & { '--site-canvas'?: string },
     'data-tab': id

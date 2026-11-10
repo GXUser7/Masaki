@@ -30,6 +30,7 @@ import * as passwords from './passwords'
 import * as passkeys from './passkeys'
 import { answerExternal, initExternalProtocols, requestExternal, watchExternalProtocols } from './externalProtocols'
 import { searchImage } from './searchImage'
+import { initTabMemory, noteTabCreation, prepareTabRestore, restoreAttachedTab } from './tabMemory'
 import {
   initYouCloud,
   isYouCloudExtension,
@@ -697,6 +698,7 @@ function setupBrowsingSession(): void {
   // Всплывающим окнам вкладок preload из настроек окна Electron не даёт (окно открыто из webview), поэтому
   // скрипт входа Google — на всю сессию: во вкладках он повторяет guest.ts, в окне «Войти через Google» — один.
   ses.registerPreloadScript({ type: 'frame', id: 'masaki-popup', filePath: path.join(__dirname, '../preload/popup.js') })
+  ses.registerPreloadScript({ type: 'frame', id: 'masaki-tab-lifecycle', filePath: path.join(__dirname, '../preload/tab-lifecycle.js') })
   listenHeaders(ses)
   // Слушатель у сессии один на всё: вход в Google, заголовки запросов моста YouCloud и токен,
   // с которым soundcloud.com ходит в свой API (им YouCloud продлевает истёкшую сессию).
@@ -897,7 +899,12 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     prefs.sandbox = true
     if (testHeadless) prefs.backgroundThrottling = false
     params.partition = PARTITION
+    prepareTabRestore(params)
   })
+  // Даём Electron закончить attach: навигация прямо внутри этого события может заблокировать гостя.
+  ui.on('did-attach-webview', (_event, contents) => setImmediate(() => {
+    if (!contents.isDestroyed()) restoreAttachedTab(contents)
+  }))
 
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void win.loadFile(path.join(__dirname, '../renderer/index.html'))
@@ -1051,6 +1058,7 @@ app.on('web-contents-created', (_e, contents) => {
     contents.setWindowOpenHandler(({ url }) => ({ action: requestExternal(contents, url) ? 'deny' : 'allow' }))
   }
   if (contents.getType() !== 'webview') return
+  noteTabCreation(contents)
   watchExternalProtocols(contents)
   attachShortcuts(contents, true)
   watchWebview(contents)
@@ -1278,6 +1286,10 @@ function registerIpc(): void {
   ipcMain.handle('system:make-default', () => makeDefault())
 
   ipcMain.handle('settings:get', () => settings)
+  ipcMain.on('yc:appearance', (event, host: unknown) => {
+    event.returnValue = typeof host === 'string' && !settings.addons.glass.exclude.includes(host)
+  })
+  initTabMemory(() => win)
   ipcMain.on('settings:set', (_e, s: Settings) => {
     applySettings(s)
     sync.onSettingsChanged()

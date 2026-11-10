@@ -236,6 +236,8 @@ export interface Settings {
   addons: AddonSettings
   /** Через сколько часов неактивные вкладки уходят в архив; 0 — никогда. */
   archiveAfter: number
+  /** Через сколько минут выгружать фоновые страницы из памяти; 0 — никогда. Своё у устройства. */
+  sleepAfter: number
   /** Порт отладки Chromium для ИИ-агентов (Claude Code через chrome-devtools-mcp). Своё у устройства, работает с перезапуска. */
   aiControl: boolean
 }
@@ -252,6 +254,7 @@ export const defaultSettings: Settings = {
   favThemed: false,
   scThemed: false,
   archiveAfter: 0,
+  sleepAfter: 15,
   aiControl: false,
   clock: { style: 'flex', color: 'auto', size: 'dynamic', rounded: true, thickness: 45 },
   shortcuts: [
@@ -505,7 +508,7 @@ export type Command =
   | { type: 'view-source' }
   | { type: 'print' }
   | { type: 'escape' }
-  | { type: 'open-url'; url: string; background?: boolean }
+  | { type: 'open-url'; url: string; background?: boolean; eager?: boolean }
   | { type: 'search'; text: string; ai?: boolean }
   /** Закрыть вкладки, адрес которых начинается так (служебная страница входа в синхронизацию). */
   | { type: 'close-tabs'; prefix: string }
@@ -638,6 +641,10 @@ export interface MasakiApi {
   session: {
     load(): Promise<SavedSession | null>
     save(s: SavedSession): void
+  }
+  tabMemory: {
+    save(wcId: number): Promise<string | null>
+    forget(key: string): void
   }
   history: {
     list(): Promise<HistoryEntry[]>

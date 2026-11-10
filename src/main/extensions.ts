@@ -62,7 +62,7 @@ function openTab(url: string, background: boolean): Promise<WebContents> {
       resolve(wc)
     }
     waiting.push(done)
-    hooks.send({ type: 'open-url', url, background })
+    hooks.send({ type: 'open-url', url, background, eager: true })
   })
 }
 

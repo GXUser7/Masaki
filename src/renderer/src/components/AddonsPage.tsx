@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { AddonSettings, ExtensionInfo } from '../../../shared/types'
 import { syncGlassAll } from '../lib/glass'
+import { YOUCLOUD_URL } from '../lib/youcloud'
+import { hostOf } from '../lib/url'
 import { shapes } from '../lib/shapes'
 import { useStore } from '../store'
 import { Icon, type IconName } from './Icon'
@@ -87,6 +89,20 @@ export function AddonsPage(): React.JSX.Element {
           on={glass.enabled}
           onToggle={(enabled) => setGlass({ enabled })}
         >
+          <div className="addon-body set-row">
+            <span>
+              Прозрачность YouCloud
+              <small>Показывать обои Masaki сквозь YouCloud. Можно выключить независимо от прозрачности остальных сайтов.</small>
+            </span>
+            <Toggle
+              label="Прозрачность YouCloud"
+              on={!glass.exclude.includes(hostOf(YOUCLOUD_URL))}
+              onChange={(on) => {
+                const hosts = [hostOf(YOUCLOUD_URL), 'localhost:5190']
+                setGlass({ exclude: on ? glass.exclude.filter((h) => !hosts.includes(h)) : [...new Set([...glass.exclude, ...hosts])] })
+              }}
+            />
+          </div>
           {glass.enabled && (
             <div className="addon-body">
               <div className="set-row">

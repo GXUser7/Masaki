@@ -31,6 +31,7 @@
     "test:passwords": "electron-vite build && node scripts/passwords-test.mjs",
     "test:passkeys": "electron-vite build && node scripts/passkeys-test.mjs",
     "test:browser-compat": "electron-vite build && node scripts/browser-compat-test.mjs",
+    "test:tab-memory": "electron-vite build && node scripts/tab-memory-test.mjs",
     "screens": "electron-vite build && node scripts/screens.mjs",
     "test:youcloud": "electron-vite build && node scripts/youcloud-test.mjs",
     "test:youcloud-sc": "electron-vite build && node scripts/youcloud-sc-writes-test.mjs",

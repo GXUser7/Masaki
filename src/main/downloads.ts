@@ -16,6 +16,11 @@ const IMAGE = /\.(png|jpe?g|gif|webp|bmp|avif|heic|ico|tiff?)$/i
 let list: DownloadInfo[] = []
 /** Живые DownloadItem: interrupted бывает и до done — пока объект жив, загрузку ещё можно отменить. */
 const items = new Map<string, DownloadItem>()
+const sourceTabs = new Map<string, number>()
+
+export function tabHasDownload(wcId: number): boolean {
+  return [...sourceTabs.values()].includes(wcId)
+}
 const thumbs = new Map<string, string | null>()
 let send: (d: DownloadInfo) => void = () => {}
 let completed: (p: string) => void = () => {}
@@ -87,6 +92,7 @@ export function trackDownload(item: DownloadItem, wc: WebContents | undefined): 
   const target = uniquePath(app.getPath('downloads'), item.getFilename())
   item.setSavePath(target)
   items.set(id, item)
+  if (wc && !wc.isDestroyed()) sourceTabs.set(id, wc.id)
   const page = wc && !wc.isDestroyed() ? hostOf(wc.getURL()) : undefined
   let endedAt: number | undefined
   const info = (state = item.getState()): DownloadInfo => ({
@@ -108,6 +114,7 @@ export function trackDownload(item: DownloadItem, wc: WebContents | undefined): 
   item.on('updated', (_ev, state) => put(info(state)))
   item.once('done', (_ev, state) => {
     items.delete(id)
+    sourceTabs.delete(id)
     endedAt = Date.now()
     put(info(state))
     if (state === 'completed') completed(item.getSavePath() || target)

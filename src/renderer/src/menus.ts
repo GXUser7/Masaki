@@ -5,6 +5,7 @@ import { isTileColor, siteIconColors } from './lib/iconColor'
 import { isShape, shapeCycle, type ShapeName } from './lib/shapes'
 import { aiModeUrl, hostOf, searchUrl } from './lib/url'
 import { toggleGlassForSite } from './lib/glass'
+import { isYouCloud } from './lib/youcloud'
 import { togglePin } from './lib/extensions'
 import { groupColors, useStore } from './store'
 
@@ -160,7 +161,7 @@ export function openPageMenu(p: PageMenuParams): void {
     )
     // Аддон «Прозрачные сайты»: быстро выключить или вернуть для этого сайта.
     const g = S().settings.addons.glass
-    if (g.enabled && web) {
+    if ((g.enabled || isYouCloud(p.pageURL)) && web) {
       const off = g.exclude.includes(hostOf(p.pageURL))
       e.push({ kind: 'item', icon: 'layers', label: off ? 'Вернуть прозрачность на этом сайте' : 'Выключить прозрачность на этом сайте', run: () => toggleGlassForSite(p.pageURL) })
     }
