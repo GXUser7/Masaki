@@ -324,6 +324,18 @@ interface Store {
   closeBelow(id: string): void
 }
 
+/** Массовое закрытие тоже убирает пустые группы, снимки и пару, потерявшую одну из вкладок. */
+function retainedTabState(s: Store, tabs: Tab[]): Pick<Store, 'tabs' | 'groups' | 'thumbs' | 'split' | 'preview'> {
+  const ids = new Set(tabs.map((t) => t.id))
+  return {
+    tabs,
+    groups: s.groups.filter((g) => tabs.some((t) => t.group === g.id)),
+    thumbs: Object.fromEntries(Object.entries(s.thumbs).filter(([id]) => ids.has(id))),
+    split: s.split && ids.has(s.split.a) && ids.has(s.split.b) ? s.split : null,
+    preview: null
+  }
+}
+
 export const useStore = create<Store>((set, get) => ({
   booted: false,
   settings: defaultSettings,
@@ -431,10 +443,7 @@ export const useStore = create<Store>((set, get) => ({
     // Закрыли вкладку из пары «рядом» — вторая встаёт на весь экран.
     const partner = s.split && (s.split.a === target ? s.split.b : s.split.b === target ? s.split.a : null)
     const activeId = s.activeId === target ? (partner ?? tabs[Math.min(i, tabs.length - 1)].id) : s.activeId
-    const groups = s.groups.filter((g) => tabs.some((t) => t.group === g.id))
-    const thumbs = { ...s.thumbs }
-    delete thumbs[target]
-    set({ tabs, activeId, closed, groups, thumbs, split: partner ? null : s.split, preview: null })
+    set({ ...retainedTabState(s, tabs), activeId, closed })
   },
 
   reopenTab() {
@@ -773,7 +782,7 @@ export const useStore = create<Store>((set, get) => ({
       ...s.closed,
       ...s.tabs.filter((t) => t.id !== id && t.kind === 'web').map((t, i) => ({ url: t.url, title: t.title, index: i }))
     ].slice(-25)
-    set({ tabs: [keep], activeId: id, closed })
+    set({ ...retainedTabState(s, [keep]), activeId: id, closed })
   },
 
   closeBelow(id) {
@@ -783,7 +792,7 @@ export const useStore = create<Store>((set, get) => ({
     const below = s.tabs.slice(i + 1)
     const closed = [...s.closed, ...below.filter((t) => t.kind === 'web').map((t) => ({ url: t.url, title: t.title, index: i + 1 }))].slice(-25)
     const tabs = s.tabs.slice(0, i + 1)
-    set({ tabs, closed, activeId: tabs.some((t) => t.id === s.activeId) ? s.activeId : id })
+    set({ ...retainedTabState(s, tabs), closed, activeId: tabs.some((t) => t.id === s.activeId) ? s.activeId : id })
   }
 }))
 

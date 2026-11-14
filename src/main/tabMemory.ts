@@ -76,13 +76,24 @@ export function initTabMemory(window: () => BrowserWindow | null): void {
     if (!/^https?:\/\//i.test(url)) return null
     try {
       // Проверяем все фреймы: заполненная форма внутри iframe тоже должна остаться в памяти.
-      const states = await Promise.all(contents.mainFrame.framesInSubtree.map((frame) => frame.executeJavaScript(`(() => ({
-        blocked: !!document.pictureInPictureElement || [...document.querySelectorAll('input, textarea, select')].some(el =>
-          el instanceof HTMLSelectElement ? [...el.options].some(o => o.selected !== o.defaultSelected) :
-          el instanceof HTMLInputElement && /^(checkbox|radio)$/.test(el.type) ? el.checked !== el.defaultChecked :
-          el.value !== el.defaultValue),
-        scroll: [scrollX, scrollY]
-      }))()`) as Promise<{ blocked: boolean; scroll: [number, number] }>))
+      // defaultSelected/defaultValue не учитывают выбор первого option и начальные значения range/color.
+      // Сбрасываем только отсоединённую копию: Chromium сам вычислит исходное состояние поля.
+      const states = await Promise.all(contents.mainFrame.framesInSubtree.map((frame) => frame.executeJavaScript(`(() => {
+        const form = document.createElement('form')
+        const changed = el => {
+          const initial = el.cloneNode(true)
+          initial.removeAttribute('form')
+          form.replaceChildren(initial)
+          HTMLFormElement.prototype.reset.call(form)
+          return el instanceof HTMLSelectElement ? [...el.options].some((o, i) => o.selected !== initial.options[i].selected) :
+            el instanceof HTMLInputElement && /^(checkbox|radio)$/.test(el.type) ? el.checked !== initial.checked :
+            el.value !== initial.value
+        }
+        return {
+          blocked: !!document.pictureInPictureElement || [...document.querySelectorAll('input, textarea, select')].some(changed),
+          scroll: [scrollX, scrollY]
+        }
+      })()`) as Promise<{ blocked: boolean; scroll: [number, number] }>))
       if (contents.isDestroyed() || contents.getURL() !== url || contents.isLoading() ||
           contents.isCurrentlyAudible() || tabHasDownload(contents.id) || isProtected(contents) || states.some((s) => s.blocked)) return null
       const entries = contents.navigationHistory.getAllEntries()
