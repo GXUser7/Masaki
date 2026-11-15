@@ -19,6 +19,7 @@ import { ExtInstallSheet } from './ExtInstall'
 import { matchesPanel, syncGlassAll } from '../lib/glass'
 import { Grain } from './parts'
 import { PageDialog, PermissionBar } from './Permissions'
+import { SiteInfoSheet } from './SiteInfo'
 import { AuthSheet, DeviceSheet, DisplaySheet } from './Devices'
 import { openInputMenu, openPageMenu } from '../menus'
 import { NewTab } from './NewTab'
@@ -364,6 +365,7 @@ export function App(): React.JSX.Element {
       </div>
       {paletteOpen && <Palette />}
       <Glance />
+      <SiteInfoSheet />
       <TabPreview />
       <SnapPicker />
       <AutofillMenu />

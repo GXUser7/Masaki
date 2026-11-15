@@ -81,6 +81,16 @@ function AddressBar({ where }: { where: 'side' | 'cap' }): React.JSX.Element {
       </button>
       {web && (
         <button
+          className="ib a-lock"
+          aria-label="Сведения о сайте"
+          title="Сведения о сайте: разрешения, куки, данные"
+          onClick={() => useStore.setState({ siteInfo: true })}
+        >
+          <Icon name={t.url.startsWith('https:') ? 'lock' : 'warn'} />
+        </button>
+      )}
+      {web && (
+        <button
           className={'ib a-star' + (fav ? ' on' : '')}
           aria-label={fav ? 'Убрать из избранного' : 'Добавить в избранное'}
           title={fav ? 'Убрать из избранного · Ctrl+D' : 'В избранное · Ctrl+D'}
@@ -528,8 +538,13 @@ export function Sidebar(): React.JSX.Element {
   const themed = useStore((s) => s.settings.favThemed)
   // Избранного может быть много (например, после переноса закладок): сначала видны два ряда.
   const [allFavs, setAllFavs] = useState(false)
-  const more = favorites.length > FAV_SHOWN
-  const shownFavs = more && !allFavs ? favorites.slice(0, FAV_SHOWN - 1) : favorites
+  // Папки закладок (как в Chrome): плитки без папки — сверху, дальше по папке на секцию.
+  const [closedFolders, setClosedFolders] = useState<string[]>([])
+  const rootFavs = favorites.filter((f) => !f.folder)
+  const folders: string[] = []
+  for (const f of favorites) if (f.folder && !folders.includes(f.folder)) folders.push(f.folder)
+  const more = rootFavs.length > FAV_SHOWN
+  const shownFavs = more && !allFavs ? rootFavs.slice(0, FAV_SHOWN - 1) : rootFavs
   const s = useStore.getState
   // Тянуть можно среди видимых плиток; они — начало списка, так что номера те же, что в настройках.
   const rd = useReorder(tileKeys(shownFavs), (from, to) => {
@@ -589,16 +604,54 @@ export function Sidebar(): React.JSX.Element {
           {more && (
             <button
               className="fvt fvt-more"
-              title={allFavs ? 'Свернуть избранное' : `Ещё ${favorites.length - shownFavs.length}`}
-              aria-label={allFavs ? 'Свернуть избранное' : `Показать всё избранное, ещё ${favorites.length - shownFavs.length}`}
+              title={allFavs ? 'Свернуть избранное' : `Ещё ${rootFavs.length - shownFavs.length}`}
+              aria-label={allFavs ? 'Свернуть избранное' : `Показать всё избранное, ещё ${rootFavs.length - shownFavs.length}`}
               aria-expanded={allFavs}
               onClick={() => setAllFavs(!allFavs)}
             >
-              <span className="fvt-more-in">{allFavs ? <Icon name="up" /> : '+' + (favorites.length - shownFavs.length)}</span>
+              <span className="fvt-more-in">{allFavs ? <Icon name="up" /> : '+' + (rootFavs.length - shownFavs.length)}</span>
             </button>
           )}
         </div>
       )}
+
+      {folders.map((name) => {
+        const items = favorites.filter((f) => f.folder === name)
+        const closed = closedFolders.includes(name)
+        return (
+          <div key={name} className="fav-folder">
+            <button
+              className="fav-folder-h"
+              aria-expanded={!closed}
+              title={closed ? 'Развернуть папку' : 'Свернуть папку'}
+              onClick={() => setClosedFolders(closed ? closedFolders.filter((x) => x !== name) : [...closedFolders, name])}
+            >
+              <Icon name={closed ? 'down' : 'up'} />
+              <span className="fav-folder-n">{name}</span>
+              <i>{items.length}</i>
+            </button>
+            {!closed && (
+              <div className="favs favs-sub">
+                {items.map((f, i) => (
+                  <button
+                    key={f.url + i}
+                    className="fvt"
+                    title={f.title}
+                    aria-label={f.title}
+                    onClick={() => openFavorite(f.url)}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      openTileMenu(e.clientX, e.clientY, 'favorites', favorites.indexOf(f))
+                    }}
+                  >
+                    <ShapeTile item={f} index={i} themed={themed} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
 
       <div className="lbl-row">
         <span className="lbl">Вкладки · {tabs.length}</span>

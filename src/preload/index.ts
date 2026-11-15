@@ -188,6 +188,16 @@ const api: MasakiApi = {
     audit: () => ipcRenderer.invoke('passwords:audit'),
     exportCsv: () => ipcRenderer.invoke('passwords:export')
   },
+  apps: {
+    list: () => ipcRenderer.invoke('apps:list'),
+    install: (url, name, icon) => ipcRenderer.invoke('apps:install', url, name, icon),
+    remove: (id) => ipcRenderer.send('apps:remove', id),
+    shortcut: (id) => ipcRenderer.invoke('apps:shortcut', id)
+  },
+  handlers: {
+    list: () => ipcRenderer.invoke('ph:list'),
+    remove: (scheme, origin) => ipcRenderer.send('ph:remove', scheme, origin)
+  },
   autofill: {
     addresses: () => ipcRenderer.invoke('af:addresses'),
     cards: () => ipcRenderer.invoke('af:cards'),

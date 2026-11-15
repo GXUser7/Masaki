@@ -257,6 +257,8 @@ interface Store {
   displayAsks: DisplayAsk[]
   deviceAsks: DeviceAsk[]
   authAsks: AuthAsk[]
+  /** Панель «О сайте»: разрешения, куки, данные — по щиту в адресной капсуле. */
+  siteInfo: boolean
   groups: TabGroup[]
   archive: ArchivedTab[]
   /** Свои раскладки окна у кнопки «развернуть»: где показать. */
@@ -378,6 +380,7 @@ export const useStore = create<Store>((set, get) => ({
   displayAsks: [],
   deviceAsks: [],
   authAsks: [],
+  siteInfo: false,
   groups: [],
   archive: [],
   snap: null,

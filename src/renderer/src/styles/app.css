@@ -7119,3 +7119,55 @@ svg[data-ic='history'] > path {
   background: var(--sc);
   color: var(--on-sc);
 }
+
+/* Папки закладок в панели: заголовок-чип и ряд плиток папки. */
+.fav-folder { margin-top: 8px; }
+.fav-folder-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--r-s);
+  font-size: 12px;
+  color: var(--on-sc-var, var(--on-sc));
+  transition: background var(--spring);
+}
+.fav-folder-h:hover { background: var(--sc); }
+.fav-folder-n {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.fav-folder-h i {
+  font-style: normal;
+  font-size: 11px;
+  opacity: 0.6;
+}
+.favs-sub { margin-top: 2px; }
+.sc-folder {
+  width: 110px;
+  flex: none;
+  padding: 5px 8px;
+  border-radius: var(--r-s);
+  border: 1px solid transparent;
+  background: var(--sc);
+  color: var(--on-sc);
+  font-size: 12px;
+}
+.sc-folder:focus { border-color: var(--primary); outline: none; }
+
+/* Панель «О сайте»: та же геометрия всплывающих окон, свой шапка-хост. */
+.site-info { width: 380px; max-height: 72vh; overflow-y: auto; }
+.si-head { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.si-head svg { flex: none; }
+.si-host { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.si-note { margin: 4px 0 10px; }
+.si-acts { display: flex; flex-direction: column; gap: 2px; }
+.si-sep { height: 1px; background: var(--sc); margin: 12px -14px; }
+.a-lock { color: var(--on-sc-var, var(--on-sc)); }
+
+.sc-ic { width: 20px; height: 20px; border-radius: 6px; object-fit: contain; flex: none; }

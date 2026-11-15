@@ -36,17 +36,18 @@ export function chromeBookmarks(dir: string): Shortcut[] {
   const data = readJson(path.join(root(), dir, 'Bookmarks')) as { roots?: Record<string, BookmarkNode> } | null
   const out: Shortcut[] = []
   const seen = new Set<string>()
-  const walk = (node: BookmarkNode | undefined): void => {
+  // Папка закладок сохраняется: у Chrome это «Панель закладок» и «Другие закладки» с подпапками.
+  const walk = (node: BookmarkNode | undefined, folder: string | undefined): void => {
     for (const ch of node?.children ?? []) {
       if (ch.type === 'url') {
         if (web(ch.url) && !seen.has(ch.url)) {
           seen.add(ch.url)
-          out.push({ title: ch.name?.trim() || ch.url, url: ch.url })
+          out.push(folder ? { title: ch.name?.trim() || ch.url, url: ch.url, folder } : { title: ch.name?.trim() || ch.url, url: ch.url })
         }
-      } else walk(ch)
+      } else walk(ch, folder ?? (ch.name?.trim() || undefined))
     }
   }
-  for (const key of ['bookmark_bar', 'other', 'synced']) walk(data?.roots?.[key])
+  for (const key of ['bookmark_bar', 'other', 'synced']) walk(data?.roots?.[key], undefined)
   return out
 }
 

@@ -18,6 +18,7 @@ import { moveTiles, tileKeys, useReorder } from '../lib/reorder'
 import { Clock, clockStyles } from './Clock'
 import { Icon } from './Icon'
 import { PermissionList } from './Permissions'
+import type { AppInfo, WebHandler } from '../../../shared/types'
 import { SyncSection } from './SyncSection'
 import { PasswordsSummary } from './PasswordsPage'
 
@@ -49,6 +50,106 @@ function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
     <button role="switch" aria-checked={on} aria-label={label} className={'switch' + (on ? ' on' : '')} onClick={() => onChange(!on)}>
       <span className="knob">{on && <Icon name="check" />}</span>
     </button>
+  )
+}
+
+/** Установленные приложения-сайты: окно без интерфейса Masaki, свои куки и входы. */
+function AppsSection(): React.JSX.Element {
+  const [apps, setApps] = useState<AppInfo[] | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+  const reload = (): void => void window.masaki.apps.list().then(setApps)
+  useEffect(reload, [])
+  return (
+    <section>
+      <h2>Приложения</h2>
+      <p className="hint">
+        Сайты в собственных окнах — как «Установить приложение» в Chrome: без панели и вкладок, но с общими куками
+        и входами. Ставятся из меню страницы: правый клик → «Установить как приложение…».
+      </p>
+      {msg && <p className="hint ci-done">{msg}</p>}
+      {apps === null ? (
+        <p className="hint">Читаю…</p>
+      ) : apps.length === 0 ? (
+        <p className="hint">Пока ничего не установлено.</p>
+      ) : (
+        <div className="sc-edit">
+          {apps.map((a) => (
+            <div key={a.id} className="sc-item">
+              {a.icon ? <img className="sc-ic" src={a.icon} alt="" draggable={false} /> : <Icon name="globe" />}
+              <span className="sc-item-t">
+                <b>{a.name}</b>
+                <small>{a.url}</small>
+              </span>
+              <button
+                className="ib"
+                aria-label={`Открыть «${a.name}»`}
+                title="Открыть окно приложения"
+                onClick={() => void window.masaki.apps.install(a.url, a.name)}
+              >
+                <Icon name="openInNew" />
+              </button>
+              <button
+                className="ib"
+                aria-label={`Ярлык «${a.name}» на рабочем столе`}
+                title="Ярлык на рабочем столе"
+                onClick={() =>
+                  void window.masaki.apps.shortcut(a.id).then((r) => setMsg(r.ok ? 'Ярлык создан на рабочем столе.' : r.error ?? null))
+                }
+              >
+                <Icon name="download" />
+              </button>
+              <button className="ib" aria-label={`Удалить «${a.name}»`} title="Удалить приложение" onClick={() => (window.masaki.apps.remove(a.id), reload())}>
+                <Icon name="delete" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** Схемы web+…, обработчиками которых сайты себя назначили (navigator.registerProtocolHandler). */
+function HandlersSection(): React.JSX.Element {
+  const [list, setList] = useState<WebHandler[] | null>(null)
+  const reload = (): void => void window.masaki.handlers.list().then(setList)
+  useEffect(reload, [])
+  return (
+    <section>
+      <h2>Обработчики протоколов</h2>
+      <p className="hint">
+        Сайты, которым Masaki передаёт ссылки вида web+…: клик по такой ссылке откроется на сайте-обработчике.
+        Регистрируют себя сами пунктом «Настройки → Обработчики» у себя на сайте.
+      </p>
+      {list === null ? (
+        <p className="hint">Читаю…</p>
+      ) : list.length === 0 ? (
+        <p className="hint">Пока ни один сайт не зарегистрировался.</p>
+      ) : (
+        <div className="sc-edit">
+          {list.map((h) => (
+            <div key={h.scheme + h.origin} className="sc-item">
+              <Icon name="globe" />
+              <span className="sc-item-t">
+                <b>{h.scheme}</b>
+                <small>
+                  {h.origin}
+                  {h.name ? ` · ${h.name}` : ''}
+                </small>
+              </span>
+              <button
+                className="ib"
+                aria-label={`Убрать обработчик ${h.scheme}`}
+                title="Убрать обработчик"
+                onClick={() => (window.masaki.handlers.remove(h.scheme, h.origin), reload())}
+              >
+                <Icon name="delete" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -84,6 +185,17 @@ function ShortcutEditor({
                 <b>{it.title}</b>
                 <small>{it.url}</small>
               </span>
+              {/* Папка закладок: плитки одной папки стоят в панели под её заголовком. */}
+              <input
+                className="sc-folder"
+                placeholder="Папка"
+                value={it.folder ?? ''}
+                aria-label={`Папка закладки «${it.title}»`}
+                onChange={(e) => {
+                  const v = e.target.value.trim()
+                  onChange(items.map((x, j) => (j === i ? (v ? { ...x, folder: v } : (({ folder: _f, ...rest }) => rest)(x)) : x)))
+                }}
+              />
               <button className="ib" aria-label={`Удалить «${it.title}»`} onClick={() => onChange(items.filter((_, j) => j !== i))}>
                 <Icon name="delete" />
               </button>
@@ -555,6 +667,9 @@ export function SettingsPage(): React.JSX.Element {
           <p className="hint">Что вы разрешили или запретили сайтам. Сбросьте решение — сайт спросит снова.</p>
           <PermissionList />
         </section>
+
+        <AppsSection />
+        <HandlersSection />
 
         <section>
           <h2>История</h2>

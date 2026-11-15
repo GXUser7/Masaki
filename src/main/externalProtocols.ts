@@ -1,6 +1,7 @@
 import { app, shell, type WebContents } from 'electron'
 import { randomUUID } from 'crypto'
 import type { PermissionPrompt } from '../shared/types'
+import { webHandlerFor } from './apps'
 
 // Эти адреса принадлежат браузеру: передавать их обработчику Windows нельзя.
 const INTERNAL = new Set(['http:', 'https:', 'file:', 'about:', 'data:', 'blob:', 'javascript:', 'masaki:', 'frost:', 'chrome:', 'chrome-extension:', 'devtools:', 'crx:', 'view-source:', 'ws:', 'wss:'])
@@ -24,6 +25,13 @@ export function externalScheme(url: string): string | null {
 export function requestExternal(wc: WebContents, url: string): boolean {
   const scheme = externalScheme(url)
   if (!scheme) return BLOCKED.has(url.split(':', 1)[0].toLowerCase() + ':')
+  // Ссылку на схему, чей обработчик зарегистрировал сайт, открывает сам сайт (шаблон с %s) —
+  // мимо вопроса «открыть приложение?»: это веб-обработчик, а не программа Windows.
+  const handler = webHandlerFor(url)
+  if (handler) {
+    notify?.('command', { type: 'open-url', url: handler })
+    return true
+  }
   if (!notify || wc.isDestroyed()) return true
   const origin = wc.mainFrame.origin
   if (!/^(https?:\/\/|file:\/\/)/.test(origin)) return true

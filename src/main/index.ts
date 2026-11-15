@@ -30,6 +30,7 @@ import * as passwords from './passwords'
 import * as passkeys from './passkeys'
 import { answerExternal, initExternalProtocols, requestExternal, watchExternalProtocols } from './externalProtocols'
 import { dropDevicePending, initDevices } from './devices'
+import { appFromArgv, flushApps, initApps, launchApp } from './apps'
 import * as autofill from './autofill'
 import { searchImage } from './searchImage'
 import { initTabMemory, noteTabCreation, prepareTabRestore, restoreAttachedTab } from './tabMemory'
@@ -1967,7 +1968,9 @@ if (!app.requestSingleInstanceLock()) {
     if (win.isMinimized()) win.restore()
     win.focus()
     const url = urlFromArgv(argv)
-    if (url) send({ type: 'open-url', url })
+    const appUrl = appFromArgv(argv)
+    if (appUrl && !profiles.isIncognito()) launchApp(appUrl)
+    else if (url) send({ type: 'open-url', url })
     // «Новое окно инкогнито», когда оно уже открыто, — новая вкладка в нём.
     else if (profiles.isIncognito() && argv.includes('--incognito')) send({ type: 'new-tab' })
   })
@@ -2000,6 +2003,10 @@ if (!app.requestSingleInstanceLock()) {
     )
     setupBrowsingSession()
     initDevices(PARTITION, { ui: (channel, payload) => win?.webContents.send(channel, payload), hasWindow: () => !!win })
+    initApps(PARTITION, {
+      openTab: (url) => send({ type: 'open-url', url }),
+      isUi: (sender) => !!win && sender === win.webContents
+    })
     registerIpc()
     registerPasswordIpc()
     await passwords.initPasswords({
@@ -2033,7 +2040,13 @@ if (!app.requestSingleInstanceLock()) {
     await startExtensions().catch((e) => console.error('Расширения не запустились', e))
     void loadSavedExtensions()
     if (settings.addons.adblock.enabled) void applyAdblock(true)
-    createWindow(await windowFile.read())
+    const appUrl = appFromArgv(process.argv)
+    if (appUrl && !profiles.isIncognito()) {
+      // Ярлык приложения: окно сайта, главный интерфейс не открываем (как Chrome с PWA).
+      launchApp(appUrl)
+    } else {
+      createWindow(await windowFile.read())
+    }
     if (!profiles.isIncognito()) void refreshRegistration()
     updater.initUpdater((st) => win?.webContents.send('update-state', st))
   })
@@ -2065,6 +2078,7 @@ if (!app.requestSingleInstanceLock()) {
     autofill.flushAutofill()
     passkeys.flushPasskeys()
     flushDownloads()
+    flushApps()
   })
 
   app.on('window-all-closed', () => app.quit())

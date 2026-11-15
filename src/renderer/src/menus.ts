@@ -172,6 +172,15 @@ export function openPageMenu(p: PageMenuParams): void {
         }
       },
       { kind: 'item', icon: 'qr', label: 'Создать QR-код страницы', run: () => S().showQr(p.pageURL) },
+      {
+        kind: 'item',
+        icon: 'add',
+        label: 'Установить как приложение…',
+        disabled: !web,
+        run: () => {
+          void window.masaki.favicon(p.pageURL).then((icon) => window.masaki.apps.install(p.pageURL, hostOf(p.pageURL), icon ?? undefined))
+        }
+      },
       { kind: 'item', icon: 'download', label: 'Сохранить страницу как…', kbd: 'Ctrl S', run: act({ type: 'save-page' }) },
       { kind: 'item', icon: 'pdf', label: 'Сохранить как PDF…', run: act({ type: 'pdf' }) },
       { kind: 'item', icon: 'print', label: 'Печать…', kbd: 'Ctrl P', run: act({ type: 'print' }) },

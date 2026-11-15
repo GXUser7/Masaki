@@ -36,6 +36,8 @@ export interface Shortcut {
   shape?: string
   /** Цвет фона плитки, '#rrggbb'. Нет поля — «Авто»: цвет берётся из значка сайта. */
   color?: string
+  /** Папка закладок (как в Chrome): плитки группируются под заголовком папки. */
+  folder?: string
 }
 
 /** Запрос сайта на доступ (геопозиция, камера, уведомления…), который показывает интерфейс. */
@@ -110,6 +112,24 @@ export interface PasswordAudit {
   weak: PasswordAuditItem[]
   reused: PasswordAuditItem[]
   old: PasswordAuditItem[]
+}
+
+/** Установленное приложение-сайт: окно без интерфейса Masaki, свой значок в панели задач. */
+export interface AppInfo {
+  id: string
+  url: string
+  name: string
+  icon?: string
+}
+
+/** Веб-обработчик протокола: сайт открывает ссылки схемы web+… по шаблону с %s. */
+export interface WebHandler {
+  scheme: string
+  /** Шаблон адреса обработчика с %s — туда подставляется ссылка целиком. */
+  url: string
+  origin: string
+  name?: string
+  t: number
 }
 
 /** Адрес для автозаполнения (список у поля: что подставить одним выбором). */
@@ -866,6 +886,18 @@ export interface MasakiApi {
     audit(): Promise<PasswordAudit>
     /** Экспорт CSV открытым текстом (файл выбирает пользователь). */
     exportCsv(): Promise<{ ok: boolean; error?: string; count?: number }>
+  }
+  /** Приложения-сайты и обработчики протоколов. */
+  apps: {
+    list(): Promise<AppInfo[]>
+    install(url: string, name?: string, icon?: string): Promise<{ ok: boolean; error?: string }>
+    remove(id: string): void
+    /** Ярлык на рабочем столе (создаёт PowerShell). */
+    shortcut(id: string): Promise<{ ok: boolean; error?: string }>
+  }
+  handlers: {
+    list(): Promise<WebHandler[]>
+    remove(scheme: string, origin: string): void
   }
   /** Адреса и карты для автозаполнения; номер карты зашифрован Windows. */
   autofill: {

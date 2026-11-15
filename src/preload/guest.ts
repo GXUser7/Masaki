@@ -355,6 +355,28 @@ document.addEventListener(
   true
 )
 
+// 3в. Обработчики протоколов: сайт просит navigator.registerProtocolHandler('web+…', '…?%s') —
+// записываем в список Masaki (управление в настройках). Обёртка живёт в мире страницы: сайт
+// видит свой navigator, а не изолированный мир preload'а. Нативную регистрацию тоже зовём:
+// в Electron она никуда не пишет, но пусть поведение совпадает с Chrome.
+contextBridge.executeInMainWorld({
+  func: (register: (d: { scheme: string; url: string; title: string }) => Promise<unknown>) => {
+    if (!navigator.registerProtocolHandler) return
+    const orig = navigator.registerProtocolHandler.bind(navigator) as (s: string, u: string | URL, t?: string) => void
+    navigator.registerProtocolHandler = function registerProtocolHandler(scheme: string, url: string | URL, title?: string): void {
+      void register({ scheme: String(scheme), url: String(url), title: String(title ?? '') }).catch(() => undefined)
+      try {
+        orig(scheme, url, title)
+      } catch {
+        // в Electron нативной регистрации нет — сайту не мешаем
+      }
+    }
+  },
+  args: [
+    (d: { scheme: string; url: string; title: string }): Promise<unknown> => ipcRenderer.invoke('ph:register', d)
+  ]
+})
+
 // 4. «Взгляд»: Alt+клик по ссылке открывает её карточкой поверх страницы, без новой вкладки.
 document.addEventListener(
   'click',
