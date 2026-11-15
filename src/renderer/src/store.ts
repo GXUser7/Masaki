@@ -1,7 +1,10 @@
 import { create } from 'zustand'
 import type {
   ArchivedTab,
+  AuthAsk,
   AutofillRequest,
+  DeviceAsk,
+  DisplayAsk,
   CopiedInfo,
   DownloadInfo,
   GoogleAccount,
@@ -15,22 +18,22 @@ import type {
   SavedSession,
   Settings,
   SyncState,
-  UnloadAsk,
   UpdateState,
   TabGroup
 } from '../../shared/types'
 import type { MenuEntry } from './components/Menu'
 import { defaultSettings } from '../../shared/types'
-import { ADDONS_URL, DOWNLOADS_URL, hostOf, NEWTAB_URL, PASSWORDS_URL, resolveInput, SETTINGS_URL } from './lib/url'
+import { ADDONS_URL, DOWNLOADS_URL, HISTORY_URL, hostOf, NEWTAB_URL, PASSWORDS_URL, resolveInput, SETTINGS_URL } from './lib/url'
 
-export type TabKind = 'newtab' | 'web' | 'settings' | 'addons' | 'passwords' | 'downloads'
+export type TabKind = 'newtab' | 'web' | 'settings' | 'addons' | 'passwords' | 'downloads' | 'history'
 
 /** Внутренние страницы Masaki: React-компоненты вместо webview. */
-export const internalPages: Record<'settings' | 'addons' | 'passwords' | 'downloads', { url: string; title: string }> = {
+export const internalPages: Record<'settings' | 'addons' | 'passwords' | 'downloads' | 'history', { url: string; title: string }> = {
   settings: { url: SETTINGS_URL, title: 'Настройки' },
   addons: { url: ADDONS_URL, title: 'Аддоны' },
   passwords: { url: PASSWORDS_URL, title: 'Пароли' },
-  downloads: { url: DOWNLOADS_URL, title: 'Загрузки' }
+  downloads: { url: DOWNLOADS_URL, title: 'Загрузки' },
+  history: { url: HISTORY_URL, title: 'История' }
 }
 const internalKind = (url: string): keyof typeof internalPages | null =>
   (Object.keys(internalPages) as (keyof typeof internalPages)[]).find((k) => url.startsWith(internalPages[k].url)) ?? null
@@ -250,8 +253,10 @@ interface Store {
   pkPrompts: PasskeyPrompt[]
   /** Окна страниц (alert / confirm / prompt) — страница стоит, пока не ответят. */
   jsDialogs: JsDialog[]
-  /** Сайты, просящие подтвердить уход со страницы (beforeunload): Google Docs, редакторы, банки. */
-  unloadAsks: UnloadAsk[]
+  /** Выборщики сайтов: демонстрация экрана, устройства, HTTP-вход. */
+  displayAsks: DisplayAsk[]
+  deviceAsks: DeviceAsk[]
+  authAsks: AuthAsk[]
   groups: TabGroup[]
   archive: ArchivedTab[]
   /** Свои раскладки окна у кнопки «развернуть»: где показать. */
@@ -294,6 +299,8 @@ interface Store {
   openPasswords(): void
   /** Страница загрузок (Ctrl+J): вся история, с поиском и папкой. */
   openDownloads(): void
+  /** Страница истории (Ctrl+H): лента по дням с поиском. */
+  openHistory(): void
   /** Поиск по открытым вкладкам и архиву (Ctrl+Shift+A). */
   openTabSearch(): void
   /** Добавить вкладку в группу: id группы или 'new' — новая группа. */
@@ -368,7 +375,9 @@ export const useStore = create<Store>((set, get) => ({
   pwRev: 0,
   pkPrompts: [],
   jsDialogs: [],
-  unloadAsks: [],
+  displayAsks: [],
+  deviceAsks: [],
+  authAsks: [],
   groups: [],
   archive: [],
   snap: null,
@@ -578,6 +587,13 @@ export const useStore = create<Store>((set, get) => ({
     const existing = s.tabs.find((t) => t.kind === 'downloads')
     if (existing) get().activate(existing.id)
     else get().newTab(DOWNLOADS_URL)
+  },
+
+  openHistory() {
+    const s = get()
+    const existing = s.tabs.find((t) => t.kind === 'history')
+    if (existing) get().activate(existing.id)
+    else get().newTab(HISTORY_URL)
   },
 
   openTabSearch() {

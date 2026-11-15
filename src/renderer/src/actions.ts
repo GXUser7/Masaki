@@ -249,8 +249,8 @@ export function handleCommand(c: Command): void {
       toggleFavorite()
       break
     case 'history':
-      // Как кнопка «История» в панели: палитра без запроса, показывает историю.
-      s.openPalette(false)
+      // Как в Chrome: Ctrl+H — страница истории; история ищется и в палитре.
+      s.openHistory()
       break
     // Как в Chrome: Ctrl+J — страница загрузок; короткий список — кнопкой загрузок.
     case 'downloads':

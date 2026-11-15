@@ -60,11 +60,39 @@ export interface PermissionPrompt {
   externalUrl?: string
 }
 
-/** Сайт просит подтверждение перед уходом (beforeunload): Google Docs, редакторы, банки. */
-export interface UnloadAsk {
+/** Экран или окно для демонстрации (getDisplayMedia). */
+export interface DisplaySource {
+  /** id из desktopCapturer: «screen:x:y» или «window:x:y». */
   id: string
-  wcId: number
+  name: string
+  /** Снимок-превью, data: PNG. */
+  thumb: string
+  screen: boolean
+}
+
+/** Просмотр демонстрации: что и чей сайт. */
+export interface DisplayAsk {
+  id: string
   origin: string
+  audio: boolean
+  sources: DisplaySource[]
+}
+
+/** Выбор устройства из списка (USB / HID / последовательный порт / Bluetooth). */
+export interface DeviceAsk {
+  id: string
+  kind: 'usb' | 'hid' | 'serial' | 'bluetooth'
+  label: string
+  origin: string
+  devices: { id: string; name: string }[]
+}
+
+/** Сайт (или прокси) просит логин и пароль (HTTP Basic/Digest/NTLM). */
+export interface AuthAsk {
+  id: string
+  host: string
+  realm: string
+  proxy: boolean
 }
 
 export interface SitePermission {
@@ -824,12 +852,20 @@ export interface MasakiApi {
     onClose(cb: (id: string) => void): () => void
     answer(id: string, ok: boolean, value?: string, mute?: boolean): void
   }
-  /** Сайт просит подтверждение перед уходом (beforeunload): спросить и ответить «покинуть / остаться». */
-  unload: {
-    asks(): Promise<UnloadAsk[]>
-    onAsk(cb: (a: UnloadAsk) => void): () => void
-    onGone(cb: (id: string) => void): () => void
-    answer(id: string, leave: boolean): void
+  /** Экран, устройства и вход по паролю: сайт спрашивает — Masaki спрашивает пользователя. */
+  devices: {
+    displayAsks(): Promise<DisplayAsk[]>
+    onDisplayAsk(cb: (a: DisplayAsk) => void): () => void
+    /** sourceId null — отказ. */
+    answerDisplay(id: string, sourceId: string | null): void
+    deviceAsks(): Promise<DeviceAsk[]>
+    onDeviceAsk(cb: (a: DeviceAsk) => void): () => void
+    /** Без deviceId — отказ. */
+    answerDevice(id: string, deviceId?: string): void
+    authAsks(): Promise<AuthAsk[]>
+    onAuthAsk(cb: (a: AuthAsk) => void): () => void
+    /** Без логина и пароля — отказ (страница покажет ошибку 401). */
+    answerAuth(id: string, username?: string, password?: string): void
   }
   pageAction(wcId: number, a: PageAction): void
   uiEdit(cmd: 'cut' | 'copy' | 'paste' | 'selectAll' | 'undo' | 'redo'): void

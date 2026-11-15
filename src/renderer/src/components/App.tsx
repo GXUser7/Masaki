@@ -12,12 +12,14 @@ import { CopyToast } from './CopyToast'
 import { AddonsPage } from './AddonsPage'
 import { PasswordsPage } from './PasswordsPage'
 import { DownloadsPage } from './DownloadsPage'
+import { HistoryPage } from './HistoryPage'
 import { startMagnet } from '../lib/magnet'
 import { AutofillMenu, PasskeySheet, PasswordBar } from './PasswordUi'
 import { ExtInstallSheet } from './ExtInstall'
 import { matchesPanel, syncGlassAll } from '../lib/glass'
 import { Grain } from './parts'
-import { PageDialog, PermissionBar, UnloadBar } from './Permissions'
+import { PageDialog, PermissionBar } from './Permissions'
+import { AuthSheet, DeviceSheet, DisplaySheet } from './Devices'
 import { openInputMenu, openPageMenu } from '../menus'
 import { NewTab } from './NewTab'
 import { Palette } from './Palette'
@@ -108,9 +110,10 @@ export function App(): React.JSX.Element {
       useStore.getState().loadAccounts()
       useStore.setState({ sync: await window.masaki.sync.state() })
       useStore.setState({ update: await window.masaki.update.state() })
-      // Окна, что уже ждали ответа, пока интерфейса не было (ключи доступа, уход со страницы).
+      // Окна, что уже ждали ответа, пока интерфейса не было (ключи доступа).
       useStore.setState({ pkPrompts: await window.masaki.passkeys.prompts() })
-      useStore.setState({ unloadAsks: await window.masaki.unload.asks() })
+      const asks = await window.masaki.devices.displayAsks().then((display) => window.masaki.devices.deviceAsks().then((device) => ({ display, device })))
+      useStore.setState({ displayAsks: asks.display, deviceAsks: asks.device, authAsks: await window.masaki.devices.authAsks() })
     })()
     // Запасной путь для хоткеев: обычно их ловит главный процесс и до окна они не доходят.
     const onKey = (e: KeyboardEvent): void => {
@@ -178,8 +181,9 @@ export function App(): React.JSX.Element {
       window.masaki.passkeys.onPromptClose((id) => useStore.setState((st) => ({ pkPrompts: st.pkPrompts.filter((x) => x.id !== id) }))),
       window.masaki.jsDialogs.onShow((d) => useStore.setState((st) => ({ jsDialogs: [...st.jsDialogs.filter((x) => x.id !== d.id), d] }))),
       window.masaki.jsDialogs.onClose((id) => useStore.setState((st) => ({ jsDialogs: st.jsDialogs.filter((x) => x.id !== id) }))),
-      window.masaki.unload.onAsk((a) => useStore.setState((st) => ({ unloadAsks: [...st.unloadAsks.filter((x) => x.id !== a.id), a] }))),
-      window.masaki.unload.onGone((id) => useStore.setState((st) => ({ unloadAsks: st.unloadAsks.filter((x) => x.id !== id) })))
+      window.masaki.devices.onDisplayAsk((a) => useStore.setState((st) => ({ displayAsks: [...st.displayAsks.filter((x) => x.id !== a.id), a] }))),
+      window.masaki.devices.onDeviceAsk((a) => useStore.setState((st) => ({ deviceAsks: [...st.deviceAsks.filter((x) => x.id !== a.id), a] }))),
+      window.masaki.devices.onAuthAsk((a) => useStore.setState((st) => ({ authAsks: [...st.authAsks.filter((x) => x.id !== a.id), a] })))
     ]
     return () => offs.forEach((off) => off())
   }, [])
@@ -341,15 +345,18 @@ export function App(): React.JSX.Element {
             {active.kind === 'addons' && <AddonsPage />}
             {active.kind === 'passwords' && <PasswordsPage />}
             {active.kind === 'downloads' && <DownloadsPage />}
+            {active.kind === 'history' && <HistoryPage />}
             {active.kind === 'web' && active.error && <ErrorView tab={active} />}
           </main>
           <SwipeArrow />
           {findOpen && active.kind === 'web' && <FindBar />}
           <PermissionBar />
-          <UnloadBar />
           <PasswordBar />
           <PasskeySheet />
           <PageDialog />
+          <DisplaySheet />
+          <DeviceSheet />
+          <AuthSheet />
           <ExtInstallSheet />
           <CopyToast />
           <Dock />

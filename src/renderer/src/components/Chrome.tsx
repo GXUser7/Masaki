@@ -612,7 +612,7 @@ export function Sidebar(): React.JSX.Element {
       <div className="side-bottom">
         <AccountChip />
         <DownloadsButton />
-        <button className="ib" aria-label="История" title="История · Ctrl+H, поиск по вкладкам · Ctrl+Shift+A" onClick={() => s().openPalette(false)}>
+        <button className="ib" aria-label="История" title="История · Ctrl+H, поиск по вкладкам · Ctrl+Shift+A" onClick={() => s().openHistory()}>
           <Icon name="history" />
         </button>
         <MenuButton className="ib" />

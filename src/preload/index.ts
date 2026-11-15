@@ -1,7 +1,10 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
+  AuthAsk,
   Command,
   CopiedInfo,
+  DeviceAsk,
+  DisplayAsk,
   DownloadInfo,
   ExtInstallPrompt,
   HistoryEntry,
@@ -14,7 +17,6 @@ import type {
   JsDialog,
   Settings,
   SyncState,
-  UnloadAsk,
   UpdateState,
   WindowState
 } from '../shared/types'
@@ -210,11 +212,16 @@ const api: MasakiApi = {
     onClose: (cb) => listen<string>('js-dialog-close', cb),
     answer: (id, ok, value, mute) => ipcRenderer.send('js:answer', id, ok, value, mute)
   },
-  unload: {
-    asks: () => ipcRenderer.invoke('unload:list'),
-    onAsk: (cb) => listen<UnloadAsk>('unload-ask', cb),
-    onGone: (cb) => listen<string>('unload-gone', cb),
-    answer: (id, leave) => ipcRenderer.send('unload:answer', id, leave)
+  devices: {
+    displayAsks: () => ipcRenderer.invoke('devices:asks').then((r: { display: DisplayAsk[] }) => r.display),
+    onDisplayAsk: (cb) => listen<DisplayAsk>('display-ask', cb),
+    answerDisplay: (id, sourceId) => ipcRenderer.send('display:answer', id, sourceId),
+    deviceAsks: () => ipcRenderer.invoke('devices:asks').then((r: { device: DeviceAsk[] }) => r.device),
+    onDeviceAsk: (cb) => listen<DeviceAsk>('device-ask', cb),
+    answerDevice: (id, deviceId) => ipcRenderer.send('device:answer', id, deviceId),
+    authAsks: () => ipcRenderer.invoke('devices:asks').then((r: { auth: AuthAsk[] }) => r.auth),
+    onAuthAsk: (cb) => listen<AuthAsk>('auth-ask', cb),
+    answerAuth: (id, username, password) => ipcRenderer.send('auth:answer', id, username, password)
   },
   pageAction: (wcId, a) => ipcRenderer.send('page:action', wcId, a),
   uiEdit: (cmd) => ipcRenderer.send('ui:edit', cmd),

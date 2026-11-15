@@ -29,6 +29,7 @@ import * as sync from './sync'
 import * as passwords from './passwords'
 import * as passkeys from './passkeys'
 import { answerExternal, initExternalProtocols, requestExternal, watchExternalProtocols } from './externalProtocols'
+import { dropDevicePending, initDevices } from './devices'
 import { searchImage } from './searchImage'
 import { initTabMemory, noteTabCreation, prepareTabRestore, restoreAttachedTab } from './tabMemory'
 import {
@@ -66,8 +67,7 @@ import {
   type SavedSession,
   type SavedTab,
   type Settings,
-  type SyncOptions,
-  type UnloadAsk
+  type SyncOptions
 } from '../shared/types'
 
 // Имя сессии осталось от старого названия (Frost): в ней куки и входы пользователя, не менять.
@@ -592,6 +592,8 @@ async function loadSavedExtensions(): Promise<void> {
 // ---------- Сессия вкладок: права, загрузки ----------
 
 const alwaysAllowed = new Set(['fullscreen', 'clipboard-sanitized-write', 'pointerLock', 'keyboardLock'])
+// Права устройств и демонстрации: их «разрешение» — наш выборщик (devices.ts), лишний вопрос лишь мешает.
+const devicePermissions = new Set(['usb', 'hid', 'serial', 'bluetooth', 'display-capture'])
 const permissionsFile = new JsonFile<Record<string, boolean>>('permissions.json')
 /** Решения «origin|право». Камера и микрофон — разные права: разрешённый микрофон не открывает камеру. */
 let decisions: Record<string, boolean> = {}
@@ -661,7 +663,14 @@ const permissionLabels: Record<string, string> = {
   midiSysex: 'MIDI-устройства',
   'idle-detection': 'Данные об активности',
   'storage-access': 'Хранилище других сайтов',
-  'top-level-storage-access': 'Хранилище других сайтов'
+  'top-level-storage-access': 'Хранилище других сайтов',
+  usb: 'USB-устройства',
+  hid: 'HID-устройства',
+  serial: 'Последовательные порты',
+  bluetooth: 'Bluetooth',
+  'display-capture': 'Демонстрация экрана',
+  'local-network': 'Локальная сеть',
+  sensors: 'Датчики движения'
 }
 
 /** asked — права, о которых спрашиваем (у media — только ещё не решённые camera/microphone). */
@@ -748,7 +757,7 @@ function setupBrowsingSession(): void {
   }
 
   ses.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => {
-    if (alwaysAllowed.has(permission)) return true
+    if (alwaysAllowed.has(permission) || devicePermissions.has(permission)) return true
     const origin = originOf(requestingOrigin)
     const type = details.mediaType
     const asked = permission === 'media' ? mediaPermissions(type && type !== 'unknown' ? [type] : []) : [permission]
@@ -765,6 +774,16 @@ function setupBrowsingSession(): void {
       return
     }
     if (alwaysAllowed.has(permission)) return callback(true)
+    // USB/HID/Serial/Bluetooth и демонстрация экрана: решение принимает наш выборщик устройств.
+    if (devicePermissions.has(permission)) return callback(true)
+    // getDisplayMedia приходит как media-запрос без типа (не камера и не микрофон — камера была бы
+    // 'video'): настоящие ворота — наш выборщик источника, так что пускаем без лишнего вопроса.
+    if (permission === 'media' && Array.isArray((details as Electron.MediaAccessPermissionRequest).mediaTypes) &&
+        (details as Electron.MediaAccessPermissionRequest).mediaTypes?.length === 0) {
+      // getDisplayMedia приходит media-запросом с ПУСТЫМ списком типов (у getUserMedia типы перечислены).
+      // Настоящие ворота — наш выборщик источника в devices.ts: пускаем без лишнего вопроса.
+      return callback(true)
+    }
     if (!win) return callback(false)
     const origin = originOf(details.requestingUrl)
     const needs = permission === 'media' ? mediaPermissions((details as Electron.MediaAccessPermissionRequest).mediaTypes ?? []) : [permission]
@@ -991,38 +1010,30 @@ function dropUiPending(): void {
     installPrompts.delete(id)
     resolve(false)
   }
-  // Вопросы ухода снимаем молчанием — это «остаться»: страница не теряет введённое.
-  for (const id of [...unloadAsks.keys()]) {
-    unloadAsks.delete(id)
-    win?.webContents.send('unload-gone', id)
-  }
+  // Экран, устройства и HTTP-вход: отказ — страница получит обычную ошибку, а не вечное ожидание.
+  dropDevicePending()
 }
 
 /**
  * Сайт просит подтверждение перед уходом (beforeunload: Google Docs, редакторы, банки). Без обработчика
- * 'will-prevent-unload' любая навигация во вкладке отменялась молча — «обновить» и «назад» ничего не делали,
- * и сайт выглядел намертво зависшим. Спрашиваем стеклянной плашкой интерфейса; навигация стоит до ответа,
- * как у системного окна в Chrome.
+ * 'will-prevent-unload' любая навигация во вкладке отменялась молча — «обновить» и «назад» ничего не
+ * делали, и сайт выглядел намертво зависшим. Событие живёт только до конца обработчика (preventDefault
+ * «после ответа» интерфейса ничего не делает, а цель страничной навигации в этот момент неизвестна),
+ * поэтому спрашиваем синхронным окном — как сам Chrome. В скрытых тестах отвечаем «покинуть».
  */
-const unloadAsks = new Map<string, { wcId: number; event: Electron.Event; origin: string }>()
-
-/** Повесить вопрос «покинуть страницу?» на содержимое (вкладка или всплывающее окно сайта). */
 function watchUnload(contents: WebContents): void {
   contents.on('will-prevent-unload', (e) => {
-    const id = 'u' + randomUUID()
-    const origin = originLabel(originOf(contents.getURL()))
-    unloadAsks.set(id, { wcId: contents.id, event: e, origin })
-    // Вкладку закрыли — вопрос уходит сам; страницы больше нет.
-    contents.once('destroyed', () => {
-      if (unloadAsks.delete(id)) win?.webContents.send('unload-gone', id)
+    if (!win || testHeadless) return e.preventDefault()
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'warning',
+      buttons: ['Остаться', 'Покинуть'],
+      defaultId: 0,
+      cancelId: 0,
+      message: 'Покинуть страницу?',
+      detail: `${originLabel(originOf(contents.getURL()))} просит подтвердить уход: возможно, введённые данные не сохранятся.`
     })
-    win?.webContents.send('unload-ask', { id, wcId: contents.id, origin })
+    if (choice === 1) e.preventDefault()
   })
-}
-
-/** Все ожидающие вопросы (для перечитывания при загрузке интерфейса). */
-function unloadAskList(): UnloadAsk[] {
-  return [...unloadAsks.entries()].map(([id, a]) => ({ id, wcId: a.wcId, origin: a.origin }))
 }
 
 function askJsDialog(e: Electron.IpcMainEvent, d: unknown): void {
@@ -1479,17 +1490,6 @@ function registerIpc(): void {
     }
   })
   ipcMain.on('js:dialog', askJsDialog)
-  // Уход со страницы: ответ только из интерфейса Masaki. true — покинуть (у will-prevent-unload
-  // preventDefault означает «всё же выгрузить»), false — остаться на странице.
-  ipcMain.on('unload:answer', (e, id: unknown, leave: unknown) => {
-    if (!downloadUi(e) || typeof id !== 'string') return
-    const ask = unloadAsks.get(id)
-    if (!ask) return
-    unloadAsks.delete(id)
-    if (leave === true) ask.event.preventDefault()
-    win?.webContents.send('unload-gone', id)
-  })
-  ipcMain.handle('unload:list', (e) => (downloadUi(e) ? unloadAskList() : []))
   // Ответ на окно страницы — только из интерфейса Masaki, не из самой страницы.
   ipcMain.on('js:answer', (e, id: unknown, ok: unknown, value: unknown, mute: unknown) => {
     if (!downloadUi(e) || typeof id !== 'string') return
@@ -1934,6 +1934,7 @@ if (!app.requestSingleInstanceLock()) {
       process.platform === 'darwin' ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]) : null
     )
     setupBrowsingSession()
+    initDevices(PARTITION, { ui: (channel, payload) => win?.webContents.send(channel, payload), hasWindow: () => !!win })
     registerIpc()
     registerPasswordIpc()
     await passwords.initPasswords({

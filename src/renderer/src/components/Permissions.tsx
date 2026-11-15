@@ -92,47 +92,6 @@ export function PermissionList(): React.JSX.Element {
   )
 }
 
-/**
- * Сайт просит подтвердить уход (beforeunload): навигация стоит, пока не ответят. Вместо системного окна
- * Windows — стеклянная плашка Masaki. Важно: без ответа на этот вопрос страница выглядела бы «намертво
- * зависшей» — «Обновить» и «Назад» молча ничего не делали.
- */
-export function UnloadBar(): React.JSX.Element | null {
-  const asks = useStore((s) => s.unloadAsks)
-  const activeId = useStore((s) => s.activeId)
-  const permissions = useStore((s) => s.permissions)
-  // Разрешение важнее — плашки не накладываем друг на друга (как у PasswordBar).
-  if (permissions.length) return null
-  const a = asks.find((x) => tabIdOfWebContents(x.wcId) === activeId)
-  if (!a) return null
-  const answer = (leave: boolean): void => {
-    window.masaki.unload.answer(a.id, leave)
-    useStore.setState((s) => ({ unloadAsks: s.unloadAsks.filter((x) => x.id !== a.id) }))
-  }
-  return (
-    <div className="glass perm" role="alertdialog" aria-label="Покинуть страницу?" key={a.id}>
-      <Grain />
-      <span className="perm-ic">
-        <svg viewBox="0 0 200 200" aria-hidden="true">
-          <path d={shapes.cookie9} />
-        </svg>
-        <Icon name="warn" />
-      </span>
-      <span className="perm-t">
-        <b>{a.origin}</b> просит подтвердить уход со страницы
-      </span>
-      <span className="perm-acts">
-        <button className="perm-btn ghost" onClick={() => answer(false)}>
-          Остаться
-        </button>
-        <button className="perm-btn primary" onClick={() => answer(true)}>
-          Покинуть
-        </button>
-      </span>
-    </div>
-  )
-}
-
 const dialogIcons: Record<JsDialog['type'], IconName> = { alert: 'bell', confirm: 'check', prompt: 'edit' }
 const dialogVerbs: Record<JsDialog['type'], string> = { alert: 'сообщает', confirm: 'спрашивает', prompt: 'просит ввести' }
 /** Сколько окон уже показала вкладка: со второго можно запретить остальные, как в Chrome. */

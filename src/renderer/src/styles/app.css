@@ -7018,3 +7018,79 @@ svg[data-ic='history'] > path {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
 }
 .tab.has-dialog .tt { color: var(--primary); }
+
+/* Страница истории: значок сайта в строке — как у вкладки, на кружке темы. */
+.hp-fav {
+  width: 34px;
+  height: 34px;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.hp-fav img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+.hp-fav b {
+  font-size: 15px;
+  color: var(--on-sc);
+}
+
+/* Выбор источника демонстрации экрана: карточки со снимками, как у Chrome. */
+.ds-card { width: min(720px, 86vw); }
+.ds-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 2px;
+  margin: 14px 0 4px;
+}
+.ds-src {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--r-m);
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  transition: background var(--spring), border-color var(--spring), transform var(--spring);
+}
+.ds-src:hover {
+  background: var(--sc);
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+.ds-src img,
+.ds-empty {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: var(--r-s);
+  background: var(--sc);
+}
+.ds-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--on-sc);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ds-name svg { flex: none; }
+/* Поля листа HTTP-входа. */
+.pd-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--on-sc-var, var(--on-sc));
+  text-align: left;
+}
