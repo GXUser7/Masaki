@@ -7042,6 +7042,7 @@ svg[data-ic='history'] > path {
 .ds-card { width: min(720px, 86vw); }
 .ds-grid {
   display: grid;
+  width: 100%;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 10px;
   max-height: 46vh;
@@ -7058,6 +7059,7 @@ svg[data-ic='history'] > path {
   border: 1px solid transparent;
   background: transparent;
   text-align: left;
+  min-width: 0;
   transition: background var(--spring), border-color var(--spring), transform var(--spring);
 }
 .ds-src:hover {
@@ -7065,7 +7067,7 @@ svg[data-ic='history'] > path {
   border-color: var(--primary);
   transform: translateY(-1px);
 }
-.ds-src img,
+.ds-src > img,
 .ds-empty {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -7075,15 +7077,19 @@ svg[data-ic='history'] > path {
 }
 .ds-name {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   font-size: 12.5px;
   color: var(--on-sc);
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  width: 100%;
+  text-align: left;
 }
-.ds-name svg { flex: none; }
+.ds-name svg,
+.ds-name .ds-app-icon { width: 18px; height: 18px; flex: none; fill: currentColor; object-fit: contain; margin-top: 1px; }
+.ds-name-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ds-name-text b { font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.ds-name-text small { font-size: 11px; line-height: 1.4; color: var(--on-sv); overflow-wrap: anywhere; }
 /* Поля листа HTTP-входа. */
 .pd-label {
   display: flex;
@@ -7163,19 +7169,27 @@ svg[data-ic='history'] > path {
 
 /* Панель «О сайте»: та же геометрия всплывающих окон, свой шапка-хост. */
 .site-info {
-  width: 380px;
-  max-height: 72vh;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(72vh, calc(100vh - 150px));
+  overflow-x: hidden;
   overflow-y: auto;
-  left: 50%;
-  top: 72px;
-  transform: translateX(-50%);
+  flex-shrink: 0;
 }
+.site-info > :not(.grain) { flex-shrink: 0; min-width: 0; }
+.site-info .sy-mi-t { white-space: normal; }
+.site-info .sy-mi-t small { white-space: normal; overflow-wrap: anywhere; }
 .si-head { display: flex; align-items: center; gap: 8px; font-size: 15px; }
-.si-head svg { width: 18px; height: 18px; flex: none; }
+.si-head svg { width: 18px; height: 18px; flex: none; fill: currentColor; }
 .si-host { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .si-note { margin: 4px 0 10px; }
 .si-acts { display: flex; flex-direction: column; gap: 2px; }
-.si-sep { height: 1px; background: var(--sc); margin: 12px -14px; }
+.si-sep { height: 1px; background: var(--sc); margin: 12px 0; }
 .a-lock { color: var(--on-sc-var, var(--on-sc)); }
+.a-lock.insecure,
+.si-security.insecure { background: var(--bad-c); color: var(--on-bad-c); }
+.si-head.insecure { color: var(--on-bad-c); }
+.si-security { padding: 8px 12px; border-radius: var(--r-s); font-size: 13px; }
 
 .sc-ic { width: 20px; height: 20px; border-radius: 6px; object-fit: contain; flex: none; }
+/* Незавершённый файл ещё нельзя открыть, но прогресс и состояние паузы должны читаться полностью. */
+.dlp-row.live .dlp-main:disabled { opacity: 1; }

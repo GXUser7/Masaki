@@ -38,11 +38,14 @@ export function DisplaySheet(): React.JSX.Element | null {
         </p>
         <div className="ds-grid" role="listbox" aria-label="Что показать">
           {sources.map((src) => (
-            <button key={src.id} className="ds-src" role="option" aria-selected={false} onClick={() => answer(src.id)}>
+            <button key={src.id} className="ds-src" role="option" aria-selected={false} aria-label={[src.name, src.detail].filter(Boolean).join(' · ')} title={[src.name, src.detail].filter(Boolean).join('\n')} onClick={() => answer(src.id)}>
               {src.thumb ? <img src={src.thumb} alt="" draggable={false} /> : <span className="ds-empty" />}
               <span className="ds-name">
-                <Icon name={src.screen ? 'computer' : 'window'} />
-                {src.name || (src.screen ? 'Экран' : 'Окно')}
+                {src.icon ? <img className="ds-app-icon" src={src.icon} alt="" draggable={false} /> : <Icon name={src.screen ? 'computer' : 'window'} />}
+                <span className="ds-name-text">
+                  <b>{src.name || (src.screen ? 'Экран' : 'Окно')}</b>
+                  <small>{src.detail || (src.screen ? 'Весь экран' : 'Окно приложения')}</small>
+                </span>
               </span>
             </button>
           ))}

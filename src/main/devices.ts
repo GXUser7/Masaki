@@ -3,7 +3,7 @@
 // устройства и HTTP/прокси-аутентификация. Права «usb/hid/serial/bluetooth/display-capture» выдаём
 // без вопросов — сам выбор устройства и есть подтверждение, а лишний вопрос только мешает.
 
-import { app, desktopCapturer, ipcMain, session, type Session, type WebContents } from 'electron'
+import { app, desktopCapturer, ipcMain, screen, session, type Session, type WebContents } from 'electron'
 import { randomUUID } from 'crypto'
 import type { AuthAsk, DeviceAsk, DisplayAsk, DisplaySource } from '../shared/types'
 
@@ -80,9 +80,29 @@ export function initDevices(partition: string, h: Hooks): void {
   ses.setDisplayMediaRequestHandler((request, callback) => {
     if (!hooks.hasWindow()) return callback(null)
     desktopCapturer
-      .getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: false })
+      .getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true })
       .then((sources) => {
-        sourcesCache = sources.map((s) => ({ id: s.id, name: s.name, thumb: s.thumbnail.toDataURL(), screen: s.id.startsWith('screen:') }))
+        const displays = screen.getAllDisplays()
+        const primary = screen.getPrimaryDisplay().id
+        let screenIndex = 0
+        sourcesCache = sources.map((s) => {
+          const isScreen = s.id.startsWith('screen:')
+          if (isScreen) screenIndex++
+          const display = isScreen ? displays.find((d) => String(d.id) === s.display_id) : undefined
+          // display_id связывает снимок с монитором; порядковый номер из id источника этого не гарантирует.
+          const number = display ? displays.indexOf(display) + 1 : screenIndex
+          const detail = display
+            ? [display.label, display.id === primary ? 'Основной' : '', `${Math.round(display.bounds.width * display.scaleFactor)} × ${Math.round(display.bounds.height * display.scaleFactor)}`].filter(Boolean).join(' · ')
+            : isScreen ? 'Весь экран' : 'Окно приложения'
+          return {
+            id: s.id,
+            name: isScreen ? `Экран ${number}` : s.name || 'Окно без названия',
+            detail,
+            icon: !isScreen && s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.resize({ width: 24, height: 24 }).toDataURL() : undefined,
+            thumb: s.thumbnail.isEmpty() ? '' : s.thumbnail.toDataURL(),
+            screen: isScreen
+          }
+        })
         askDisplay(request.securityOrigin, request.audioRequested, (video) =>
           // Звук системы (loopback) умеет только Windows; на Mac демонстрация пойдёт без звука.
           callback(video ? { video, audio: request.audioRequested && process.platform === 'win32' ? 'loopback' : undefined } : null)

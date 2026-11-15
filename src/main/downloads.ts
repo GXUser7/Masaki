@@ -15,7 +15,7 @@ const IMAGE = /\.(png|jpe?g|gif|webp|bmp|avif|heic|ico|tiff?)$/i
 
 let list: DownloadInfo[] = []
 /** Живые DownloadItem: interrupted бывает и до done — пока объект жив, загрузку ещё можно отменить. */
-const items = new Map<string, DownloadItem>()
+const items = new Map<string, { item: DownloadItem; info(): DownloadInfo }>()
 const sourceTabs = new Map<string, number>()
 
 export function tabHasDownload(wcId: number): boolean {
@@ -47,7 +47,7 @@ export async function initDownloads(hooks: { send(d: DownloadInfo): void; comple
   // Masaki закрылся посреди загрузки: она прервана, а объекта, который можно отменить, больше нет.
   list = (Array.isArray(saved) ? saved : [])
     .filter(valid)
-    .map((d) => ({ ...d, state: d.state === 'progressing' ? 'interrupted' : d.state, canCancel: false, exists: undefined }))
+    .map((d) => ({ ...d, state: d.state === 'progressing' ? 'interrupted' : d.state, canCancel: false, paused: false, canResume: false, exists: undefined }))
 }
 
 export function flushDownloads(): void {
@@ -91,7 +91,6 @@ export function trackDownload(item: DownloadItem, wc: WebContents | undefined): 
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const target = uniquePath(app.getPath('downloads'), item.getFilename())
   item.setSavePath(target)
-  items.set(id, item)
   if (wc && !wc.isDestroyed()) sourceTabs.set(id, wc.id)
   const page = wc && !wc.isDestroyed() ? hostOf(wc.getURL()) : undefined
   let endedAt: number | undefined
@@ -102,6 +101,8 @@ export function trackDownload(item: DownloadItem, wc: WebContents | undefined): 
     path: item.getSavePath() || target,
     state,
     canCancel: items.has(id),
+    paused: items.has(id) && item.isPaused(),
+    canResume: items.has(id) && (item.isPaused() || (state === 'interrupted' && item.canResume())),
     received: item.getReceivedBytes(),
     total: item.getTotalBytes(),
     startedAt: item.getStartTime() * 1000,
@@ -110,6 +111,7 @@ export function trackDownload(item: DownloadItem, wc: WebContents | undefined): 
     mime: item.getMimeType() || undefined,
     exists: state === 'completed' ? true : undefined
   })
+  items.set(id, { item, info })
   put(info())
   item.on('updated', (_ev, state) => put(info(state)))
   item.once('done', (_ev, state) => {
@@ -141,11 +143,31 @@ export function isDownloadedFile(p: string): boolean {
 }
 
 export function cancelDownload(id: string): boolean {
-  const item = items.get(id)
+  const item = items.get(id)?.item
   if (!item) return false
   const state = item.getState()
   if (state !== 'progressing' && state !== 'interrupted') return false
   item.cancel()
+  return true
+}
+
+export function pauseDownload(id: string): boolean {
+  const entry = items.get(id)
+  if (!entry || entry.item.getState() !== 'progressing' || entry.item.isPaused()) return false
+  entry.item.pause()
+  // Chromium не обязан прислать updated немедленно после нажатия — кнопку меняем сразу.
+  put(entry.info())
+  return true
+}
+
+export function resumeDownload(id: string): boolean {
+  const entry = items.get(id)
+  if (!entry) return false
+  const { item } = entry
+  const state = item.getState()
+  if (!(state === 'progressing' && item.isPaused()) && !(state === 'interrupted' && item.canResume())) return false
+  item.resume()
+  put(entry.info())
   return true
 }
 

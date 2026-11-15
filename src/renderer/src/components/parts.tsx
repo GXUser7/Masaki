@@ -225,7 +225,7 @@ export function useHoverOverPage(): [React.RefObject<HTMLDivElement | null>, boo
 }
 
 /** Содержимое адресной строки: значок безопасности + адрес, запрос или подсказка. */
-export function AddressLabel({ tab }: { tab: Tab }): React.JSX.Element {
+export function AddressLabel({ tab, hideSecurity = false }: { tab: Tab; hideSecurity?: boolean }): React.JSX.Element {
   if (tab.kind === 'settings' || tab.kind === 'addons' || tab.kind === 'passwords' || tab.kind === 'downloads' || tab.kind === 'history') {
     return (
       <>
@@ -278,7 +278,7 @@ export function AddressLabel({ tab }: { tab: Tab }): React.JSX.Element {
   const host = hostOf(tab.url)
   return (
     <>
-      <Icon name={secure ? 'lock' : insecure ? 'warn' : 'globe'} />
+      {!hideSecurity && <Icon name={secure ? 'lock' : insecure ? 'warn' : 'globe'} />}
       <span className="addr-t">
         {host && host !== tab.url ? (
           <>

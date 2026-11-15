@@ -128,7 +128,7 @@ function useSpeeds(list: DownloadInfo[]): Map<string, number> {
     const now = performance.now()
     const out = new Map<string, number>()
     for (const d of list) {
-      if (d.state !== 'progressing') {
+      if (d.state !== 'progressing' || d.paused) {
         last.current.delete(d.id)
         continue
       }
@@ -150,7 +150,8 @@ function metaOf(d: DownloadInfo, status: Status, speed: number): string {
   const size = d.total || d.received
   if (status === 'live') {
     const parts = [d.total ? `${Math.round((d.received / d.total) * 100)} % · ${formatBytes(d.received)} из ${formatBytes(d.total)}` : formatBytes(d.received)]
-    if (speed > 1024) {
+    if (d.paused) parts.unshift('На паузе')
+    if (!d.paused && speed > 1024) {
       parts.push(formatBytes(speed) + '/с')
       if (d.total) {
         const left = Math.max(0, Math.round((d.total - d.received) / speed))
@@ -176,8 +177,8 @@ function Tile({ d, kind, status }: { d: DownloadInfo; kind: Kind; status: Status
   const look = LOOK[kind]
   if (status === 'live') {
     return (
-      <ProgressRing value={d.total ? d.received / d.total : 0} spin={!d.total} className="dlp-ring">
-        <Icon name={look.icon} />
+      <ProgressRing value={d.total ? d.received / d.total : 0} spin={!d.total && !d.paused} className="dlp-ring">
+        <Icon name={d.paused ? 'pause' : look.icon} />
       </ProgressRing>
     )
   }
@@ -212,7 +213,7 @@ function Row({ d, speed }: { d: DownloadInfo; speed: number }): React.JSX.Elemen
   }
   return (
     <div
-      className={'dlp-row lift' + (status === 'gone' ? ' gone' : status === 'failed' ? ' failed' : '')}
+      className={'dlp-row lift' + (status === 'live' ? ' live' : status === 'gone' ? ' gone' : status === 'failed' ? ' failed' : '')}
       draggable={ok}
       onDragStart={(e) => {
         // Файл перетаскивает сама система — в проводник, мессенджер или на сайт.
@@ -249,6 +250,16 @@ function Row({ d, speed }: { d: DownloadInfo; speed: number }): React.JSX.Elemen
         <button className="tonal dlp-again" onClick={() => void retry()}>
           <Icon name={status === 'gone' ? 'download' : 'reload'} />
           {status === 'gone' ? 'Скачать снова' : 'Повторить'}
+        </button>
+      )}
+      {d.canCancel && (d.state === 'progressing' && !d.paused || d.canResume) && (
+        <button
+          className="ib"
+          aria-label={d.canResume ? 'Возобновить загрузку' : 'Приостановить загрузку'}
+          title={d.canResume ? 'Возобновить загрузку' : 'Приостановить загрузку'}
+          onClick={() => void (d.canResume ? window.masaki.downloads.resume(d.id) : window.masaki.downloads.pause(d.id))}
+        >
+          <Icon name={d.canResume ? 'play' : 'pause'} />
         </button>
       )}
       {d.canCancel && (

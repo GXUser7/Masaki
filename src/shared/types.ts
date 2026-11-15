@@ -67,6 +67,10 @@ export interface DisplaySource {
   /** id из desktopCapturer: «screen:x:y» или «window:x:y». */
   id: string
   name: string
+  /** Название монитора, разрешение и отметка основного либо тип окна. */
+  detail?: string
+  /** Значок приложения — помогает узнать окно с одинаковым заголовком. */
+  icon?: string
   /** Снимок-превью, data: PNG. */
   thumb: string
   screen: boolean
@@ -433,6 +437,10 @@ export interface DownloadInfo {
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'
   /** interrupted до done ещё можно отменить; завершённый объект больше не используется. */
   canCancel: boolean
+  /** Живой DownloadItem стоит на паузе; состояние Chromium при этом остаётся progressing. */
+  paused: boolean
+  /** Можно продолжить паузу или временно прерванную загрузку без создания новой записи. */
+  canResume: boolean
   received: number
   total: number
   startedAt: number
@@ -764,6 +772,8 @@ export interface MasakiApi {
     /** Открыть папку загрузок в проводнике. */
     openFolder(): void
     cancel(id: string): Promise<boolean>
+    pause(id: string): Promise<boolean>
+    resume(id: string): Promise<boolean>
     open(path: string): void
     showInFolder(path: string): void
     /** Начать перетаскивание скачанного файла из списка загрузок в проводник или сайт. */

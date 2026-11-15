@@ -50,7 +50,7 @@ import { defaultBrowserState, makeDefault, refreshRegistration } from './default
 import { parseTrack, setDiscordEnabled, setDiscordTrack } from './discord'
 import * as profiles from './profiles'
 import * as updater from './updater'
-import { cancelDownload, clearDownloads, downloadThumb, flushDownloads, initDownloads, isDownloadedFile, listDownloads, removeDownload, retryDownload, trackDownload } from './downloads'
+import { cancelDownload, clearDownloads, downloadThumb, flushDownloads, initDownloads, isDownloadedFile, listDownloads, pauseDownload, removeDownload, resumeDownload, retryDownload, trackDownload } from './downloads'
 import { pathToFileURL } from 'url'
 import { commandFor } from '../shared/shortcuts'
 import { siteCookieDomain } from '../shared/site'
@@ -1488,6 +1488,8 @@ function registerIpc(): void {
   const completedDownload = (e: Electron.IpcMainEvent, p: unknown): p is string =>
     downloadUi(e) && typeof p === 'string' && isDownloadedFile(p) && fs.existsSync(p)
   ipcMain.handle('dl:cancel', (e, id: unknown) => downloadUi(e) && typeof id === 'string' && cancelDownload(id))
+  ipcMain.handle('dl:pause', (e, id: unknown) => downloadUi(e) && typeof id === 'string' && pauseDownload(id))
+  ipcMain.handle('dl:resume', (e, id: unknown) => downloadUi(e) && typeof id === 'string' && resumeDownload(id))
   ipcMain.handle('dl:list', (e) => (downloadUi(e) ? listDownloads() : []))
   ipcMain.handle('dl:remove', (e, id: unknown) => downloadUi(e) && typeof id === 'string' && removeDownload(id))
   ipcMain.handle('dl:retry', (e, id: unknown) => downloadUi(e) && typeof id === 'string' && retryDownload(id, session.fromPartition(PARTITION)))

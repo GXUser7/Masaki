@@ -64,6 +64,8 @@ function AddressBar({ where }: { where: 'side' | 'cap' }): React.JSX.Element {
   const fav = useStore((s) => s.settings.favorites.some((f) => f.url === t.url))
   const s = useStore.getState
   const web = t.kind === 'web'
+  const site = web && /^https?:/i.test(t.url)
+  const secure = t.url.startsWith('https:')
   return (
     <div className={'abar abar-' + where + (t.canBack ? ' can-back' : '') + (t.canFwd ? ' can-fwd' : '')}>
       <LoadFill key={t.id} loading={web && t.loading} />
@@ -75,20 +77,24 @@ function AddressBar({ where }: { where: 'side' | 'cap' }): React.JSX.Element {
           <Icon name="forward" />
         </button>
       </span>
-      <button className="addr" aria-label="Адрес и поиск" title="Адрес и поиск · Ctrl+L" onClick={() => s().openPalette(true)}>
-        {where === 'cap' && <TabFav tab={t} className="addr-fav" />}
-        <AddressLabel tab={t} />
-      </button>
-      {web && (
+      {site && (
         <button
-          className="ib a-lock"
-          aria-label="Сведения о сайте"
-          title="Сведения о сайте: разрешения, куки, данные"
-          onClick={() => useStore.setState({ siteInfo: true })}
+          className={'ib a-lock' + (secure ? '' : ' insecure')}
+          aria-label={secure ? 'Сведения о сайте: соединение защищено' : 'Соединение не защищено — сведения о сайте'}
+          title={secure ? 'Соединение защищено · Сведения о сайте' : 'Соединение не защищено: сайт использует HTTP · Сведения о сайте'}
+          aria-haspopup="dialog"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            useStore.setState({ siteInfo: { tabId: t.id, url: t.url, anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } } })
+          }}
         >
-          <Icon name={t.url.startsWith('https:') ? 'lock' : 'warn'} />
+          <Icon name={secure ? 'lock' : 'warn'} />
         </button>
       )}
+      <button className="addr" aria-label="Адрес и поиск" title="Адрес и поиск · Ctrl+L" onClick={() => s().openPalette(true)}>
+        {where === 'cap' && <TabFav tab={t} className="addr-fav" />}
+        <AddressLabel tab={t} hideSecurity={site} />
+      </button>
       {web && (
         <button
           className={'ib a-star' + (fav ? ' on' : '')}
@@ -272,8 +278,8 @@ function DownloadsButton({ dock = false }: { dock?: boolean }): React.JSX.Elemen
       onClick={() => openDownloads()}
     >
       {busy.length ? (
-        <ProgressRing value={progress} spin={busy.every((d) => !d.total)}>
-          <Icon name="download" />
+        <ProgressRing value={progress} spin={busy.every((d) => !d.total && !d.paused)}>
+          <Icon name={busy.every((d) => d.paused) ? 'pause' : 'download'} />
         </ProgressRing>
       ) : (
         <Icon name="download" />
@@ -310,7 +316,7 @@ function DockDownloads(): React.JSX.Element | null {
   const d = busy[0]
   const pct = Math.round(progressOf(d) * 100)
   const sub = (x: DownloadInfo): string =>
-    x.total ? `${Math.round(progressOf(x) * 100)}% · ${formatBytes(x.received)} из ${formatBytes(x.total)}` : formatBytes(x.received)
+    (x.paused ? 'На паузе · ' : '') + (x.total ? `${Math.round(progressOf(x) * 100)}% · ${formatBytes(x.received)} из ${formatBytes(x.total)}` : formatBytes(x.received))
   return (
     <div
       className="dk-dl-wrap"
@@ -334,17 +340,17 @@ function DockDownloads(): React.JSX.Element | null {
       <div ref={island} className="dk-dl">
         <button
           className="dk-dl-main"
-          aria-label={`Загрузка «${d.filename}», ${pct}%` + (more ? `, ещё ${busy.length - 1}` : '')}
+          aria-label={`Загрузка «${d.filename}», ${d.paused ? 'на паузе, ' : ''}${pct}%` + (more ? `, ещё ${busy.length - 1}` : '')}
           title="Загрузки"
           onClick={() => openDownloads('.dk-dl')}
         >
-          <ProgressRing className="dk-dl-ring" value={progressOf(d)} spin={!d.total}>
-            <Icon name="download" />
+          <ProgressRing className="dk-dl-ring" value={progressOf(d)} spin={!d.total && !d.paused}>
+            <Icon name={d.paused ? 'pause' : 'download'} />
           </ProgressRing>
           <span className="dk-dl-t">
             <b>{d.filename}</b>
             <small>
-              {pct}%{more ? ` · ещё ${busy.length - 1}` : ''}
+              {d.paused ? 'На паузе · ' : ''}{pct}%{more ? ` · ещё ${busy.length - 1}` : ''}
             </small>
           </span>
         </button>
@@ -1302,7 +1308,7 @@ export function Popover(): React.JSX.Element | null {
                   <span className="dl-name">{d.filename}</span>
                   <span className="dl-sub">
                     {d.state === 'progressing'
-                      ? `${formatBytes(d.received)}${d.total ? ' из ' + formatBytes(d.total) : ''}`
+                      ? `${d.paused ? 'На паузе · ' : ''}${formatBytes(d.received)}${d.total ? ' из ' + formatBytes(d.total) : ''}`
                       : d.state === 'completed'
                         ? formatBytes(d.total || d.received) + (d.exists === false ? ' · удалён с диска' : ' · готово')
                         : d.state === 'cancelled'
@@ -1315,6 +1321,16 @@ export function Popover(): React.JSX.Element | null {
                     </span>
                   )}
                 </button>
+                {d.canCancel && (d.state === 'progressing' && !d.paused || d.canResume) && (
+                  <button
+                    className="ib"
+                    aria-label={d.canResume ? 'Возобновить загрузку' : 'Приостановить загрузку'}
+                    title={d.canResume ? 'Возобновить загрузку' : 'Приостановить загрузку'}
+                    onClick={() => void (d.canResume ? window.masaki.downloads.resume(d.id) : window.masaki.downloads.pause(d.id))}
+                  >
+                    <Icon name={d.canResume ? 'play' : 'pause'} />
+                  </button>
+                )}
                 {d.canCancel && (
                   <button className="ib" aria-label="Отменить загрузку" title="Отменить загрузку" onClick={() => void window.masaki.downloads.cancel(d.id)}>
                     <Icon name="close" />
