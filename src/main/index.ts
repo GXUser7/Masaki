@@ -32,6 +32,7 @@ import { answerExternal, initExternalProtocols, requestExternal, watchExternalPr
 import { dropDevicePending, initDevices } from './devices'
 import { appFromArgv, flushApps, initApps, launchApp } from './apps'
 import * as autofill from './autofill'
+import { formTarget, initFormFrames } from './formFrames'
 import { searchImage } from './searchImage'
 import { initTabMemory, noteTabCreation, prepareTabRestore, restoreAttachedTab } from './tabMemory'
 import {
@@ -79,6 +80,7 @@ const HISTORY_LIMIT = 5000
 const settingsFile = new JsonFile<Settings>('settings.json')
 const sessionFile = new JsonFile<SavedSession>('session.json')
 const historyFile = new JsonFile<HistoryEntry[]>('history.json')
+const historyRemovedFile = new JsonFile<string[]>('history-removed.json')
 const faviconFile = new JsonFile<Record<string, string>>('favicons.json')
 let favicons: Record<string, string> = {}
 const windowFile = new JsonFile<{ bounds: Electron.Rectangle; maximized: boolean }>('window.json')
@@ -86,6 +88,7 @@ const windowFile = new JsonFile<{ bounds: Electron.Rectangle; maximized: boolean
 let win: BrowserWindow | null = null
 if (testHeadless) app.on('browser-window-created', (_event, window) => keepTestWindowHidden(window))
 let history: HistoryEntry[] = []
+let historyRemoved: string[] = []
 let settings: Settings = defaultSettings
 /** Последние сохранённые вкладки — их видят другие устройства в синхронизации. */
 let lastTabs: SavedTab[] = []
@@ -216,8 +219,18 @@ function startupLog(): void {
 // Адрес, с которым открыли инкогнито, в журнал на диске попасть не должен.
 if (!profiles.isIncognito()) startupLog()
 
+const appWindows = new Set<BrowserWindow>()
+const trustedUi = (sender: WebContents): boolean => sender === win?.webContents || [...appWindows].some((w) => !w.isDestroyed() && w.webContents === sender)
+function sendUi(channel: string, payload?: unknown): void {
+  const id = (payload as { wcId?: number } | null)?.wcId
+  const guest = typeof id === 'number' ? webContents.fromId(id) : undefined
+  if (guest?.hostWebContents && trustedUi(guest.hostWebContents)) guest.hostWebContents.send(channel, payload)
+  else for (const w of [win, ...appWindows]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload)
+}
+
 function send(c: Command): void {
-  win?.webContents.send('command', c)
+  const source = 'wcId' in c && typeof c.wcId === 'number' ? webContents.fromId(c.wcId) : undefined
+  ;(source?.hostWebContents ?? win?.webContents)?.send('command', c)
 }
 
 function mergeSettings(saved: Partial<Settings> | null): Settings {
@@ -244,18 +257,19 @@ function attachShortcuts(contents: WebContents, isGuest: boolean): void {
     if (input.type !== 'keyDown') return
     if (input.code === 'F11' && !input.control && !input.alt) {
       event.preventDefault()
-      if (win) win.setFullScreen(!win.isFullScreen())
+      const owner = BrowserWindow.fromWebContents(contents.hostWebContents ?? contents)
+      if (owner) owner.setFullScreen(!owner.isFullScreen())
       return
     }
     // Escape нужен и самой странице, поэтому из вкладки его не перехватываем, а только сообщаем.
     if (isGuest && input.code === 'Escape') {
-      send({ type: 'escape' })
+      ;(contents.hostWebContents ?? contents).send('command', { type: 'escape' })
       return
     }
     const c = commandFor({ code: input.code, ctrl: input.control, shift: input.shift, alt: input.alt, meta: input.meta })
     if (c) {
       event.preventDefault()
-      send(c)
+      ;(contents.hostWebContents ?? contents).send('command', c)
     }
   })
 }
@@ -317,7 +331,7 @@ function sendPageMenu(contents: WebContents, p: ContextMenuParams): void {
     canGoForward: nav.canGoForward(),
     extItems: extensions.contextMenuItems(contents, p)
   }
-  win?.webContents.send('page-menu', params)
+  ;(contents.hostWebContents ?? win?.webContents)?.send('page-menu', params)
 }
 
 async function savePage(contents: WebContents): Promise<void> {
@@ -789,7 +803,8 @@ function setupBrowsingSession(): void {
       // Настоящие ворота — наш выборщик источника в devices.ts: пускаем без лишнего вопроса.
       return callback(true)
     }
-    if (!win) return callback(false)
+    const owner = wc?.hostWebContents
+    if (!owner || !trustedUi(owner)) return callback(false)
     const origin = originOf(details.requestingUrl)
     const needs = permission === 'media' ? mediaPermissions((details as Electron.MediaAccessPermissionRequest).mediaTypes ?? []) : [permission]
     const known = needs.map((p) => decisions[origin + '|' + p] as boolean | undefined)
@@ -812,11 +827,11 @@ function setupBrowsingSession(): void {
       if (!pendingPermissions.has(id)) return
       pendingPermissions.delete(id)
       callback(false)
-      win?.webContents.send('permission-dismiss', id)
+      if (!owner.isDestroyed()) owner.send('permission-dismiss', id)
     }
     wc.once('destroyed', drop)
     wc.once('did-start-navigation', drop)
-    win.webContents.send('permission', { id, origin: originLabel(origin), ...prompt })
+    owner.send('permission', { id, wcId: wc.id, origin: originLabel(origin), ...prompt })
   })
 
   ses.on('will-download', (_e, item, wc) => {
@@ -946,6 +961,14 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     send({ type: 'open-url', url })
     return { action: 'deny' }
   })
+  prepareWebviewHost(ui)
+
+  if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  else void win.loadFile(path.join(__dirname, '../renderer/index.html'))
+}
+
+/** Одинаковая изоляция страниц в браузере и окнах установленных сайтов. */
+function prepareWebviewHost(ui: WebContents): void {
   ui.on('will-attach-webview', (_e, prefs, params) => {
     // guest.js ставится на всю сессию (см. setupBrowsingSession): атрибутом preload он выполнялся бы
     // только в главном фрейме, а пароли и ключи доступа нужны и в iframe. Без nodeIntegrationInSubFrames
@@ -962,9 +985,47 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
   ui.on('did-attach-webview', (_event, contents) => setImmediate(() => {
     if (!contents.isDestroyed()) restoreAttachedTab(contents)
   }))
+}
 
-  if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
-  else void win.loadFile(path.join(__dirname, '../renderer/index.html'))
+function createAppWindow(url: string, name: string): BrowserWindow {
+  const owner = new BrowserWindow({
+    width: 1200, height: 820, minWidth: 420, minHeight: 320, title: name,
+    autoHideMenuBar: true, show: false, skipTaskbar: testHeadless,
+    webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: true, contextIsolation: true,
+      nodeIntegration: false, webviewTag: true, offscreen: testHeadless, backgroundThrottling: !testHeadless,
+      additionalArguments: ['--masaki-app-url=' + encodeURIComponent(url)] }
+  })
+  appWindows.add(owner)
+  owner.once('closed', () => appWindows.delete(owner))
+  owner.once('ready-to-show', () => {
+    if (testHeadless) return
+    if (process.env.MASAKI_TEST_INACTIVE) owner.showInactive()
+    else owner.show()
+  })
+  prepareWebviewHost(owner.webContents)
+  attachShortcuts(owner.webContents, false)
+  owner.webContents.on('will-navigate', (event, target) => { event.preventDefault(); openBrowserTab(target) })
+  owner.webContents.setWindowOpenHandler(({ url: target }) => { openBrowserTab(target); return { action: 'deny' } })
+  owner.webContents.on('did-attach-webview', (_e, guest) => {
+    guest.on('page-title-updated', (_e, title) => owner.setTitle(`${title} — ${name}`))
+    guest.on('will-navigate', (event, target) => {
+      if (new URL(target).origin !== new URL(url).origin) { event.preventDefault(); openBrowserTab(target) }
+    })
+  })
+  if (process.env.ELECTRON_RENDERER_URL) void owner.loadURL(process.env.ELECTRON_RENDERER_URL)
+  else void owner.loadFile(path.join(__dirname, '../renderer/index.html'))
+  return owner
+}
+
+function openBrowserTab(url: string): void {
+  if (win) {
+    if (win.isMinimized()) win.restore()
+    if (!testHeadless && !process.env.MASAKI_TEST_INACTIVE) win.show()
+    send({ type: 'open-url', url })
+  } else {
+    launchUrl = url
+    void windowFile.read().then((saved) => { if (!win) createWindow(saved) })
+  }
 }
 
 // Самопроверка без Playwright (у автоматизации свой отпечаток, и Google показывает капчу):
@@ -1031,12 +1092,13 @@ function dropUiPending(): void {
  */
 function watchUnload(contents: WebContents): void {
   contents.on('will-prevent-unload', (e) => {
-    if (!win || testHeadless) return e.preventDefault()
+    const owner = BrowserWindow.fromWebContents(contents.hostWebContents ?? contents)
+    if (!owner || testHeadless) return e.preventDefault()
     // Синхронное окно останавливает весь главный процесс — его обязаны видеть: поднимаем окно,
     // иначе свернутый Masaki «замер» бы без видимой причины.
-    if (win.isMinimized()) win.restore()
-    win.focus()
-    const choice = dialog.showMessageBoxSync(win, {
+    if (owner.isMinimized()) owner.restore()
+    owner.focus()
+    const choice = dialog.showMessageBoxSync(owner, {
       type: 'warning',
       buttons: ['Остаться', 'Покинуть'],
       defaultId: 0,
@@ -1050,10 +1112,11 @@ function watchUnload(contents: WebContents): void {
 
 function askJsDialog(e: Electron.IpcMainEvent, d: unknown): void {
   const wc = e.sender
+  const owner = wc.hostWebContents
   const x = d as { type?: unknown; message?: unknown; value?: unknown } | null
   const type = x?.type === 'confirm' || x?.type === 'prompt' ? x.type : x?.type === 'alert' ? 'alert' : null
   // Не наша вкладка или нечего показать — пусть страница получит обычное системное окно.
-  if (!type || !win || wc.getType() !== 'webview' || e.senderFrame !== wc.mainFrame) {
+  if (!type || !owner || !trustedUi(owner) || wc.getType() !== 'webview' || e.senderFrame !== wc.mainFrame) {
     e.returnValue = null
     return
   }
@@ -1072,7 +1135,7 @@ function askJsDialog(e: Electron.IpcMainEvent, d: unknown): void {
     done = true
     jsDialogs.delete(id)
     e.returnValue = a
-    win?.webContents.send('js-dialog-close', id)
+    if (!owner.isDestroyed()) owner.send('js-dialog-close', id)
     if (!wc.isDestroyed()) {
       wc.off('destroyed', cancel)
       wc.off('did-start-navigation', away)
@@ -1082,7 +1145,7 @@ function askJsDialog(e: Electron.IpcMainEvent, d: unknown): void {
   wc.once('destroyed', cancel)
   // Ушли со страницы кнопкой «назад» или адресом — вопрос больше не к кому задавать.
   wc.on('did-start-navigation', away)
-  win.webContents.send('js-dialog', {
+  owner.send('js-dialog', {
     id,
     wcId: wc.id,
     type,
@@ -1199,7 +1262,8 @@ app.on('web-contents-created', (_e, contents) => {
         overrideBrowserWindowOptions: { width: 520, height: 700, show: !testHeadless, autoHideMenuBar: true, backgroundColor: '#ffffff' }
       }
     }
-    send({ type: 'open-url', url, background: disposition === 'background-tab' })
+    if ([...appWindows].some((w) => w.webContents === contents.hostWebContents)) openBrowserTab(url)
+    else send({ type: 'open-url', url, background: disposition === 'background-tab' })
     return { action: 'deny' }
   })
 })
@@ -1228,6 +1292,11 @@ function startSync(): Promise<void> {
     settings: () => settings,
     applySettings: (s) => applySettings(s, true),
     history: () => history,
+    historyRemoved: () => historyRemoved,
+    applyHistoryRemoved: (keys) => {
+      historyRemoved = keys
+      historyRemovedFile.write(keys, 0)
+    },
     applyHistory: (h) => {
       history = h
       historyFile.write(history, 500)
@@ -1302,9 +1371,10 @@ function registerPasswordIpc(): void {
   ipcMain.handle('passwords:import-downloaded', (_e, id: string) => passwords.importDownloaded(String(id)))
   ipcMain.on('passwords:dismiss-csv', (_e, id: string) => passwords.dismissCsv(String(id)))
   ipcMain.on('passwords:answer', (_e, id: string, action: 'save' | 'never' | 'dismiss') => passwords.answer(String(id), action))
-  ipcMain.on('passwords:fill', (_e, wcId: number, id: string) => {
+  ipcMain.on('passwords:fill', (e, wcId: number, id: string, token: unknown) => {
     const wc = webContents.fromId(Number(wcId))
-    if (wc && wc.getType() === 'webview') passwords.fill(wc, String(id))
+    const frame = wc && formTarget(wc, token)
+    if (wc && frame && wc.hostWebContents === e.sender) passwords.fill(wc, String(id), frame)
   })
   ipcMain.handle('passwords:never', () => passwords.neverList())
   ipcMain.on('passwords:forget-never', (_e, origin: string) => passwords.forgetNever(String(origin)))
@@ -1329,15 +1399,15 @@ function registerPasswordIpc(): void {
       if (profiles.isIncognito() && op === 'create') {
         return JSON.stringify({ ok: false, name: 'NotAllowedError', message: 'В окне инкогнито Masaki не создаёт ключи доступа — откройте сайт в обычном окне.' })
       }
-      return passkeys.request(e.sender, fromTab(e), op, String(json))
+      return passkeys.request(e.sender, fromTab(e), op, String(json), e.senderFrame ?? undefined)
     })
   }
-  ipcMain.handle('pk:conditional', (e) => (fromTab(e) ? passkeys.conditionalItems(e.sender) : []))
-  const fromUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => !!win && e.sender === win.webContents
+  ipcMain.handle('pk:conditional', (e) => (fromTab(e) ? passkeys.conditionalItems(e.sender, e.senderFrame ?? undefined) : []))
+  const fromUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => trustedUi(e.sender)
   ipcMain.handle('passkeys:list', (e) => (fromUi(e) ? passkeys.list() : []))
   // Окна ключей, которые уже ждут ответа: интерфейс перечитывает их при загрузке (иначе после его
   // перезапуска окно терялось, а сайт ждал до таймаута).
-  ipcMain.handle('passkeys:prompts', (e) => (fromUi(e) ? passkeys.prompts() : []))
+  ipcMain.handle('passkeys:prompts', (e) => (fromUi(e) ? passkeys.prompts().filter((p) => webContents.fromId(p.wcId)?.hostWebContents === e.sender) : []))
   ipcMain.handle('passkeys:remove', (e, id: string) => {
     if (fromUi(e)) passkeys.remove(String(id))
   })
@@ -1350,11 +1420,11 @@ function registerPasswordIpc(): void {
   ipcMain.handle('passkeys:set-pin', (e, pin: unknown) => (fromUi(e) ? passkeys.setPin(typeof pin === 'string' && pin ? String(pin) : null) : { ok: false }))
   ipcMain.on('passkeys:use', (e, wcId: number, id: string) => {
     const wc = webContents.fromId(Number(wcId))
-    if (fromUi(e) && wc && wc.getType() === 'webview') passkeys.useConditional(wc, String(id))
+    if (fromUi(e) && wc && wc.hostWebContents === e.sender && wc.getType() === 'webview') passkeys.useConditional(wc, String(id))
   })
 
   // Адреса и карты: список у поля страницы, заполнение формы, хранение (номер карты — safeStorage).
-  const fromAnyUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => !!win && e.sender === win.webContents
+  const fromAnyUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => trustedUi(e.sender)
   // Список у поля формы (фрейм — любой, origin его же). Полный номер карты уходит только при заполнении.
   ipcMain.handle('af:list', (e, kind: unknown) => {
     if (!fromTab(e) || (kind !== 'address' && kind !== 'card')) return []
@@ -1376,9 +1446,11 @@ function registerPasswordIpc(): void {
   ipcMain.on('af:remove', (e, kind: unknown, id: unknown) => {
     if (fromAnyUi(e) && (kind === 'address' || kind === 'card') && typeof id === 'string') autofill.remove(kind, id)
   })
-  ipcMain.on('af:fill', (e, wcId: unknown, kind: unknown, id: unknown) => {
+  ipcMain.on('af:fill', (e, wcId: unknown, kind: unknown, id: unknown, token: unknown) => {
     if (!fromAnyUi(e) || typeof wcId !== 'number' || (kind !== 'address' && kind !== 'card') || typeof id !== 'string') return
-    autofill.fill(wcId, kind, id)
+    const wc = webContents.fromId(wcId)
+    const frame = wc && formTarget(wc, token)
+    if (wc && frame && wc.hostWebContents === e.sender) autofill.fill(wcId, kind, id, frame)
   })
 }
 
@@ -1391,7 +1463,7 @@ function registerIpc(): void {
     if (win.isMaximized()) win.unmaximize()
     else win.maximize()
   })
-  ipcMain.on('win:close', () => win?.close())
+  ipcMain.on('win:close', (e) => { if (trustedUi(e.sender)) BrowserWindow.fromWebContents(e.sender)?.close() })
   ipcMain.on('win:fullscreen', (_e, on: boolean) => win?.setFullScreen(on))
   // Боковая кнопка мыши: от страницы вкладки (назад/вперёд именно в ней — важно при двух вкладках рядом)
   // или от самого интерфейса (тогда в активной). Страница шлёт только из главного фрейма.
@@ -1449,9 +1521,9 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('session:load', () => sessionFile.read())
-  ipcMain.on('session:save', (_e, s: SavedSession) => {
+  ipcMain.on('session:save', (e, s: SavedSession) => {
     // Вкладки инкогнито не восстанавливаются и на диск не пишутся.
-    if (profiles.isIncognito()) return
+    if (profiles.isIncognito() || e.sender !== win?.webContents) return
     sessionFile.write(s, 800)
     lastTabs = s.tabs
     sync.onTabsChanged()
@@ -1479,12 +1551,14 @@ function registerIpc(): void {
   ipcMain.on('history:remove', (_e, entry: HistoryEntry) => {
     if (!entry || typeof entry.url !== 'string' || typeof entry.time !== 'number') return
     history = history.filter((h) => !(h.url === entry.url && h.time === entry.time))
+    historyRemoved = [...new Set([...historyRemoved, entry.url + '|' + entry.time])]
+    historyRemovedFile.write(historyRemoved, 0)
     historyFile.write(history, 0)
     sync.onHistoryChanged()
   })
 
   const downloadUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
-    !!win && e.sender === win.webContents && e.senderFrame === win.webContents.mainFrame
+    trustedUi(e.sender) && e.senderFrame === e.sender.mainFrame
   const completedDownload = (e: Electron.IpcMainEvent, p: unknown): p is string =>
     downloadUi(e) && typeof p === 'string' && isDownloadedFile(p) && fs.existsSync(p)
   ipcMain.handle('dl:cancel', (e, id: unknown) => downloadUi(e) && typeof id === 'string' && cancelDownload(id))
@@ -1966,13 +2040,10 @@ if (!app.requestSingleInstanceLock()) {
   // Блокировка наша: прежнее инкогнито (если Masaki падал) стираем до того, как что-то прочитаем.
   profiles.prepareIncognito()
   app.on('second-instance', (_e, argv) => {
-    if (!win) return
-    if (win.isMinimized()) win.restore()
-    win.focus()
     const url = urlFromArgv(argv)
     const appUrl = appFromArgv(argv)
     if (appUrl && !profiles.isIncognito()) launchApp(appUrl)
-    else if (url) send({ type: 'open-url', url })
+    else if (url || !win) openBrowserTab(url ?? 'masaki://newtab')
     // «Новое окно инкогнито», когда оно уже открыто, — новая вкладка в нём.
     else if (profiles.isIncognito() && argv.includes('--incognito')) send({ type: 'new-tab' })
   })
@@ -1994,6 +2065,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     setDiscordEnabled(settings.addons.discord.enabled)
     history = (await historyFile.read()) ?? []
+    historyRemoved = (await historyRemovedFile.read()) ?? []
     favicons = (await faviconFile.read()) ?? {}
     decisions = migratePermissions((await permissionsFile.read()) ?? {})
     lastTabs = (await sessionFile.read())?.tabs ?? []
@@ -2004,23 +2076,21 @@ if (!app.requestSingleInstanceLock()) {
       process.platform === 'darwin' ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]) : null
     )
     setupBrowsingSession()
-    initDevices(PARTITION, { ui: (channel, payload) => win?.webContents.send(channel, payload), hasWindow: () => !!win })
-    initApps(PARTITION, {
-      openTab: (url) => send({ type: 'open-url', url }),
-      isUi: (sender) => !!win && sender === win.webContents
-    })
+    initDevices(PARTITION, { ui: sendUi, hasWindow: () => !!win || appWindows.size > 0, isUi: trustedUi })
+    await initApps(PARTITION, { createWindow: createAppWindow, openTab: openBrowserTab, isUi: trustedUi })
     registerIpc()
     registerPasswordIpc()
+    initFormFrames()
     await passwords.initPasswords({
-      ui: (channel, payload) => win?.webContents.send(channel, payload),
+      ui: sendUi,
       changed: () => sync.onPasswordsChanged()
     })
     await autofill.initAutofill({
-      ui: (channel, payload) => win?.webContents.send(channel, payload),
+      ui: sendUi,
       changed: () => sync.onPasswordsChanged()
     })
     await passkeys.initPasskeys({
-      ui: (channel, payload) => win?.webContents.send(channel, payload),
+      ui: sendUi,
       changed: () => sync.onPasswordsChanged(),
       backedUp: () => sync.getState().vault === 'ready'
     })
@@ -2072,6 +2142,7 @@ if (!app.requestSingleInstanceLock()) {
     settingsFile.flushSync()
     sessionFile.flushSync()
     historyFile.flushSync()
+    historyRemovedFile.flushSync()
     windowFile.flushSync()
     faviconFile.flushSync()
     permissionsFile.flushSync()

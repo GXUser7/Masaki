@@ -106,7 +106,13 @@ const addressItem = (a: Address): AddressItem => ({
   name: a.name,
   summary: [a.street, a.city, a.zip].filter(Boolean).join(', ') || a.name || 'адрес',
   phone: a.phone,
-  email: a.email
+  email: a.email,
+  organization: a.organization,
+  street: a.street,
+  city: a.city,
+  state: a.state,
+  zip: a.zip,
+  country: a.country
 })
 
 const cardItem = (c: Card): CardItem => ({
@@ -192,7 +198,7 @@ export function remove(kind: 'address' | 'card', recordId: string): void {
   const item = list.find((x) => x.id === recordId)
   if (!item || item.deleted) return
   item.deleted = true
-  item.t = Date.now()
+  item.t = Math.max(Date.now(), item.t + 1)
   if (kind === 'card') (item as Card).number = ''
   persist()
 }
@@ -219,9 +225,9 @@ export const isPlainCard = (x: object): x is { kind: 'card' } & Omit<Card, 'numb
 
 export function syncExport(): PlainAutofill[] {
   return [
-    ...liveA().map((a) => ({ kind: 'address' as const, ...a })),
+    ...data.addresses.map((a) => ({ kind: 'address' as const, ...a })),
     // Полный номер карты уходит на Диск уже зашифрованным ключом сейфа (sync.ts шифрует каждую запись).
-    ...liveC().map((c) => ({ kind: 'card' as const, ...c, number: decrypt(c) ?? '' }))
+    ...data.cards.map((c) => ({ kind: 'card' as const, ...c, number: c.deleted ? '' : decrypt(c) ?? '' }))
   ]
 }
 
@@ -263,8 +269,14 @@ export function syncApply(items: PlainAutofill[]): void {
 
 /** Адрес значениями по autocomplete-атрибутам: заполнит и «name», и «fname»-подобные поля. */
 export function addressValues(a: Address): Record<string, string> {
+  let countryName = a.country
+  if (/^[a-z]{2}$/i.test(a.country)) {
+    try { countryName = new Intl.DisplayNames(['ru'], { type: 'region' }).of(a.country.toUpperCase()) ?? a.country } catch { /* своё название страны */ }
+  }
   return {
     name: a.name,
+    'given-name': a.name.split(' ')[0] ?? '',
+    'family-name': a.name.split(' ').slice(1).join(' '),
     fname: a.name.split(' ')[0] ?? '',
     lname: a.name.split(' ').slice(1).join(' '),
     organization: a.organization,
@@ -272,11 +284,13 @@ export function addressValues(a: Address): Record<string, string> {
     'street-address': a.street,
     'address-line1': a.street.split('\n')[0] ?? a.street,
     'address-line2': a.street.split('\n')[1] ?? '',
+    'address-line3': a.street.split('\n')[2] ?? '',
     'address-level1': a.state,
     'address-level2': a.city,
     'address-level3': '',
     'postal-code': a.zip,
     country: a.country,
+    'country-name': countryName,
     tel: a.phone,
     email: a.email
   }
@@ -291,14 +305,14 @@ export function cardValues(number: string, c: Card): Record<string, string> {
     'cc-exp-year': c.expYear ? (c.expYear > 100 ? String(c.expYear) : String(2000 + c.expYear)) : '',
     'cc-csc': '',
     'cc-additional-name': '',
-    'cc-family-name': '',
+    'cc-family-name': c.holder.split(' ').slice(1).join(' '),
     'cc-given-name': c.holder.split(' ')[0] ?? '',
     'cc-type': ''
   }
 }
 
 /** Заполнить поля формы вкладки (wcId) значениями выбранной записи. */
-export function fill(wcId: number, kind: 'address' | 'card', recordId: string): void {
+export function fill(wcId: number, kind: 'address' | 'card', recordId: string, frame?: Electron.WebFrameMain): void {
   const wc = webContents.fromId(wcId)
   if (!wc || wc.isDestroyed() || wc.getType() !== 'webview') return
   let values: Record<string, string> | null = null
@@ -310,5 +324,8 @@ export function fill(wcId: number, kind: 'address' | 'card', recordId: string): 
     const num = c ? decrypt(c) : null
     if (c && num != null) values = cardValues(num, c)
   }
-  if (values) wc.send('af:fill', values)
+  if (values) {
+    if (frame) frame.send('af:fill', values)
+    else wc.send('af:fill', values)
+  }
 }

@@ -43,6 +43,8 @@ export interface SyncHooks {
   applySettings(s: Settings): void
   history(): HistoryEntry[]
   applyHistory(h: HistoryEntry[]): void
+  historyRemoved(): string[]
+  applyHistoryRemoved(keys: string[]): void
   tabs(): SavedTab[]
   openUrl(url: string): void
   closeTabs(prefix: string): void
@@ -110,6 +112,8 @@ interface HistoryDoc {
   v: 1
   clearedAt: number
   entries: HistoryEntry[]
+  /** Индивидуальные удаления: ключ url|time, чтобы старое устройство не вернуло запись. */
+  removed?: string[]
 }
 
 interface DeviceDoc {
@@ -900,22 +904,22 @@ async function syncPrefs(files: DFile[]): Promise<void> {
   }
 }
 
-function historySig(h: HistoryEntry[], clearedAt: number): string {
-  const last = h[h.length - 1]
-  return `${h.length}|${h[0]?.time ?? 0}|${last?.time ?? 0}|${last?.url ?? ''}|${clearedAt}`
+function historySig(h: HistoryEntry[], clearedAt: number, removed: string[] = []): string {
+  return crypto.createHash('sha256').update(JSON.stringify([h, clearedAt, [...removed].sort()])).digest('hex')
 }
 
-function mergeHistory(lists: HistoryEntry[][], clearedAt: number): HistoryEntry[] {
+export function mergeHistory(lists: HistoryEntry[][], clearedAt: number, removed: string[] = [], limit = 5000): HistoryEntry[] {
   const map = new Map<string, HistoryEntry>()
+  const deleted = new Set(removed)
   for (const list of lists) {
     for (const e of list) {
-      if (e && typeof e.url === 'string' && typeof e.time === 'number' && e.time > clearedAt) map.set(e.url + '|' + e.time, e)
+      if (e && typeof e.url === 'string' && typeof e.time === 'number' && e.time > clearedAt && !deleted.has(e.url + '|' + e.time)) map.set(e.url + '|' + e.time, e)
     }
   }
   const sorted = [...map.values()].sort((a, b) => a.time - b.time)
   // Как и локально: подряд одна и та же страница — одна запись (у неё обновляется время).
   const out = sorted.filter((e, i) => sorted[i + 1]?.url !== e.url)
-  return out.slice(-hooks.historyLimit)
+  return out.slice(-limit)
 }
 
 async function syncHistory(files: DFile[]): Promise<void> {
@@ -923,7 +927,8 @@ async function syncHistory(files: DFile[]): Promise<void> {
   const mine = files.filter((f) => f.name === 'history.json').sort(newestFirst)
   const remoteMod = mine.map((f) => f.id + ':' + f.modifiedTime).join(',')
   const localH = hooks.history()
-  const localSig = historySig(localH, local.historyClearedAt)
+  const localRemoved = hooks.historyRemoved()
+  const localSig = historySig(localH, local.historyClearedAt, localRemoved)
   const remoteMoved = remoteMod !== local.historyRemote
   if (!remoteMoved && localSig === local.historySig) return
 
@@ -936,18 +941,20 @@ async function syncHistory(files: DFile[]): Promise<void> {
   }
   const clearedAt = Math.max(local.historyClearedAt, ...docs.map((d) => Number(d.clearedAt) || 0))
   local.historyClearedAt = clearedAt
-  const merged = mergeHistory([localH, ...docs.map((d) => d.entries)], clearedAt)
-  const mergedSig = historySig(merged, clearedAt)
+  const removed = [...new Set([...localRemoved, ...docs.flatMap((d) => Array.isArray(d.removed) ? d.removed.filter((k): k is string => typeof k === 'string') : [])])].sort()
+  const merged = mergeHistory([localH, ...docs.map((d) => d.entries)], clearedAt, removed, hooks.historyLimit)
+  const mergedSig = historySig(merged, clearedAt, removed)
+  if (JSON.stringify([...localRemoved].sort()) !== JSON.stringify(removed)) hooks.applyHistoryRemoved(removed)
   if (mergedSig !== localSig || merged.length !== localH.length) hooks.applyHistory(merged)
 
   const remoteSig = remoteMoved
     ? docs.length === 1
-      ? historySig(mergeHistory([docs[0].entries], Number(docs[0].clearedAt) || 0), Number(docs[0].clearedAt) || 0)
+      ? historySig(mergeHistory([docs[0].entries], Number(docs[0].clearedAt) || 0, docs[0].removed, hooks.historyLimit), Number(docs[0].clearedAt) || 0, docs[0].removed)
       : ''
     : local.historySig
   let mod = remoteMod
   if (mergedSig !== remoteSig || mine.length !== 1) {
-    const f = await upload('history.json', { v: 1, clearedAt, entries: merged } satisfies HistoryDoc, mine[0]?.id)
+    const f = await upload('history.json', { v: 1, clearedAt, entries: merged, removed } satisfies HistoryDoc, mine[0]?.id)
     for (const extra of mine.slice(1)) await remove(extra.id)
     mod = f.id + ':' + f.modifiedTime
   }

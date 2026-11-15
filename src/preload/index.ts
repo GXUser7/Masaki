@@ -31,6 +31,10 @@ function listen<T>(channel: string, cb: (value: T) => void): () => void {
 }
 
 const api: MasakiApi = {
+  appUrl: (() => {
+    const arg = process.argv.find((v) => v.startsWith('--masaki-app-url='))
+    return arg ? decodeURIComponent(arg.slice('--masaki-app-url='.length)) : null
+  })(),
   platform: process.platform,
   versions: {
     electron: process.versions.electron,
@@ -182,7 +186,7 @@ const api: MasakiApi = {
     onCsv: (cb) => listen<PasswordCsv>('passwords-csv', cb),
     onOffer: (cb) => listen<PasswordOffer>('passwords-offer', cb),
     answer: (id, action) => ipcRenderer.send('passwords:answer', id, action),
-    fill: (wcId, id) => ipcRenderer.send('passwords:fill', wcId, id),
+    fill: (wcId, id, token) => ipcRenderer.send('passwords:fill', wcId, id, token),
     never: () => ipcRenderer.invoke('passwords:never'),
     forgetNever: (origin) => ipcRenderer.send('passwords:forget-never', origin),
     onChanged: (cb) => listen<void>('passwords-changed', () => cb()),
@@ -206,7 +210,7 @@ const api: MasakiApi = {
     saveAddress: (p) => ipcRenderer.invoke('af:save-address', p),
     saveCard: (p) => ipcRenderer.invoke('af:save-card', p),
     remove: (kind, id) => ipcRenderer.send('af:remove', kind, id),
-    fill: (wcId, kind, id) => ipcRenderer.send('af:fill', wcId, kind, id),
+    fill: (wcId, kind, id, token) => ipcRenderer.send('af:fill', wcId, kind, id, token),
     onChanged: (cb) => listen<void>('autofill-changed', () => cb())
   },
   passkeys: {

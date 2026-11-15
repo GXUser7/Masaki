@@ -57,8 +57,9 @@ contextBridge.executeInMainWorld({
 // и предложение сохранить пароль после отправки формы. Пароль приходит сюда из главного процесса
 // только после выбора аккаунта, а сайт для проверки главный процесс берёт сам, не со слов страницы.
 
-type Item = { id: string; username: string; host: string; passkey?: boolean }
-type Fields = { user: HTMLInputElement | null; pass: HTMLInputElement | null; focus: HTMLInputElement }
+type Item = { id: string; username: string; host: string; passkey?: boolean; kind?: 'address' | 'card' }
+type FormControl = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+type Fields = { user: HTMLInputElement | null; pass: HTMLInputElement | null; focus: FormControl }
 
 let items: Item[] | null = null
 /** Ключи доступа для поля с autocomplete="… webauthn", пока страница ждёт вход по ключу. */
@@ -71,14 +72,15 @@ let filling = false
 let hideTimer: ReturnType<typeof setTimeout> | undefined
 // Поздний ответ IPC не должен возвращать меню после выбора аккаунта или ухода из поля.
 let focusRequest = 0
-const filledValues = new WeakMap<HTMLInputElement, string>()
+const filledValues = new WeakMap<FormControl, string>()
+let addressItems: Item[] | null = null
 
 const TEXTY = new Set(['text', 'email', 'tel', ''])
 const WEBAUTHN = /(^|\s)webauthn(\s|$)/i
 const USERISH = /user|login|email|e-mail|mail|identifier|account|phone|логин|почт/i
 
-function visible(el: HTMLInputElement): boolean {
-  if (el.disabled || el.readOnly || el.hidden) return false
+function visible(el: FormControl): boolean {
+  if (el.disabled || ('readOnly' in el && el.readOnly) || el.hidden) return false
   const r = el.getBoundingClientRect()
   if (r.width < 4 || r.height < 4) return false
   const cs = getComputedStyle(el)
@@ -158,13 +160,40 @@ function show(f: Fields, list: Item[]): void {
   shown = true
   shownCount = fit.length
   picked = -1
-  ipcRenderer.sendToHost('pw:show', {
+  const request = {
     rect: { x: r.left, y: r.top, w: r.width, h: r.height },
     dpr: window.devicePixelRatio,
     items: fit,
     role: f.focus === f.pass ? 'password' : 'username'
+  }
+  const revision = focusRequest
+  void ipcRenderer.invoke('form:register', request).then((token: string | null) => {
+    if (!token || !shown || revision !== focusRequest) return
+    projectForm({ token, rect: request.rect, dpr: request.dpr })
   })
 }
+
+type FormPosition = { token: string; rect: { x: number; y: number; w: number; h: number }; dpr: number }
+function projectForm(data: FormPosition): void {
+  if (!TOP) {
+    contextBridge.executeInMainWorld({ func: (position: FormPosition) => window.parent.postMessage({ masakiFormPosition: position }, '*'), args: [data] })
+    return
+  }
+  void ipcRenderer.invoke('form:project', data.token, data.rect, data.dpr).then((request) => {
+    if (request) ipcRenderer.sendToHost('pw:show', request)
+  })
+}
+// Через границы origin передаём только геометрию и непрозрачный токен; аккаунты остаются в main.
+window.addEventListener('message', (event) => {
+  const d = event.data?.masakiFormPosition as FormPosition | undefined
+  if (!d || typeof d.token !== 'string' || !d.rect) return
+  const frame = [...document.querySelectorAll<HTMLIFrameElement>('iframe, frame')].find((f) => f.contentWindow === event.source)
+  if (!frame) return
+  const r = frame.getBoundingClientRect()
+  const sx = r.width / (frame.offsetWidth || r.width)
+  const sy = r.height / (frame.offsetHeight || r.height)
+  projectForm({ token: d.token, dpr: devicePixelRatio, rect: { x: r.left + (frame.clientLeft + d.rect.x) * sx, y: r.top + (frame.clientTop + d.rect.y) * sy, w: d.rect.w * sx, h: d.rect.h * sy } })
+})
 
 function offerFor(t: HTMLInputElement, explicit = false): void {
   if (filling || (!explicit && filledValues.get(t) === t.value)) return
@@ -177,6 +206,7 @@ function offerFor(t: HTMLInputElement, explicit = false): void {
   void Promise.all([loadItems(), pk]).then(([list, ks]) => {
     if (request !== focusRequest || filling || !t.isConnected || document.activeElement !== t) return
     keys = Array.isArray(ks) ? ks : []
+    addressItems = null
     if (!list.length && !keys.length) return hide()
     active = f
     show(f, list)
@@ -184,13 +214,17 @@ function offerFor(t: HTMLInputElement, explicit = false): void {
 }
 
 document.addEventListener('focusin', (e) => {
-  if (e.target instanceof HTMLInputElement) {
-    offerFor(e.target)
-    offerAf(e.target)
-  } else hide()
+  const t = e.target
+  if (isFormControl(t) && wantsAddress(t)) offerAf(t)
+  else if (t instanceof HTMLInputElement) offerFor(t)
+  else hide()
 }, true)
 document.addEventListener('pointerdown', (e) => {
   const t = e.target
+  if (isFormControl(t) && wantsAddress(t)) {
+    setTimeout(() => { if (document.activeElement === t) offerAf(t) }, 0)
+    return
+  }
   if (!(t instanceof HTMLInputElement) || !fieldsFor(t)) return hide()
   // Повторный щелчок по уже заполненному полю позволяет выбрать другой аккаунт.
   // Ждём штатного фокуса, но не открываем ничего при программном focus() после заполнения.
@@ -204,9 +238,9 @@ ipcRenderer.on('pk:conditional-changed', () => {
 document.addEventListener(
   'input',
   (e) => {
-    if (!filling && active && e.target === active.focus && (items?.length || keys.length)) {
+    if (!filling && active && e.target === active.focus && (addressItems?.length || items?.length || keys.length)) {
       filledValues.delete(active.focus)
-      show(active, items ?? [])
+      show(active, addressItems ?? items ?? [])
     }
   },
   true
@@ -227,8 +261,9 @@ window.addEventListener('resize', hide)
 window.addEventListener('pagehide', hide)
 
 /** Значение ставим нативным сеттером и шлём input/change — так его видят и React, и обычные формы. */
-function setValue(input: HTMLInputElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+function setValue(input: FormControl, value: string): void {
+  const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : input instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
   input.focus()
   if (setter) setter.call(input, value)
   else input.value = value
@@ -257,18 +292,31 @@ ipcRenderer.on('pw:fill', (_e, d: { username: string; password: string }) => {
 
 // 3б. Адреса и карты: поле с autocomplete «name|tel|postal-code|cc-number|…» показывает список записей,
 // выбор заполняет ВСЮ форму сразу (адрес — улицу, город, индекс; карту — номер, срок, держателя).
-const AF_AUTOS = /^(name|fname|lname|email|tel|organization|street-address|address-line[12]|address-level[123]|postal-code|country|cc-name|cc-number|cc-exp|cc-exp-month|cc-exp-year|cc-csc)$/
-const isCcField = (t: HTMLInputElement): boolean => /^cc-/.test((t.getAttribute('autocomplete') || '').toLowerCase())
+const AF_AUTOS = /^(name|given-name|additional-name|family-name|fname|lname|email|tel|organization|street-address|address-line[123]|address-level[123]|postal-code|country|country-name|cc-name|cc-given-name|cc-family-name|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/
+const isFormControl = (t: unknown): t is FormControl => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement
+const afTokens = (t: FormControl): { field: string; section: string } => {
+  const tokens = (t.getAttribute('autocomplete') || '').toLowerCase().trim().split(/\s+/)
+  return { field: tokens[tokens.length - 1] ?? '', section: tokens.filter((v) => v.startsWith('section-') || v === 'shipping' || v === 'billing').join(' ') }
+}
+function wantsAddress(t: FormControl): boolean {
+  const { field } = afTokens(t)
+  if (!AF_AUTOS.test(field)) return false
+  if (field !== 'email') return true
+  const scope = t.form ?? document
+  // Поле почты на экране входа остаётся у менеджера паролей, даже с пустой адресной книгой.
+  return !scope.querySelector('input[type="password"]') && [...scope.querySelectorAll('input, textarea, select')].some((el) => isFormControl(el) && /^(name|given-name|street-address|address-line1|postal-code|tel)$/.test(afTokens(el).field))
+}
 
-async function offerAf(t: HTMLInputElement): Promise<void> {
-  const ac = (t.getAttribute('autocomplete') || '').toLowerCase().trim()
-  if (!AF_AUTOS.test(ac) || t.disabled || t.readOnly) return
-  const kind = isCcField(t) ? 'card' : 'address'
+async function offerAf(t: FormControl): Promise<void> {
+  const ac = afTokens(t).field
+  if (filling || !AF_AUTOS.test(ac) || t.disabled || ('readOnly' in t && t.readOnly)) return
+  const kind = /^cc-/.test(ac) ? 'card' : 'address'
   const request = ++focusRequest
   const items = (await ipcRenderer.invoke('af:list', kind).catch(() => [])) as Item[]
   if (request !== focusRequest || filling || !t.isConnected || document.activeElement !== t) return
   if (!Array.isArray(items) || !items.length) return
   keys = []
+  addressItems = items
   const f: Fields = { user: null, pass: null, focus: t }
   active = f
   show(f, items)
@@ -277,13 +325,21 @@ async function offerAf(t: HTMLInputElement): Promise<void> {
 /** Заполнить всю форму значениями выбранной записи (autocomplete поля ↔ ключ значения, иначе name/id). */
 ipcRenderer.on('af:fill', (_e, values: Record<string, string>) => {
   const scope: ParentNode = active?.focus ? (active.focus.form ?? document) : document
+  const section = active ? afTokens(active.focus).section : ''
   hide()
   filling = true
   try {
-    for (const input of inputsIn(scope)) {
-      const ac = (input.getAttribute('autocomplete') || input.autocomplete || '').toLowerCase().trim()
+    for (const input of [...scope.querySelectorAll('input, textarea, select')].filter(isFormControl).filter(visible)) {
+      const info = afTokens(input)
+      if (info.section !== section || input instanceof HTMLInputElement && input.type === 'password') continue
+      const ac = info.field
       const key = values[ac] !== undefined ? ac : (input.name || input.id || '').toLowerCase()
-      const v = key ? values[key] : undefined
+      let v = key ? values[key] : undefined
+      if (v && input instanceof HTMLSelectElement) {
+        const option = [...input.options].find((o) => o.value.toLowerCase() === v!.toLowerCase() || o.text.trim().toLowerCase() === v!.toLowerCase() || ac === 'cc-exp-month' && /^\d+$/.test(o.value) && Number(o.value) === Number(v))
+        if (!option) continue
+        v = option.value
+      }
       if (v && input.value !== v) {
         filledValues.set(input, v)
         setValue(input, v)

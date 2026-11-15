@@ -98,11 +98,12 @@ export function App(): React.JSX.Element {
         window.masaki.session.load(),
         window.masaki.history.list()
       ])
-      useStore.getState().boot(s, session, history)
+      const appUrl = window.masaki.appUrl
+      useStore.getState().boot(appUrl ? { ...s, sidebarCollapsed: false } : s, appUrl ? { active: 0, tabs: [{ url: appUrl, title: appUrl }] } : session, history)
       void useStore.getState().loadDownloads()
       // Ссылка, с которой Masaki запустили (он — браузер по умолчанию): поверх восстановленных вкладок.
       // Восстанавливать было нечего (первый запуск, окно инкогнито) — она занимает пустую новую вкладку.
-      const launch = await window.masaki.system.launchUrl()
+      const launch = appUrl ? null : await window.masaki.system.launchUrl()
       if (launch) {
         const st = useStore.getState()
         if (st.tabs.length === 1 && st.active().kind === 'newtab') st.navigate(launch, { raw: true, target: 'current' })
@@ -177,6 +178,7 @@ export function App(): React.JSX.Element {
         useStore.setState((st) => ({ pwCsv: [...st.pwCsv, c], popover: st.popover === 'downloads' ? null : st.popover }))
       ),
       window.masaki.passwords.onChanged(() => useStore.setState((st) => ({ pwRev: st.pwRev + 1 }))),
+      window.masaki.autofill.onChanged(() => useStore.setState((st) => ({ pwRev: st.pwRev + 1 }))),
       window.masaki.passkeys.onChanged(() => useStore.setState((st) => ({ pwRev: st.pwRev + 1 }))),
       window.masaki.passkeys.onPrompt((p) => useStore.setState((st) => ({ pkPrompts: [...st.pkPrompts.filter((x) => x.id !== p.id), p] }))),
       window.masaki.passkeys.onPromptClose((id) => useStore.setState((st) => ({ pkPrompts: st.pkPrompts.filter((x) => x.id !== id) }))),
@@ -312,7 +314,7 @@ export function App(): React.JSX.Element {
   const photo = active.kind === 'newtab' && settings.background !== 'shapes' && wallpaper
 
   return (
-    <div className={cls}>
+    <div className={cls + (window.masaki.appUrl ? ' app-mode' : '')}>
       <MorphKeyframes />
       <Background wallpaper={settings.background !== 'shapes' ? wallpaper : null} />
       <div className="lay">

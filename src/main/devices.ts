@@ -3,7 +3,7 @@
 // устройства и HTTP/прокси-аутентификация. Права «usb/hid/serial/bluetooth/display-capture» выдаём
 // без вопросов — сам выбор устройства и есть подтверждение, а лишний вопрос только мешает.
 
-import { app, desktopCapturer, ipcMain, screen, session, type Session, type WebContents } from 'electron'
+import { app, desktopCapturer, ipcMain, screen, session, webContents, type Session, type WebContents } from 'electron'
 import { randomUUID } from 'crypto'
 import type { AuthAsk, DeviceAsk, DisplayAsk, DisplaySource } from '../shared/types'
 
@@ -11,31 +11,32 @@ interface Hooks {
   ui(channel: string, payload?: unknown): void
   /** Вопросы имеют смысл только когда окно есть; без него сразу отвечаем отказом. */
   hasWindow(): boolean
+  isUi(sender: WebContents): boolean
 }
 
 let hooks: Hooks
 
-const displayAsks = new Map<string, { origin: string; audio: boolean; done: (video: { id: string; name: string } | null) => void }>()
+const displayAsks = new Map<string, { origin: string; audio: boolean; wcId?: number; done: (video: { id: string; name: string } | null) => void }>()
 const deviceAsks = new Map<string, { ask: DeviceAsk; done: (deviceId: string) => void }>()
-const authAsks = new Map<string, { meta: { host: string; realm: string; proxy: boolean }; done: (username?: string, password?: string) => void }>()
+const authAsks = new Map<string, { meta: { host: string; realm: string; proxy: boolean; wcId?: number }; done: (username?: string, password?: string) => void }>()
 
 /** Последний список источников: спрашивается редко, а снимки экрана недёшевы. */
 let sourcesCache: DisplaySource[] = []
 
-const displayList = (): DisplayAsk[] => [...displayAsks.entries()].map(([id, a]) => ({ id, origin: a.origin, audio: a.audio, sources: sourcesCache }))
+const displayList = (): DisplayAsk[] => [...displayAsks.entries()].map(([id, a]) => ({ id, origin: a.origin, audio: a.audio, wcId: a.wcId, sources: sourcesCache }))
 const deviceList = (): DeviceAsk[] => [...deviceAsks.values()].map((a) => a.ask)
 const authList = (): AuthAsk[] => [...authAsks.entries()].map(([id, a]) => ({ id, ...a.meta }))
 
-function askDisplay(origin: string, audio: boolean, done: (video: { id: string; name: string } | null) => void): void {
+function askDisplay(origin: string, audio: boolean, done: (video: { id: string; name: string } | null) => void, wcId?: number): void {
   const id = 'd' + randomUUID()
-  displayAsks.set(id, { origin, audio, done })
-  hooks.ui('display-ask', { id, origin, audio, sources: sourcesCache })
+  displayAsks.set(id, { origin, audio, done, wcId })
+  hooks.ui('display-ask', { id, origin, audio, wcId, sources: sourcesCache })
 }
 
-function askDevice(kind: DeviceAsk['kind'], label: string, origin: string, devices: { id: string; name: string }[], done: (deviceId: string) => void): void {
+function askDevice(kind: DeviceAsk['kind'], label: string, origin: string, devices: { id: string; name: string }[], done: (deviceId: string) => void, wcId?: number): void {
   // Пустой список — спрашивать не о чем: отказ сразу (страница покажет обычную ошибку).
   if (!devices.length) return done('')
-  const ask: DeviceAsk = { id: 'v' + randomUUID(), kind, label, origin, devices }
+  const ask: DeviceAsk = { id: 'v' + randomUUID(), kind, label, origin, devices, wcId }
   deviceAsks.set(ask.id, { ask, done })
   hooks.ui('device-ask', ask)
 }
@@ -105,7 +106,8 @@ export function initDevices(partition: string, h: Hooks): void {
         })
         askDisplay(request.securityOrigin, request.audioRequested, (video) =>
           // Звук системы (loopback) умеет только Windows; на Mac демонстрация пойдёт без звука.
-          callback(video ? { video, audio: request.audioRequested && process.platform === 'win32' ? 'loopback' : undefined } : null)
+          callback(video ? { video, audio: request.audioRequested && process.platform === 'win32' ? 'loopback' : undefined } : null),
+          request.frame ? webContents.fromFrame(request.frame)?.id : undefined
         )
       })
       .catch(() => callback(null))
@@ -125,46 +127,50 @@ export function initDevices(partition: string, h: Hooks): void {
       return ''
     }
   }
-  ses.on('select-usb-device', (_e, details, callback) =>
-    askDevice('usb', 'USB-устройства', hostOf(details.frame), details.deviceList.map((d) => ({ id: d.deviceId, name: d.productName || 'USB-устройство' })), callback)
-  )
-  ses.on('select-hid-device', (_e, details, callback) =>
-    askDevice('hid', 'HID-устройства', hostOf(details.frame), details.deviceList.map((d) => ({ id: d.deviceId, name: d.name || 'HID-устройство' })), callback)
-  )
-  ses.on('select-serial-port', (_e, portList, wc, callback) =>
-    askDevice('serial', 'Последовательные порты', hostOfContents(wc), portList.map((p) => ({ id: p.portId, name: p.displayName || p.portName || 'Порт' })), (id) => callback(id))
-  )
+  ses.on('select-usb-device', (event, details, callback) => {
+    event.preventDefault()
+    askDevice('usb', 'USB-устройства', hostOf(details.frame), details.deviceList.map((d) => ({ id: d.deviceId, name: d.productName || 'USB-устройство' })), callback, details.frame ? webContents.fromFrame(details.frame)?.id : undefined)
+  })
+  ses.on('select-hid-device', (event, details, callback) => {
+    event.preventDefault()
+    askDevice('hid', 'HID-устройства', hostOf(details.frame), details.deviceList.map((d) => ({ id: d.deviceId, name: d.name || 'HID-устройство' })), callback, details.frame ? webContents.fromFrame(details.frame)?.id : undefined)
+  })
+  ses.on('select-serial-port', (event, portList, wc, callback) => {
+    event.preventDefault()
+    askDevice('serial', 'Последовательные порты', hostOfContents(wc), portList.map((p) => ({ id: p.portId, name: p.displayName || p.portName || 'Порт' })), (id) => callback(id), wc.id)
+  })
   // Bluetooth спрашивает само содержимое, а не сессия: вешаем на каждую вкладку и окно.
   app.on('web-contents-created', (_e, contents) => {
     contents.on('select-bluetooth-device', (event, devices, callback) => {
       event.preventDefault()
-      askDevice('bluetooth', 'Bluetooth-устройства', hostOfContents(contents), devices.map((d) => ({ id: d.deviceId, name: d.deviceName || 'Устройство' })), (id) => callback(id))
+      askDevice('bluetooth', 'Bluetooth-устройства', hostOfContents(contents), devices.map((d) => ({ id: d.deviceId, name: d.deviceName || 'Устройство' })), (id) => callback(id), contents.id)
     })
   })
 
   // HTTP Basic/Digest/NTLM и прокси: вместо молчаливого отказа — окно логина, как у браузеров.
-  app.on('login', (event, _wc, _details, authInfo, callback) => {
+  app.on('login', (event, wc, _details, authInfo, callback) => {
     // Без хоста (внутренние запросы) не спрашиваем.
     if (!authInfo.host) return
     if (!hooks.hasWindow()) return
-    const meta = { host: authInfo.host + (authInfo.port ? ':' + authInfo.port : ''), realm: authInfo.realm ?? '', proxy: authInfo.isProxy }
+    const meta = { host: authInfo.host + (authInfo.port ? ':' + authInfo.port : ''), realm: authInfo.realm ?? '', proxy: authInfo.isProxy, wcId: wc?.id }
     // Сайт с авторетраем может стучаться много раз в секунду: пока пользователь не ответил,
     // повторные 401 того же realm молча отклоняем — иначе окна входа плодились бы бесконечно.
-    for (const a of [...authAsks.values()]) if (a.meta.host === meta.host && a.meta.realm === meta.realm) return
+    for (const a of [...authAsks.values()]) if (a.meta.host === meta.host && a.meta.realm === meta.realm && a.meta.wcId === meta.wcId) return
     event.preventDefault()
     const id = 'a' + randomUUID()
     authAsks.set(id, { meta, done: (username, password) => callback(username, password) })
     hooks.ui('auth-ask', { id, ...meta })
   })
 
-  ipcMain.handle('devices:asks', () => ({ display: displayList(), device: deviceList(), auth: authList() }))
-  ipcMain.on('display:answer', (_e, id: unknown, sourceId: unknown) => {
-    if (typeof id === 'string') answerDisplay(id, typeof sourceId === 'string' ? sourceId : null)
+  const owns = (sender: WebContents, wcId?: number): boolean => hooks.isUi(sender) && (wcId === undefined || webContents.fromId(wcId)?.hostWebContents === sender)
+  ipcMain.handle('devices:asks', (e) => ({ display: displayList().filter((a) => owns(e.sender, a.wcId)), device: deviceList().filter((a) => owns(e.sender, a.wcId)), auth: authList().filter((a) => owns(e.sender, a.wcId)) }))
+  ipcMain.on('display:answer', (e, id: unknown, sourceId: unknown) => {
+    if (typeof id === 'string' && owns(e.sender, displayAsks.get(id)?.wcId)) answerDisplay(id, typeof sourceId === 'string' ? sourceId : null)
   })
-  ipcMain.on('device:answer', (_e, id: unknown, deviceId: unknown) => {
-    if (typeof id === 'string') answerDevice(id, typeof deviceId === 'string' ? deviceId : undefined)
+  ipcMain.on('device:answer', (e, id: unknown, deviceId: unknown) => {
+    if (typeof id === 'string' && owns(e.sender, deviceAsks.get(id)?.ask.wcId)) answerDevice(id, typeof deviceId === 'string' ? deviceId : undefined)
   })
-  ipcMain.on('auth:answer', (_e, id: unknown, username: unknown, password: unknown) => {
-    if (typeof id === 'string') answerAuth(id, typeof username === 'string' ? username : undefined, typeof password === 'string' ? password : undefined)
+  ipcMain.on('auth:answer', (e, id: unknown, username: unknown, password: unknown) => {
+    if (typeof id === 'string' && owns(e.sender, authAsks.get(id)?.meta.wcId)) answerAuth(id, typeof username === 'string' ? username : undefined, typeof password === 'string' ? password : undefined)
   })
 }

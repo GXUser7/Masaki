@@ -78,6 +78,7 @@ export interface DisplaySource {
 
 /** Просмотр демонстрации: что и чей сайт. */
 export interface DisplayAsk {
+  wcId?: number
   id: string
   origin: string
   audio: boolean
@@ -86,6 +87,7 @@ export interface DisplayAsk {
 
 /** Выбор устройства из списка (USB / HID / последовательный порт / Bluetooth). */
 export interface DeviceAsk {
+  wcId?: number
   id: string
   kind: 'usb' | 'hid' | 'serial' | 'bluetooth'
   label: string
@@ -95,6 +97,7 @@ export interface DeviceAsk {
 
 /** Сайт (или прокси) просит логин и пароль (HTTP Basic/Digest/NTLM). */
 export interface AuthAsk {
+  wcId?: number
   id: string
   host: string
   realm: string
@@ -143,6 +146,12 @@ export interface AddressItem {
   summary: string
   phone: string
   email: string
+  organization: string
+  street: string
+  city: string
+  state: string
+  zip: string
+  country: string
 }
 
 /** Карта в списке: номер показывается только последними цифрами. */
@@ -519,6 +528,7 @@ export interface PasswordItem {
 
 /** Предложение сохранить пароль после входа на сайт (сам пароль остаётся в главном процессе). */
 export interface PasswordOffer {
+  wcId?: number
   id: string
   host: string
   username: string
@@ -552,6 +562,8 @@ export interface AutofillItem {
 
 /** Поле входа на странице получило фокус: где показать список аккаунтов для автозаполнения. */
 export interface AutofillRequest {
+  /** Непрозрачный токен документа, выданный main; не адрес и не id со слов страницы. */
+  frameToken?: string
   rect: { x: number; y: number; w: number; h: number }
   /** devicePixelRatio страницы: вместе с масштабом окна даёт масштаб вкладки. */
   dpr: number
@@ -704,6 +716,8 @@ export interface UpdateState {
 }
 
 export interface MasakiApi {
+  /** Окно установленного сайта: локальная оболочка с webview и теми же диалогами Masaki. */
+  appUrl: string | null
   platform: string
   versions: { electron: string; chrome: string; node: string }
   win: {
@@ -886,7 +900,7 @@ export interface MasakiApi {
     onOffer(cb: (o: PasswordOffer) => void): () => void
     answer(id: string, action: 'save' | 'never' | 'dismiss'): void
     /** Вписать логин и пароль в страницу вкладки (wcId — webContents вкладки). */
-    fill(wcId: number, id: string): void
+    fill(wcId: number, id: string, frameToken?: string): void
     never(): Promise<string[]>
     forgetNever(origin: string): void
     onChanged(cb: () => void): () => void
@@ -917,7 +931,7 @@ export interface MasakiApi {
     saveCard(p: { id?: string; holder?: string; number?: string; exp?: string; nick?: string }): Promise<{ ok: boolean; error?: string }>
     remove(kind: 'address' | 'card', id: string): void
     /** Вписать выбранную запись в поля формы вкладки (wcId — webContents вкладки). */
-    fill(wcId: number, kind: 'address' | 'card', id: string): void
+    fill(wcId: number, kind: 'address' | 'card', id: string, frameToken?: string): void
     onChanged(cb: () => void): () => void
   }
   passkeys: {

@@ -141,8 +141,8 @@ export function pickAutofill(index: number): void {
   const it = af?.req.items[index]
   if (!af || !it) return
   if (it.passkey) window.masaki.passkeys.useConditional(af.wcId, it.id)
-  else if (it.kind) window.masaki.autofill.fill(af.wcId, it.kind, it.id)
-  else window.masaki.passwords.fill(af.wcId, it.id)
+  else if (it.kind) window.masaki.autofill.fill(af.wcId, it.kind, it.id, af.req.frameToken)
+  else window.masaki.passwords.fill(af.wcId, it.id, af.req.frameToken)
   useStore.setState({ autofill: null })
 }
 
@@ -271,7 +271,7 @@ export function PasskeySheet(): React.JSX.Element | null {
 
   const answer = (action: 'ok' | 'cancel' | 'other', account?: string) => (): void => {
     window.masaki.passkeys.answer(p.id, action, account, p.pinRequired && action === 'ok' ? pin : undefined)
-    useStore.setState((s) => ({ pkPrompts: s.pkPrompts.filter((x) => x.id !== p.id) }))
+    // Закрывает main после принятого ответа: неверный PIN должен оставить окно для новой попытки.
   }
   const where = p.synced ? 'на этом компьютере и в вашем шифрованном сейфе на Google Диске' : 'на этом компьютере'
   const title =

@@ -253,14 +253,14 @@ function AuditSection({ rev }: { rev: number }): React.JSX.Element {
 function AddressEditor({ item, onDone }: { item?: AddressItem; onDone: () => void }): React.JSX.Element {
   const [f, setF] = useState<Record<string, string>>({
     name: item?.name ?? '',
-    organization: '',
-    street: '',
-    city: '',
-    state: '',
-    zip: '',
-    country: '',
-    phone: '',
-    email: ''
+    organization: item?.organization ?? '',
+    street: item?.street ?? '',
+    city: item?.city ?? '',
+    state: item?.state ?? '',
+    zip: item?.zip ?? '',
+    country: item?.country ?? '',
+    phone: item?.phone ?? '',
+    email: item?.email ?? ''
   })
   const [err, setErr] = useState<string | null>(null)
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value })
@@ -276,7 +276,7 @@ function AddressEditor({ item, onDone }: { item?: AddressItem; onDone: () => voi
   return (
     <div className="pw-edit">
       <div className="pw-edit-row">{field('name', 'Имя и фамилия')}{field('organization', 'Организация')}</div>
-      <div className="pw-edit-row">{field('street', 'Улица, дом, квартира')}</div>
+      <div className="pw-edit-row"><textarea value={f.street} onChange={(e) => setF({ ...f, street: e.target.value })} placeholder="Улица, дом, квартира" aria-label="Улица, дом, квартира" rows={2} /></div>
       <div className="pw-edit-row">{field('city', 'Город')}{field('state', 'Регион')}{field('zip', 'Индекс')}</div>
       <div className="pw-edit-row">{field('country', 'Страна')}{field('phone', 'Телефон')}{field('email', 'Почта')}</div>
       {err && <p className="err-text">{err}</p>}

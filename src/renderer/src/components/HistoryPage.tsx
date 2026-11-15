@@ -138,7 +138,7 @@ export function HistoryPage(): React.JSX.Element {
   const needle = q.trim().toLowerCase()
   const shown = useMemo(
     () =>
-      history.filter((h) => {
+      [...history].reverse().filter((h) => {
         if (!inPeriod(h.time, period)) return false
         if (needle && !(h.title + ' ' + h.url + ' ' + hostOf(h.url)).toLowerCase().includes(needle)) return false
         return true

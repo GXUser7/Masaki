@@ -17,7 +17,9 @@ import { shapes } from '../lib/shapes'
 import QRCode from 'qrcode'
 import { hostOf } from '../lib/url'
 import { formatBytes } from '../lib/format'
-import { moveTiles, tileKeys, useReorder } from '../lib/reorder'
+import { useReorder } from '../lib/reorder'
+import { favoriteGroups, moveFavoriteGroup } from '../lib/favoriteFolders'
+import { useSiteIcon } from '../lib/iconColor'
 import { useSearchDrop } from '../lib/searchDrop'
 import { openGoogleAccount } from '../lib/googleAccount'
 import { siteCookieDomain } from '../../../shared/site'
@@ -26,7 +28,7 @@ import { actionFor, actionIcon, badgeColor, pressAction, STORE_URL, togglePin, u
 import { tabIdOfWebContents, useStore, wv, type Tab } from '../store'
 import { Icon } from './Icon'
 import { SearchDropHint } from './SearchDropHint'
-import { AddressLabel, Grain, ProgressRing, ShapeTile, TabFav, useHoverOverPage } from './parts'
+import { AddressLabel, Fav, Grain, ProgressRing, ShapeTile, TabFav, useHoverOverPage } from './parts'
 import { LoadFill, MiniPlayer, WinButtons } from './Extras'
 import { openYouCloud } from '../lib/youcloud'
 import { syncHint, syncStatusText } from './SyncSection'
@@ -537,6 +539,11 @@ function TabList(): React.JSX.Element {
   return <div className="tablist">{rows}</div>
 }
 
+function FolderSiteIcon({ item }: { item: { url: string; title: string } }): React.JSX.Element {
+  const { src } = useSiteIcon(item.url)
+  return <Fav favicon={src ?? undefined} url={item.url} title={item.title} />
+}
+
 export function Sidebar(): React.JSX.Element {
   const drop = useSearchDrop()
   const tabs = useStore((s) => s.tabs)
@@ -544,19 +551,22 @@ export function Sidebar(): React.JSX.Element {
   const themed = useStore((s) => s.settings.favThemed)
   // Избранного может быть много (например, после переноса закладок): сначала видны два ряда.
   const [allFavs, setAllFavs] = useState(false)
-  // Папки закладок (как в Chrome): плитки без папки — сверху, дальше по папке на секцию.
-  const [closedFolders, setClosedFolders] = useState<string[]>([])
-  const rootFavs = favorites.filter((f) => !f.folder)
-  const folders: string[] = []
-  for (const f of favorites) if (f.folder && !folders.includes(f.folder)) folders.push(f.folder)
-  const more = rootFavs.length > FAV_SHOWN
-  const shownFavs = more && !allFavs ? rootFavs.slice(0, FAV_SHOWN - 1) : rootFavs
+  const groups = favoriteGroups(favorites)
+  const more = groups.length > FAV_SHOWN
+  const shownFavs = more && !allFavs ? groups.slice(0, FAV_SHOWN - 1) : groups
+  const [folder, setFolder] = useState<{ name: string; left: number; top: number } | null>(null)
   const s = useStore.getState
-  // Тянуть можно среди видимых плиток; они — начало списка, так что номера те же, что в настройках.
-  const rd = useReorder(tileKeys(shownFavs), (from, to) => {
-    const all = s().settings.favorites
-    s().setSettings({ favorites: moveTiles(all.slice(0, shownFavs.length), from, to).concat(all.slice(shownFavs.length)) })
+  const rd = useReorder(shownFavs.map((g) => g.key), (from, to) => {
+    s().setSettings({ favorites: moveFavoriteGroup(s().settings.favorites, from, to) })
   })
+  useEffect(() => {
+    if (!folder) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && !s().menu) setFolder(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [folder])
 
   return (
     <aside className={'glass side' + (drop.active ? ' search-drop' : '')} aria-label="Боковая панель" {...drop.props}>
@@ -588,76 +598,61 @@ export function Sidebar(): React.JSX.Element {
 
       {favorites.length > 0 && (
         <div ref={rd.box} className={'favs' + (allFavs ? ' all' : '') + (rd.dragging !== null ? ' rd-on' : '')} {...rd.boxProps}>
-          {shownFavs.map((f, i) => {
-            const drag = rd.item(i, f.url)
+          {shownFavs.map((g, i) => {
+            const drag = rd.item(i, g.entries.map(({ item }) => item.url).join('\r\n'))
+            const f = g.entries[0]
             return (
               <button
-                key={drag['data-rk']}
+                key={g.key}
                 {...drag}
-                className={'fvt' + (rd.dragging === i ? ' rd-drag' : '')}
-                title={f.title}
-                aria-label={f.title}
-                onClick={() => openFavorite(f.url)}
+                className={'fvt' + (g.folder ? ' fav-folder-tile' : '') + (rd.dragging === i ? ' rd-drag' : '')}
+                title={g.folder ? `${g.folder} · ${g.entries.length}` : f.item.title}
+                aria-label={g.folder ? `Папка «${g.folder}», закладок: ${g.entries.length}` : f.item.title}
+                aria-expanded={g.folder ? folder?.name === g.folder : undefined}
+                onClick={(e) => {
+                  if (!g.folder) return openFavorite(f.item.url)
+                  const r = e.currentTarget.getBoundingClientRect()
+                  setFolder(folder?.name === g.folder ? null : { name: g.folder, left: Math.min(r.right + 10, innerWidth - 310), top: Math.max(12, Math.min(r.top, innerHeight - 320)) })
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault()
-                  openTileMenu(e.clientX, e.clientY, 'favorites', i)
+                  if (!g.folder) openTileMenu(e.clientX, e.clientY, 'favorites', f.index)
                 }}
               >
-                <ShapeTile item={f} index={i} themed={themed} />
+                {g.folder ? <span className="fav-folder-cover">
+                  {g.entries.slice(0, 4).map(({ item, index }) => <FolderSiteIcon key={index} item={item} />)}
+                </span> : <ShapeTile item={f.item} index={f.index} themed={themed} />}
               </button>
             )
           })}
           {more && (
             <button
               className="fvt fvt-more"
-              title={allFavs ? 'Свернуть избранное' : `Ещё ${rootFavs.length - shownFavs.length}`}
-              aria-label={allFavs ? 'Свернуть избранное' : `Показать всё избранное, ещё ${rootFavs.length - shownFavs.length}`}
+              title={allFavs ? 'Свернуть избранное' : `Ещё ${groups.length - shownFavs.length}`}
+              aria-label={allFavs ? 'Свернуть избранное' : `Показать всё избранное, ещё ${groups.length - shownFavs.length}`}
               aria-expanded={allFavs}
               onClick={() => setAllFavs(!allFavs)}
             >
-              <span className="fvt-more-in">{allFavs ? <Icon name="up" /> : '+' + (rootFavs.length - shownFavs.length)}</span>
+              <span className="fvt-more-in">{allFavs ? <Icon name="up" /> : '+' + (groups.length - shownFavs.length)}</span>
             </button>
           )}
         </div>
       )}
 
-      {folders.map((name) => {
-        const items = favorites.filter((f) => f.folder === name)
-        const closed = closedFolders.includes(name)
-        return (
-          <div key={name} className="fav-folder">
-            <button
-              className="fav-folder-h"
-              aria-expanded={!closed}
-              title={closed ? 'Развернуть папку' : 'Свернуть папку'}
-              onClick={() => setClosedFolders(closed ? closedFolders.filter((x) => x !== name) : [...closedFolders, name])}
-            >
-              <Icon name={closed ? 'down' : 'up'} />
-              <span className="fav-folder-n">{name}</span>
-              <i>{items.length}</i>
-            </button>
-            {!closed && (
-              <div className="favs favs-sub">
-                {items.map((f, i) => (
-                  <button
-                    key={f.url + i}
-                    className="fvt"
-                    title={f.title}
-                    aria-label={f.title}
-                    onClick={() => openFavorite(f.url)}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      openTileMenu(e.clientX, e.clientY, 'favorites', favorites.indexOf(f))
-                    }}
-                  >
-                    <ShapeTile item={f} index={i} themed={themed} />
-                  </button>
-                ))}
-              </div>
-            )}
+      {folder && createPortal(<>
+        <button className="pop-scrim" aria-label="Закрыть папку" onClick={() => setFolder(null)} />
+        <div className="glass pop fav-folder-pop" style={{ left: folder.left, top: folder.top }} role="dialog" aria-label={`Папка ${folder.name}`}>
+          <Grain />
+          <div className="fav-folder-heading"><b>{folder.name}</b><button className="ib" aria-label="Закрыть папку" onClick={() => setFolder(null)}><Icon name="close" /></button></div>
+          <div className="favs">
+            {favorites.map((f, index) => f.folder === folder.name && <button key={f.url + index} className="fvt" title={f.title} aria-label={f.title}
+              onClick={() => { setFolder(null); openFavorite(f.url) }}
+              onContextMenu={(e) => { e.preventDefault(); openTileMenu(e.clientX, e.clientY, 'favorites', index) }}>
+              <ShapeTile item={f} index={index} themed={themed} />
+            </button>)}
           </div>
-        )
-      })}
+        </div>
+      </>, document.querySelector('.app') ?? document.body)}
 
       <div className="lbl-row">
         <span className="lbl">Вкладки · {tabs.length}</span>

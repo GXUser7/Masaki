@@ -846,6 +846,7 @@ useStore.subscribe((s, prev) => {
 
 let saveTimer: number | undefined
 useStore.subscribe((s, prev) => {
+  if (window.masaki.appUrl) return
   if (!s.booted || (s.tabs === prev.tabs && s.activeId === prev.activeId && s.groups === prev.groups && s.archive === prev.archive)) return
   window.clearTimeout(saveTimer)
   saveTimer = window.setTimeout(() => {

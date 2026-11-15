@@ -82,13 +82,22 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
     }
     const cred = Object.create(PKC.prototype) as PublicKeyCredential
     const ext = c.clientExtensionResults ?? {}
+    const extensionResults = (): Record<string, unknown> => {
+      const out = JSON.parse(JSON.stringify(ext)) as Record<string, any>
+      if (out.prf?.results) {
+        out.prf.results.first = dec(out.prf.results.first)
+        if (out.prf.results.second) out.prf.results.second = dec(out.prf.results.second)
+      }
+      if (typeof out.largeBlob?.blob === 'string') out.largeBlob.blob = dec(out.largeBlob.blob)
+      return out
+    }
     define(cred, {
       id: c.id,
       rawId: dec(c.rawId),
       type: 'public-key',
       authenticatorAttachment: c.authenticatorAttachment,
       response: resp,
-      getClientExtensionResults: () => JSON.parse(JSON.stringify(ext)),
+      getClientExtensionResults: extensionResults,
       toJSON: () => ({ id: c.id, rawId: c.rawId, type: 'public-key', authenticatorAttachment: c.authenticatorAttachment, clientExtensionResults: ext, response: json })
     })
     return cred
@@ -189,7 +198,7 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
     let payload: Record<string, unknown>
     try {
       const ext = (pk.extensions ?? {}) as {
-        prf?: { eval?: { first?: BufferSource; second?: BufferSource } }
+        prf?: { eval?: { first?: BufferSource; second?: BufferSource }; evalByCredential?: Record<string, { first: BufferSource; second?: BufferSource }> }
         largeBlob?: { read?: boolean; write?: BufferSource }
       }
       payload = {
@@ -200,8 +209,13 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
           rpId: pk.rpId,
           allowCredentials: descs(pk.allowCredentials),
           userVerification: pk.userVerification,
-          ...(ext.prf?.eval ? { extensions: { prf: { eval: { first: enc(ext.prf.eval.first), second: ext.prf.eval.second ? enc(ext.prf.eval.second) : undefined } } } } : {}),
-          ...(ext.largeBlob ? { extensions: { largeBlob: { read: ext.largeBlob.read, ...(ext.largeBlob.write ? { write: enc(ext.largeBlob.write) } : {}) } } } : {})
+          extensions: {
+            ...(ext.prf ? { prf: {
+              ...(ext.prf.eval ? { eval: { first: enc(ext.prf.eval.first), second: ext.prf.eval.second ? enc(ext.prf.eval.second) : undefined } } : {}),
+              ...(ext.prf.evalByCredential ? { evalByCredential: Object.fromEntries(Object.entries(ext.prf.evalByCredential).map(([id, e]) => [id, { first: enc(e.first), ...(e.second ? { second: enc(e.second) } : {}) }])) } : {})
+            } } : {}),
+            ...(ext.largeBlob ? { largeBlob: { read: ext.largeBlob.read, ...(ext.largeBlob.write ? { write: enc(ext.largeBlob.write) } : {}) } } : {})
+          }
         }
       }
     } catch (e) {
@@ -232,20 +246,31 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
           passkeyPlatformAuthenticator: true,
           userVerifyingPlatformAuthenticator: true,
           prf: true,
-          largeBlob: true
+          largeBlob: true,
+          'extension:prf': true,
+          'extension:largeBlob': true
         }))
     )
   }
-  // Signal API: сервер сообщает, что ключ(и) у него больше не те, — менеджер сверяет свой сейф,
-  // чтобы список у поля не предлагал удалённый на сайте ключ. Ничего не возвращают (void).
-  const signal = (data: Record<string, unknown>): void => void bridge('signal', JSON.stringify(data)).catch(() => undefined)
-  method(PKC, 'signalUnknownCredential', (d: { rpId?: string; credentialId?: unknown }) => {
-    if (d && d.credentialId) signal({ kind: 'unknown', rpId: d.rpId, credentialId: enc(d.credentialId) })
+  // Signal API принимает строки base64url, в отличие от create/get, и возвращает Promise<void>.
+  const encodedId = (v: unknown): string => {
+    if (typeof v !== 'string' || !/^[A-Za-z0-9_-]+$/.test(v) || enc(dec(v)) !== v) throw new TypeError('Expected a base64url string.')
+    return v
+  }
+  const signal = async (data: Record<string, unknown>): Promise<void> => {
+    if (typeof data.rpId !== 'string' || !data.rpId) throw new TypeError('rpId is required.')
+    const r = JSON.parse(await bridge('signal', JSON.stringify(data))) as { ok?: boolean; name?: string; message?: string }
+    if (!r.ok) throw r.name === 'TypeError' ? new TypeError(r.message) : new DOMException(r.message, r.name ?? 'SecurityError')
+  }
+  method(PKC, 'signalUnknownCredential', async (d: { rpId: string; credentialId: string }) => {
+    await signal({ kind: 'unknown', rpId: d?.rpId, credentialId: encodedId(d?.credentialId) })
   })
-  method(PKC, 'signalAllAcceptedCredentials', (d: { rpId?: string; userId?: unknown; allAcceptedCredentialIds?: unknown }) => {
-    if (d) signal({ kind: 'all', rpId: d.rpId, userId: enc(d.userId), allAcceptedCredentialIds: descs(d.allAcceptedCredentialIds) })
+  method(PKC, 'signalAllAcceptedCredentials', async (d: { rpId: string; userId: string; allAcceptedCredentialIds: string[] }) => {
+    if (!Array.isArray(d?.allAcceptedCredentialIds)) throw new TypeError('allAcceptedCredentialIds is required.')
+    await signal({ kind: 'all', rpId: d.rpId, userId: encodedId(d.userId), allAcceptedCredentialIds: d.allAcceptedCredentialIds.map(encodedId) })
   })
-  method(PKC, 'signalCurrentUserDetails', (d: { rpId?: string; userHandle?: unknown; name?: string; displayName?: string }) => {
-    if (d) signal({ kind: 'user', rpId: d.rpId, userHandle: enc(d.userHandle), name: d.name ?? '', displayName: d.displayName ?? '' })
+  method(PKC, 'signalCurrentUserDetails', async (d: { rpId: string; userId: string; name: string; displayName: string }) => {
+    if (typeof d?.name !== 'string' || typeof d?.displayName !== 'string') throw new TypeError('name and displayName are required.')
+    await signal({ kind: 'user', rpId: d.rpId, userId: encodedId(d.userId), name: d.name, displayName: d.displayName })
   })
 }

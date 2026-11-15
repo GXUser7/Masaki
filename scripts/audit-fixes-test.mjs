@@ -33,7 +33,7 @@ const site = http.createServer((req, res) => {
               pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
               extensions: { prf: { eval: { first: raw('c2FsdDFzYWx0MQ==') } } }
             }})
-            show({ step: 'created', id: c.id, prf: c.getClientExtensionResults().prf })
+            show({ step: 'created', id: c.id, prf: c.toJSON().clientExtensionResults.prf })
           } catch (e) { show('create ERR ' + e.name) }
         }
         async function get(salt, allow) {
@@ -43,11 +43,11 @@ const site = http.createServer((req, res) => {
               allowCredentials: allow ? [{ type: 'public-key', id: raw(allow) }] : [],
               extensions: { prf: { eval: { first: raw(salt) } } }
             }})
-            show({ step: 'got', prf: c.getClientExtensionResults().prf })
+            show({ step: 'got', prf: c.toJSON().clientExtensionResults.prf })
           } catch (e) { show('get ERR ' + e.name) }
         }
         async function signal(id) {
-          PublicKeyCredential.signalUnknownCredential({ rpId: location.hostname, credentialId: raw(id) })
+          await PublicKeyCredential.signalUnknownCredential({ rpId: location.hostname, credentialId: id })
           show('signaled')
         }
       </script>`))
@@ -214,12 +214,12 @@ try {
     await clickOk()
     await waitFor(async () => (await out()).includes('got'), 'вход по ключу')
     const same = JSON.parse(await out())
-    assert.equal(same.prf.first, r1.prf.first, 'PRF от того же salt совпадает')
+    assert.equal(same.prf.results.first, r1.prf.results.first, 'PRF от того же salt совпадает')
     await guest(`get('c2FsdDJzYWx0MQ==', '${r1.id}'); null`)
     await clickOk()
     await waitFor(async () => (await out()).includes('got'), 'второй вход')
     const diff = JSON.parse(await out())
-    assert.notEqual(diff.prf.first, r1.prf.first, 'PRF от другого salt другой')
+    assert.notEqual(diff.prf.results.first, r1.prf.results.first, 'PRF от другого salt другой')
     await guest(`signal('${r1.id}')`)
     await waitFor(async () => (await out()).includes('signaled'), 'сигнал ушёл')
     await guest(`get('c2FsdDFzYWx0MQ==', ''); null`)

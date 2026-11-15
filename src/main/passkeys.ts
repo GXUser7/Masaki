@@ -236,6 +236,7 @@ interface GetOpts {
   challenge: Buffer
   allow: Desc[]
   prfEval?: PrfEval
+  prfByCredential?: Record<string, PrfEval>
   largeBlobRead?: boolean
   largeBlobWrite?: Buffer
 }
@@ -244,6 +245,7 @@ interface Req {
   key: string
   reqId: string
   wc: WebContents
+  frame?: Electron.WebFrameMain
   kind: 'create' | 'get'
   conditional: boolean
   origin: string
@@ -270,7 +272,7 @@ function finish(r: Req, res: Result): void {
   reqs.delete(r.key)
   clearTimeout(r.timer)
   if (r.prompt) hooks.ui('passkey-prompt-close', r.prompt.id)
-  if (r.conditional && !r.wc.isDestroyed()) r.wc.send('pk:conditional-changed')
+  if (r.conditional && !r.wc.isDestroyed()) (r.frame ?? r.wc).send('pk:conditional-changed')
   r.done(res)
 }
 
@@ -282,7 +284,7 @@ function watch(wc: WebContents): void {
     for (const r of [...reqs.values()]) if (r.wc === wc) finish(r, notAllowed())
   }
   wc.on('did-start-navigation', (d) => {
-    if (d.isMainFrame && !d.isSameDocument) drop()
+    if (!d.isSameDocument) drop()
   })
   wc.once('destroyed', drop)
 }
@@ -327,20 +329,22 @@ function parseCreate(pk: Record<string, unknown>): CreateOpts | Fail {
     exclude,
     crossPlatform: sel.authenticatorAttachment === 'cross-platform',
     credProps: ext.credProps === true,
-    prf: prf === true || (typeof prf === 'object' && !!prf?.eval),
+    prf: prf === true || (typeof prf === 'object' && prf !== null),
     prfEval: prfEvalOf(typeof prf === 'object' && prf ? prf.eval : undefined),
     largeBlob: blob?.support === 'required' ? 'required' : blob?.support === 'preferred' ? 'preferred' : undefined,
     largeBlobWrite: blob?.write ? (unb64u(blob.write, MAX_BLOB) ?? undefined) : undefined
   }
 }
 
-/** PRF-оценки сайта: два salt по 64 байта максимум (стандарт ограничивает первым и вторым). */
+/** Сайт передаёт произвольный salt; клиент хэширует его с доменом WebAuthn PRF перед HMAC. */
 function prfEvalOf(v: unknown): PrfEval | undefined {
   if (!v || typeof v !== 'object') return undefined
   const e = v as { first?: unknown; second?: unknown }
-  const first = unb64u(e.first, 64)
+  const first = unb64u(e.first, 64 * 1024)
   if (!first) throw new TypeError('Неверный salt для PRF.')
-  return { first, second: unb64u(e.second, 64) ?? undefined }
+  const second = e.second === undefined ? undefined : unb64u(e.second, 64 * 1024)
+  if (second === null) throw new TypeError('Неверный второй salt для PRF.')
+  return { first, second }
 }
 
 const MAX_BLOB = 1024 * 1024
@@ -350,13 +354,22 @@ function parseGet(pk: Record<string, unknown>): GetOpts | Fail {
   const allow = descs(pk.allowCredentials)
   if (!challenge || !allow) return fail('TypeError', 'Неверные параметры входа.')
   const ext = (pk.extensions ?? {}) as Record<string, unknown>
-  const prf = ext.prf as { eval?: unknown } | undefined
+  const prf = ext.prf as { eval?: unknown; evalByCredential?: Record<string, unknown> } | undefined
   const blob = ext.largeBlob as { read?: unknown; write?: unknown } | undefined
   try {
+    if (blob?.read && blob?.write !== undefined) return fail('NotSupportedError', 'largeBlob: нельзя читать и писать одновременно.')
+    if (blob?.write !== undefined && allow.length !== 1) return fail('NotSupportedError', 'Для записи largeBlob нужен один ключ.')
+    const byCredential: Record<string, PrfEval> = {}
+    for (const [id, value] of Object.entries(prf?.evalByCredential ?? {})) {
+      if (!allow.some((d) => b64u(d.id) === id)) return fail('SyntaxError', 'PRF: ключ отсутствует в allowCredentials.')
+      const ev = prfEvalOf(value)
+      if (ev) byCredential[id] = ev
+    }
     return {
       challenge,
       allow,
       prfEval: prfEvalOf(prf?.eval),
+      prfByCredential: byCredential,
       largeBlobRead: blob?.read === true,
       largeBlobWrite: blob?.write ? (unb64u(blob.write, MAX_BLOB) ?? undefined) : undefined
     }
@@ -365,8 +378,11 @@ function parseGet(pk: Record<string, unknown>): GetOpts | Fail {
   }
 }
 
-const clientData = (type: string, challenge: Buffer, origin: string): Buffer =>
-  Buffer.from(JSON.stringify({ type, challenge: b64u(challenge), origin, crossOrigin: false }))
+const clientData = (type: string, challenge: Buffer, r: Req): Buffer => {
+  let crossOrigin = false
+  for (let parent = r.frame?.parent; parent; parent = parent.parent) if (parent.origin !== r.origin) crossOrigin = true
+  return Buffer.from(JSON.stringify({ type, challenge: b64u(challenge), origin: r.origin, crossOrigin, ...(crossOrigin ? { topOrigin: r.frame?.top?.origin ?? r.wc.mainFrame.origin } : {}) }))
+}
 
 /** Флаги authenticatorData: UP — пользователь здесь, UV — подтвердил, BE/BS — ключ синхронизируемый. */
 function flags(attested: boolean): number {
@@ -381,7 +397,7 @@ function account(k: Passkey): PasskeyPrompt['accounts'][number] {
  * Запрос страницы (op: create | get | abort). Ответ — JSON для скрипта страницы: готовые данные
  * ключа, ошибка WebAuthn или fallback — отдать запрос встроенному WebAuthn (ключ безопасности).
  */
-export function request(wc: WebContents, origin: string | undefined, op: string, json: string): Promise<string> {
+export function request(wc: WebContents, origin: string | undefined, op: string, json: string, frame?: Electron.WebFrameMain): Promise<string> {
   return new Promise((resolve) => {
     const reply = (r: Result): void => resolve(JSON.stringify(r))
     let msg: Record<string, unknown>
@@ -416,7 +432,7 @@ export function request(wc: WebContents, origin: string | undefined, op: string,
       if (r.wc === wc) finish(r, fail('AbortError', 'Запрос заменён новым.'))
     }
 
-    const r: Req = { key, reqId, wc, kind: op, conditional, origin, rpId, candidates: [], done: reply }
+    const r: Req = { key, reqId, wc, frame, kind: op, conditional, origin, rpId, candidates: [], done: reply }
     if (op === 'create') {
       const o = parseCreate(pk)
       if ('ok' in o) return reply(o)
@@ -436,7 +452,7 @@ export function request(wc: WebContents, origin: string | undefined, op: string,
     watch(wc)
     if (conditional) {
       // Запрос часто начинается после фокуса/загрузки настроек сайта: обновляем уже открытое поле.
-      wc.send('pk:conditional-changed')
+      ;(frame ?? wc).send('pk:conditional-changed')
       // Ждёт выбора в списке у поля входа — дольше обычного, но не вечно: SPA-переход не всегда
       // замечается навигацией, а забытый запрос держал бы вкладку «входящей» до закрытия.
       r.timer = setTimeout(() => finish(r, notAllowed()), 30 * 60_000)
@@ -481,7 +497,7 @@ async function doCreate(r: Req): Promise<Result> {
     coseKey(o.alg, publicKey)
   ])
   const attestation = cbor({ map: [['fmt', 'none'], ['attStmt', { map: [] }], ['authData', authData]] })
-  const cd = clientData('webauthn.create', o.challenge, r.origin)
+  const cd = clientData('webauthn.create', o.challenge, r)
   const now = Date.now()
   const userHandle = b64u(o.user.id)
   // Тот же пользователь на том же сайте — новый ключ заменяет старый (так требует WebAuthn).
@@ -508,7 +524,7 @@ async function doCreate(r: Req): Promise<Result> {
   const id = b64u(credId)
   const ext: Record<string, unknown> = {}
   if (o.credProps) ext.credProps = { rk: true }
-  if (o.prf) ext.prf = o.prfEval && prfSecret ? prfResults(prfSecret, o.prfEval) : {}
+  if (o.prf) ext.prf = { enabled: true, ...(o.prfEval && prfSecret ? { results: prfResults(prfSecret, o.prfEval) } : {}) }
   if (o.largeBlob) ext.largeBlob = { supported: true, ...(o.largeBlobWrite ? { written: true } : {}) }
   return {
     ok: true,
@@ -529,9 +545,9 @@ async function doCreate(r: Req): Promise<Result> {
   }
 }
 
-/** Вывод PRF: HMAC-SHA256 от секрета ключа и salt сайта (RFC 9413). */
+/** Доменное разделение PRF не даёт сайтам использовать HMAC вне WebAuthn. */
 const prfResults = (secret: Buffer, e: PrfEval): { first: string; second?: string } => {
-  const hmac = (salt: Buffer): string => b64u(crypto.createHmac('sha256', secret).update(salt).digest())
+  const hmac = (salt: Buffer): string => b64u(crypto.createHmac('sha256', secret).update(sha256(Buffer.concat([Buffer.from('WebAuthn PRF\0'), salt]))).digest())
   return { first: hmac(e.first), ...(e.second ? { second: hmac(e.second) } : {}) }
 }
 
@@ -549,18 +565,20 @@ function doGet(r: Req, k: Passkey): Result {
   // PRF и largeBlob идут только к ключу того сайта, что и сам вход.
   if (o.largeBlobWrite) {
     k.blob = b64u(o.largeBlobWrite)
-    file.write(data, 1000)
+    k.t = Math.max(Date.now(), k.t + 1)
+    persist()
   }
   const authData = Buffer.concat([sha256(r.rpId), Buffer.from([flags(false)]), u32(0)])
-  const cd = clientData('webauthn.get', o.challenge, r.origin)
+  const cd = clientData('webauthn.get', o.challenge, r)
   const sig = sign(k, Buffer.concat([authData, sha256(cd)]))
   if (!sig) return fail('NotAllowedError', 'Ключ не расшифровался — он создан под другой учётной записью Windows.')
   k.used = Date.now()
   file.write(data, 1000)
   const ext: Record<string, unknown> = {}
   const secret = prfSecretOf(k)
-  if (o.prfEval) ext.prf = secret ? prfResults(secret, o.prfEval) : {}
-  if (o.largeBlobRead && k.blob) ext.largeBlob = { blob: k.blob }
+  const evaluation = o.prfByCredential?.[k.credId] ?? o.prfEval
+  if (evaluation) ext.prf = secret ? { results: prfResults(secret, evaluation) } : {}
+  if (o.largeBlobRead) ext.largeBlob = { blob: k.blob ?? null }
   if (o.largeBlobWrite) ext.largeBlob = { written: true }
   return {
     ok: true,
@@ -583,15 +601,16 @@ function doGet(r: Req, k: Passkey): Result {
 export function answer(promptId: string, action: 'ok' | 'cancel' | 'other', recordId?: string, pin?: string): void {
   const r = reqs.get(String(promptId))
   if (!r || r.conditional) return
+  if (r.frame && (r.frame.detached || r.frame.origin !== r.origin)) return finish(r, notAllowed())
   if (action === 'cancel') return finish(r, notAllowed())
   if (action === 'other') return finish(r, { fallback: true })
-  if (r.pinRequired && !verifyPin(pin)) {
+  if (r.prompt?.kind === 'exists') return finish(r, fail('InvalidStateError', 'Ключ доступа для этого аккаунта уже есть.'))
+  if (r.prompt?.kind === 'none') return finish(r, notAllowed())
+  if (data.pin && !verifyPin(pin)) {
     // Окно остаётся: интерфейс покажет «неверный PIN», можно попробовать снова.
     hooks.ui('passkey-pin-wrong', r.prompt?.id)
     return
   }
-  if (r.prompt?.kind === 'exists') return finish(r, fail('InvalidStateError', 'Ключ доступа для этого аккаунта уже есть.'))
-  if (r.prompt?.kind === 'none') return finish(r, notAllowed())
   if (r.kind === 'create') {
     // RSA-ключ создаётся до секунды — асинхронно. Ответ нужен ровно один, поэтому снимаем запрос со
     // учёта (навигация и новый запрос его больше не тронут) и доставляем результат, когда готов.
@@ -628,12 +647,13 @@ function signal(origin: string, msg: Record<string, unknown>): Result {
     for (const k of live()) if (k.rpId === rpId && k.credId === b64u(credId)) markDeleted(k)
   } else if (kind === 'all') {
     const userHandle = str(msg.userId, 512)
-    const accepted = descs(msg.allAcceptedCredentialIds)
-    if (!accepted) return fail('TypeError', 'Неверный список ключей.')
-    const keep = new Set(accepted.map((d) => b64u(d.id)))
+    if (!Array.isArray(msg.allAcceptedCredentialIds)) return fail('TypeError', 'Неверный список ключей.')
+    const accepted = msg.allAcceptedCredentialIds.map((id) => unb64u(id, 1023))
+    if (accepted.some((id) => !id)) return fail('TypeError', 'Неверный список ключей.')
+    const keep = new Set(accepted.map((id) => b64u(id!)))
     for (const k of live()) if (k.rpId === rpId && k.userHandle === userHandle && !keep.has(k.credId)) markDeleted(k)
   } else if (kind === 'user') {
-    const userHandle = str(msg.userHandle, 512)
+    const userHandle = str(msg.userId, 512)
     for (const k of live())
       if (k.rpId === rpId && k.userHandle === userHandle) Object.assign(k, { userName: str(msg.name, 200), displayName: str(msg.displayName, 200), t: now })
   } else return fail('TypeError', 'Неизвестный вид сигнала.')
@@ -647,8 +667,8 @@ export function prompts(): PasskeyPrompt[] {
 }
 
 /** Ключи для списка автозаполнения — если страница ждёт вход по ключу (mediation: conditional). */
-export function conditionalItems(wc: WebContents): AutofillItem[] {
-  const r = [...reqs.values()].find((x) => x.wc === wc && x.conditional)
+export function conditionalItems(wc: WebContents, frame?: Electron.WebFrameMain): AutofillItem[] {
+  const r = [...reqs.values()].find((x) => x.wc === wc && x.conditional && (!frame || x.frame === frame))
   if (!r) return []
   return r.candidates.filter((k) => !k.deleted).map((k) => ({ id: k.id, username: k.userName || k.displayName, host: r.rpId, passkey: true }))
 }
@@ -658,8 +678,16 @@ export function useConditional(wc: WebContents, recordId: string): void {
   const r = [...reqs.values()].find((x) => x.wc === wc && x.conditional)
   const k = r?.candidates.find((x) => x.id === recordId && !x.deleted)
   if (!r || !k) return
+  if (data.pin) {
+    r.conditional = false
+    r.pinRequired = true
+    r.candidates = [k]
+    r.prompt = { id: r.key, wcId: wc.id, kind: 'get', rpId: r.rpId, accounts: [account(k)], synced: hooks.backedUp(), pinRequired: true }
+    hooks.ui('passkey-prompt', r.prompt)
+    return
+  }
   finish(r, doGet(r, k))
-  if (!wc.isDestroyed()) wc.send('pk:used')
+  if (!wc.isDestroyed()) (r.frame ?? wc).send('pk:used')
 }
 
 // ---------- Менеджер ----------

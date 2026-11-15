@@ -7126,35 +7126,6 @@ svg[data-ic='history'] > path {
   color: var(--on-sc);
 }
 
-/* Папки закладок в панели: заголовок-чип и ряд плиток папки. */
-.fav-folder { margin-top: 8px; }
-.fav-folder-h {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 10px;
-  border-radius: var(--r-s);
-  font-size: 12px;
-  color: var(--tc);
-  transition: background var(--spring);
-}
-.fav-folder-h:hover { background: var(--sc); }
-.fav-folder-h svg { width: 16px; height: 16px; flex: none; }
-.fav-folder-n {
-  flex: 1;
-  text-align: left;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-weight: 600;
-}
-.fav-folder-h i {
-  font-style: normal;
-  font-size: 11px;
-  opacity: 0.6;
-}
-.favs-sub { margin-top: 2px; }
 .sc-folder {
   width: 110px;
   flex: none;
@@ -7193,3 +7164,16 @@ svg[data-ic='history'] > path {
 .sc-ic { width: 20px; height: 20px; border-radius: 6px; object-fit: contain; flex: none; }
 /* Незавершённый файл ещё нельзя открыть, но прогресс и состояние паузы должны читаться полностью. */
 .dlp-row.live .dlp-main:disabled { opacity: 1; }
+.fav-folder-cover { width: 50px; height: 50px; border-radius: var(--r-m); padding: 6px; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 3px; background: var(--sc); box-shadow: inset 0 0 0 1px var(--glass-line); transition: border-radius .45s var(--spring), transform .45s var(--spring); }
+.fav-folder-cover .fav { width: 17px; height: 17px; min-width: 0; font-size: 10px; }
+.fav-folder-cover .fav img { width: 13px; height: 13px; }
+.fvt .fav-folder-cover b { font-size: 10px; }
+.fav-folder-tile:hover .fav-folder-cover { border-radius: var(--r-s); transform: scale(1.06); }
+.fav-folder-pop { width: min(300px, calc(100vw - 24px)); bottom: auto; max-height: min(60vh, 480px); overflow-x: hidden; }
+.fav-folder-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 10px; }
+.fav-folder-heading b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-mode .side-wrap, .app-mode .capz { display: none; }
+.app.app-mode .lay { padding: 0; gap: 0; }
+.app-mode .stage > .card { border: 0; border-radius: 0; }
+.pw-edit-row > textarea { width: 100%; padding: 10px 14px; border: 0; border-radius: var(--r-s); background: var(--glass-hi); color: var(--on-surface); font: inherit; resize: vertical; }
+@media (prefers-reduced-motion: reduce) { .fav-folder-cover { transition: none; } }

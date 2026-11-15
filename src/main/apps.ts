@@ -6,7 +6,7 @@
 // Обработчики протоколов: сайт просит navigator.registerProtocolHandler('web+…', '…?%s') —
 // запоминаем, и ссылки на эту схему открываются на сайте-обработчике.
 
-import { BrowserWindow, app, ipcMain, type WebContents } from 'electron'
+import { app, ipcMain, type BrowserWindow, type WebContents } from 'electron'
 import { execFile } from 'child_process'
 import crypto from 'crypto'
 import path from 'path'
@@ -23,6 +23,7 @@ interface AppRec {
 }
 
 interface Hooks {
+  createWindow(url: string, name: string): BrowserWindow
   /** Открыть адрес вкладкой в главном окне (ссылки и новые окна из приложения). */
   openTab(url: string): void
   /** Запрос из окна интерфейса Masaki (не из приложения и не из страницы). */
@@ -34,7 +35,6 @@ const handlersFile = new JsonFile<{ v: 1; handlers: WebHandler[] }>('protocol-ha
 let apps: AppRec[] = []
 let handlers: WebHandler[] = []
 let hooks: Hooks
-let partition = ''
 let exePath = ''
 
 const load = async (): Promise<void> => {
@@ -57,37 +57,7 @@ const cleanName = (name: string): string => name.replace(/[\\/:*?"<>|]+/g, ' ').
 /** Окно приложения: сайт в собственной рамке, куки и входы — общей сессии вкладок. */
 export function openAppWindow(rec: { url: string; name?: string }): BrowserWindow {
   const name = cleanName(rec.name ?? '') || new URL(rec.url).hostname
-  const win = new BrowserWindow({
-    width: 1200,
-    height: 820,
-    minWidth: 420,
-    minHeight: 320,
-    title: name,
-    autoHideMenuBar: true,
-    backgroundColor: '#ffffff',
-    show: false,
-    webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false }
-  })
-  win.once('ready-to-show', () => !process.env.MASAKI_TEST_HEADLESS && win.show())
-  // Сессионные preload'ы (guest, popup, tab-lifecycle) применяются сами: у окна сессия вкладок.
-  win.webContents.on('page-title-updated', (_e, title) => win.setTitle(`${title} — ${name}`))
-  // Ссылки уходят вкладками главного окна, как у Chrome: приложение живёт на своём адресе.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    hooks.openTab(url)
-    return { action: 'deny' }
-  })
-  win.webContents.on('will-navigate', (e, url) => {
-    try {
-      if (new URL(url).origin !== new URL(win.webContents.getURL()).origin) {
-        e.preventDefault()
-        hooks.openTab(url)
-      }
-    } catch {
-      e.preventDefault()
-      hooks.openTab(url)
-    }
-  })
-  void win.loadURL(rec.url)
+  const win = hooks.createWindow(rec.url, name)
   return win
 }
 
@@ -155,11 +125,10 @@ function createShortcut(rec: AppRec): Promise<{ ok: boolean; error?: string }> {
   })
 }
 
-export function initApps(partitionName: string, h: Hooks): void {
-  partition = partitionName
+export async function initApps(_partitionName: string, h: Hooks): Promise<void> {
   hooks = h
   exePath = process.execPath
-  void load()
+  await load()
   const fromUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => h.isUi(e.sender)
 
   ipcMain.handle('apps:list', (e) => (fromUi(e) ? listApps() : []))

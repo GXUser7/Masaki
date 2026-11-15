@@ -60,8 +60,17 @@ function persist(): void {
   file.write(data, 200)
   hooks.ui('passwords-changed')
   // Вкладки перечитают список аккаунтов для автозаполнения.
-  for (const wc of webContents.getAllWebContents()) if (wc.getType() === 'webview' && !wc.isDestroyed()) wc.send('pw:changed')
+  notifyFrames()
   hooks.changed()
+}
+
+function notifyFrames(): void {
+  for (const wc of webContents.getAllWebContents()) {
+    if (wc.getType() !== 'webview' || wc.isDestroyed()) continue
+    for (const frame of wc.mainFrame.framesInSubtree) {
+      try { if (!frame.detached) frame.send('pw:changed') } catch { /* документ сменился */ }
+    }
+  }
 }
 
 const encrypt = (pw: string): string => safeStorage.encryptString(pw).toString('base64')
@@ -153,7 +162,7 @@ export function audit(): PasswordAudit {
   }
   const reused: PasswordAuditItem[] = []
   for (const same of byValue.values()) {
-    if (same.length < 2 || siteOf(same[0].origin) !== siteOf(same[1].origin)) continue
+    if (new Set(same.map((l) => siteOf(l.origin))).size < 2) continue
     reused.push(...same.map((l) => ({ ...auditItem(l), reused: true })))
   }
   const year = 365 * 24 * 60 * 60_000
@@ -165,7 +174,7 @@ export function audit(): PasswordAudit {
 
 /** Экспорт CSV (как в Chrome: пользователь сам попросил и сам выбрал файл). Пароли — открытым текстом. */
 export function exportTo(file: string): { ok: boolean; error?: string; count?: number } {
-  const esc = (v: string): string => (/^[=+@-]/.test(v) ? "'" : '') + v.replace(/"/g, '""')
+  const esc = (v: string): string => '"' + v.replace(/"/g, '""') + '"'
   const lines = ['name,url,username,password,note']
   let count = 0
   for (const l of live()) {
@@ -418,16 +427,17 @@ export function matchesFor(origin: string | undefined): AutofillRequest['items']
 }
 
 /** Вписать логин и пароль во вкладку — только если она всё ещё на том же сайте. */
-export function fill(wc: WebContents, id: string): void {
+export function fill(wc: WebContents, id: string, frame?: Electron.WebFrameMain): void {
   const l = live().find((x) => x.id === id)
   if (!l || wc.isDestroyed()) return
-  const origin = wc.mainFrame.origin
+  const origin = (frame ?? wc.mainFrame).origin
   if (!matchesFor(origin).some((m) => m.id === id)) return
   const password = decrypt(l)
   if (password === null) return
   l.used = Date.now()
   file.write(data, 1000)
-  wc.send('pw:fill', { username: l.username, password })
+  if (frame) frame.send('pw:fill', { username: l.username, password })
+  else wc.send('pw:fill', { username: l.username, password })
 }
 
 // ---------- Предложение сохранить ----------
@@ -465,7 +475,7 @@ export function onSubmit(wc: WebContents, origin: string | undefined, d: { usern
   for (const [id, p] of pending) if (now - p.at > 15 * 60_000) pending.delete(id)
   const prev = [...pending.values()].find((p) => p.wcId === wc.id && p.origin === origin)
   const id = prev?.offer.id ?? crypto.randomBytes(6).toString('hex')
-  const offer: PasswordOffer = { id, host: hostOf(origin), username, update: !!existing }
+  const offer: PasswordOffer = { id, wcId: wc.id, host: hostOf(origin), username, update: !!existing }
   pending.set(id, { offer, origin, password: d.password, wcId: wc.id, at: now })
   hooks.ui('passwords-offer', offer)
 }
@@ -560,5 +570,5 @@ export function syncApply(items: PlainLogin[]): void {
   if (!changed) return
   file.write(data, 200)
   hooks.ui('passwords-changed')
-  for (const wc of webContents.getAllWebContents()) if (wc.getType() === 'webview' && !wc.isDestroyed()) wc.send('pw:changed')
+  notifyFrames()
 }
