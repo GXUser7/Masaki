@@ -410,6 +410,71 @@ function AutofillSection(): React.JSX.Element {
   )
 }
 
+/** Строка «PIN-код» в разделе ключей: окно подтверждения спрашивает его, если задан. */
+function PinRow(): React.JSX.Element {
+  const [set, setSet] = useState<boolean | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [a, setA] = useState('')
+  const [b, setB] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    void window.masaki.passkeys.pinSet().then(setSet)
+  }, [])
+  if (set === null) return <p className="hint">…</p>
+  const save = (): void => {
+    if (a !== b) return setErr('PIN не совпал')
+    void window.masaki.passkeys.setPin(a).then((r) => {
+      if (r.ok) {
+        setSet(!!a)
+        setEditing(false)
+        setA('')
+        setB('')
+        setErr(null)
+      } else setErr(r.error ?? 'Не получилось')
+    })
+  }
+  return (
+    <div className="pw-row">
+      <span className="fav fv4">
+        <Icon name="lock" />
+      </span>
+      <span className="pw-t">
+        <b>PIN-код ключей</b>
+        <small>{set ? 'Перед каждым подтверждением окно спросит PIN' : 'Дополнительное подтверждение перед созданием и входом по ключу'}</small>
+      </span>
+      {editing ? (
+        <span className="pw-pin-edit">
+          <input type="password" placeholder="Новый PIN" value={a} inputMode="numeric" autoComplete="new-password" aria-label="Новый PIN" onChange={(e) => setA(e.target.value)} />
+          <input type="password" placeholder="Ещё раз" value={b} inputMode="numeric" autoComplete="new-password" aria-label="Повторите PIN" onChange={(e) => setB(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && save()} />
+          {err && <small className="err-text">{err}</small>}
+          <button className="perm-btn primary" disabled={a.length < 4 || a !== b} onClick={save}>
+            {set ? 'Сменить' : 'Задать'}
+          </button>
+          <button className="perm-btn ghost" onClick={() => (setEditing(false), setErr(null))}>
+            Отмена
+          </button>
+        </span>
+      ) : (
+        <>
+          <button className="ib" aria-label={set ? 'Сменить PIN' : 'Задать PIN'} title={set ? 'Сменить PIN' : 'Задать PIN'} onClick={() => setEditing(true)}>
+            <Icon name="edit" />
+          </button>
+          {set && (
+            <button
+              className="ib"
+              aria-label="Убрать PIN"
+              title="Убрать PIN — подтверждение останется, но без кода"
+              onClick={() => void window.masaki.passkeys.setPin(null).then(() => setSet(false))}
+            >
+              <Icon name="delete" />
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 /** masaki://passwords — менеджер паролей. */
 export function PasswordsPage(): React.JSX.Element {
   const rev = useStore((s) => s.pwRev)
@@ -503,6 +568,7 @@ export function PasswordsPage(): React.JSX.Element {
             сам — в окне поверх страницы или в списке у поля входа. Закрытый ключ не покидает Masaki
             {synced ? ', а на Диск уходит зашифрованным вашим ключом паролей.' : '.'}
           </p>
+          <PinRow />
           {keys.length > 0 && (
             <div className="pw-list">
               {shownKeys.map((k) => (

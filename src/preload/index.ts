@@ -204,7 +204,10 @@ const api: MasakiApi = {
     onPrompt: (cb) => listen<PasskeyPrompt>('passkey-prompt', cb),
     onPromptClose: (cb) => listen<string>('passkey-prompt-close', cb),
     prompts: () => ipcRenderer.invoke('passkeys:prompts'),
-    answer: (id, action, account) => ipcRenderer.send('passkeys:answer', id, action, account),
+    answer: (id, action, account, pin) => ipcRenderer.send('passkeys:answer', id, action, account, pin),
+    pinSet: () => ipcRenderer.invoke('passkeys:pin-state'),
+    setPin: (pin) => ipcRenderer.invoke('passkeys:set-pin', pin),
+    onPinWrong: (cb) => listen<string>('passkey-pin-wrong', cb),
     useConditional: (wcId, id) => ipcRenderer.send('passkeys:use', wcId, id)
   },
   chrome: {

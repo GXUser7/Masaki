@@ -1321,7 +1321,7 @@ function registerPasswordIpc(): void {
   })
 
   // Ключи доступа: запросы WebAuthn из вкладок (сайт — по фрейму) и ответы пользователя из интерфейса.
-  for (const op of ['create', 'get', 'abort'] as const) {
+  for (const op of ['create', 'get', 'abort', 'signal'] as const) {
     ipcMain.handle('pk:' + op, (e, json: string) => {
       // Ключ, созданный в инкогнито, пропал бы вместе с окном, а сайт ждал бы его всегда. Войти ключом —
       // тоже нечем: ключи остались в профиле.
@@ -1340,9 +1340,13 @@ function registerPasswordIpc(): void {
   ipcMain.handle('passkeys:remove', (e, id: string) => {
     if (fromUi(e)) passkeys.remove(String(id))
   })
-  ipcMain.on('passkeys:answer', (e, id: string, action: 'ok' | 'cancel' | 'other', account?: string) => {
-    if (fromUi(e) && ['ok', 'cancel', 'other'].includes(action)) passkeys.answer(String(id), action, account === undefined ? undefined : String(account))
+  ipcMain.on('passkeys:answer', (e, id: string, action: 'ok' | 'cancel' | 'other', account?: string, pin?: string) => {
+    if (fromUi(e) && ['ok', 'cancel', 'other'].includes(action))
+      passkeys.answer(String(id), action, account === undefined ? undefined : String(account), pin === undefined ? undefined : String(pin))
   })
+  // PIN сейфа ключей: задаётся и снимается из менеджера паролей, живёт только в профиле.
+  ipcMain.handle('passkeys:pin-state', (e) => (fromUi(e) ? passkeys.pinSet() : false))
+  ipcMain.handle('passkeys:set-pin', (e, pin: unknown) => (fromUi(e) ? passkeys.setPin(typeof pin === 'string' && pin ? String(pin) : null) : { ok: false }))
   ipcMain.on('passkeys:use', (e, wcId: number, id: string) => {
     const wc = webContents.fromId(Number(wcId))
     if (fromUi(e) && wc && wc.getType() === 'webview') passkeys.useConditional(wc, String(id))

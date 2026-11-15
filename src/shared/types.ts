@@ -555,6 +555,8 @@ export interface PasskeyPrompt {
   accounts: { id: string; userName: string; displayName: string }[]
   /** Ключи уходят в шифрованный сейф на Google Диске. */
   synced: boolean
+  /** Включён PIN сейфа: окно спросит его перед подтверждением. */
+  pinRequired?: boolean
 }
 
 /** Команды, которые главный процесс шлёт интерфейсу (хоткеи, контекстное меню, мышь). */
@@ -885,7 +887,11 @@ export interface MasakiApi {
     /** Окна ключей, которые уже ждут ответа: перечитать при загрузке интерфейса. */
     prompts(): Promise<PasskeyPrompt[]>
     /** ok — создать / войти выбранным аккаунтом (account — id записи); other — ключ безопасности. */
-    answer(id: string, action: 'ok' | 'cancel' | 'other', account?: string): void
+    answer(id: string, action: 'ok' | 'cancel' | 'other', account?: string, pin?: string): void
+    /** Включён ли PIN сейфа; setPin(null) — убрать. */
+    pinSet(): Promise<boolean>
+    setPin(pin: string | null): Promise<{ ok: boolean; error?: string }>
+    onPinWrong(cb: (id: string) => void): () => void
     /** Ключ выбран в списке автозаполнения у поля входа (wcId — webContents вкладки). */
     useConditional(wcId: number, id: string): void
   }

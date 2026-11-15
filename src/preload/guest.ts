@@ -47,7 +47,9 @@ contextBridge.executeInMainWorld({
   func: installPasskeys,
   args: [
     (op: string, json: string): Promise<string> =>
-      op === 'create' || op === 'get' || op === 'abort' ? ipcRenderer.invoke('pk:' + op, String(json)) : Promise.reject(new Error('unknown'))
+      op === 'create' || op === 'get' || op === 'abort' || op === 'signal'
+        ? ipcRenderer.invoke('pk:' + op, String(json))
+        : Promise.reject(new Error('unknown'))
   ]
 })
 

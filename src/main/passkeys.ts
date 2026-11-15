@@ -30,6 +30,10 @@ export interface Passkey {
   alg: number
   /** Закрытый ключ PKCS#8 DER, зашифрованный Windows (safeStorage), base64. */
   key: string
+  /** Секрет PRF (32 байта, зашифрованный safeStorage, base64): выводы ключей шифрования сайтов. */
+  prf?: string
+  /** Большой блоб сайта (largeBlob), base64url — до 1 МБ. */
+  blob?: string
   created: number
   used: number
   t: number
@@ -39,6 +43,8 @@ export interface Passkey {
 interface Data {
   v: 1
   keys: Passkey[]
+  /** PIN сейфа (соль + PBKDF2), только у профиля — не синхронизируется. */
+  pin?: { salt: string; hash: string }
 }
 
 export interface PasskeyHooks {
@@ -60,11 +66,45 @@ const SUPPORTED = [-7, -8, -257]
 export async function initPasskeys(h: PasskeyHooks): Promise<void> {
   hooks = h
   const saved = await file.read()
-  if (saved && Array.isArray(saved.keys)) data = { v: 1, keys: saved.keys }
+  if (saved && Array.isArray(saved.keys)) data = { v: 1, keys: saved.keys, pin: saved.pin }
 }
 
 export function flushPasskeys(): void {
   file.flushSync()
+}
+
+// ---------- PIN сейфа ----------
+// Закрытые ключи шифрует Windows (DPAPI), а подтверждает пользователь в окне Masaki. По желанию
+// перед каждым подтверждением спрашиваем и PIN — как «повторная проверка владельца» в Chrome.
+// PIN живёт только в профиле (passkeys.json), в синхронизацию не едет.
+
+const PBKDF2_ITERS = 150_000
+
+export function pinSet(): boolean {
+  return !!data.pin
+}
+
+export function setPin(pin: string | null): { ok: boolean; error?: string } {
+  if (pin === null || pin === '') {
+    if (!data.pin) return { ok: true }
+    delete data.pin
+    file.write(data, 0)
+    return { ok: true }
+  }
+  if (typeof pin !== 'string' || pin.length < 4) return { ok: false, error: 'PIN — не короче 4 знаков' }
+  const salt = crypto.randomBytes(16)
+  const hash = crypto.pbkdf2Sync(pin, salt, PBKDF2_ITERS, 32, 'sha256')
+  data.pin = { salt: salt.toString('base64'), hash: hash.toString('base64') }
+  file.write(data, 0)
+  return { ok: true }
+}
+
+const verifyPin = (pin: string | undefined): boolean => {
+  if (!data.pin) return true
+  if (!pin) return false
+  const want = Buffer.from(data.pin.hash, 'base64')
+  const got = crypto.pbkdf2Sync(pin, Buffer.from(data.pin.salt, 'base64'), PBKDF2_ITERS, want.length, 'sha256')
+  return crypto.timingSafeEqual(want, got)
 }
 
 function persist(): void {
@@ -174,6 +214,10 @@ type Result = { ok: true; cred: unknown } | Fail | { fallback: true }
 interface Desc {
   id: Buffer
 }
+interface PrfEval {
+  first: Buffer
+  second?: Buffer
+}
 interface CreateOpts {
   rpName: string
   user: { id: Buffer; name: string; displayName: string }
@@ -182,10 +226,18 @@ interface CreateOpts {
   exclude: Desc[]
   crossPlatform: boolean
   credProps: boolean
+  /** Сайт просит поддержку PRF (вывод ключей шифрования). */
+  prf: boolean
+  prfEval?: PrfEval
+  largeBlob?: 'required' | 'preferred'
+  largeBlobWrite?: Buffer
 }
 interface GetOpts {
   challenge: Buffer
   allow: Desc[]
+  prfEval?: PrfEval
+  largeBlobRead?: boolean
+  largeBlobWrite?: Buffer
 }
 
 interface Req {
@@ -200,6 +252,8 @@ interface Req {
   get?: GetOpts
   /** Ключи сайта, подходящие под запрос входа. */
   candidates: Passkey[]
+  /** Включён PIN сейфа: подтвердить можно только с ним. */
+  pinRequired?: boolean
   done(r: Result): void
   timer?: NodeJS.Timeout
   prompt?: PasskeyPrompt
@@ -261,6 +315,10 @@ function parseCreate(pk: Record<string, unknown>): CreateOpts | Fail {
   if (!exclude) return fail('TypeError', 'Неверный список ключей.')
   const sel = (pk.authenticatorSelection ?? {}) as Record<string, unknown>
   const ext = (pk.extensions ?? {}) as Record<string, unknown>
+  const prf = ext.prf as { eval?: { first?: unknown; second?: unknown } } | true | undefined
+  const blob = ext.largeBlob as { support?: unknown; write?: unknown } | undefined
+  if (blob && blob.support !== undefined && blob.support !== 'required' && blob.support !== 'preferred')
+    return fail('TypeError', 'largeBlob.support — только required или preferred.')
   return {
     rpName: str((pk.rp as Record<string, unknown> | undefined)?.name, 200),
     user: { id: userId, name: str(user.name, 200), displayName: str(user.displayName, 200) },
@@ -268,15 +326,43 @@ function parseCreate(pk: Record<string, unknown>): CreateOpts | Fail {
     alg,
     exclude,
     crossPlatform: sel.authenticatorAttachment === 'cross-platform',
-    credProps: ext.credProps === true
+    credProps: ext.credProps === true,
+    prf: prf === true || (typeof prf === 'object' && !!prf?.eval),
+    prfEval: prfEvalOf(typeof prf === 'object' && prf ? prf.eval : undefined),
+    largeBlob: blob?.support === 'required' ? 'required' : blob?.support === 'preferred' ? 'preferred' : undefined,
+    largeBlobWrite: blob?.write ? (unb64u(blob.write, MAX_BLOB) ?? undefined) : undefined
   }
 }
+
+/** PRF-оценки сайта: два salt по 64 байта максимум (стандарт ограничивает первым и вторым). */
+function prfEvalOf(v: unknown): PrfEval | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const e = v as { first?: unknown; second?: unknown }
+  const first = unb64u(e.first, 64)
+  if (!first) throw new TypeError('Неверный salt для PRF.')
+  return { first, second: unb64u(e.second, 64) ?? undefined }
+}
+
+const MAX_BLOB = 1024 * 1024
 
 function parseGet(pk: Record<string, unknown>): GetOpts | Fail {
   const challenge = unb64u(pk.challenge)
   const allow = descs(pk.allowCredentials)
   if (!challenge || !allow) return fail('TypeError', 'Неверные параметры входа.')
-  return { challenge, allow }
+  const ext = (pk.extensions ?? {}) as Record<string, unknown>
+  const prf = ext.prf as { eval?: unknown } | undefined
+  const blob = ext.largeBlob as { read?: unknown; write?: unknown } | undefined
+  try {
+    return {
+      challenge,
+      allow,
+      prfEval: prfEvalOf(prf?.eval),
+      largeBlobRead: blob?.read === true,
+      largeBlobWrite: blob?.write ? (unb64u(blob.write, MAX_BLOB) ?? undefined) : undefined
+    }
+  } catch (e) {
+    return fail('TypeError', String((e as Error)?.message ?? e))
+  }
 }
 
 const clientData = (type: string, challenge: Buffer, origin: string): Buffer =>
@@ -311,9 +397,12 @@ export function request(wc: WebContents, origin: string | undefined, op: string,
       if (r) finish(r, fail('AbortError', 'Запрос отменён.'))
       return reply(fail('AbortError', 'Запрос отменён.'))
     }
-    if (op !== 'create' && op !== 'get') return reply(fail('NotSupportedError', 'Неизвестный запрос.'))
+    if (op !== 'create' && op !== 'get' && op !== 'signal') return reply(fail('NotSupportedError', 'Неизвестный запрос.'))
     const host = origin ? hostOf(origin) : null
     if (!origin || !host) return reply(fail('SecurityError', 'Ключи доступа работают только на защищённых сайтах.'))
+    // Signal API: сайт сообщает, что ключ(и) у него больше не те — сверяем наш сейф. RP ID берём
+    // из самого сигнала (запроса create/get тут нет), поэтому ветка — до чтения pk.
+    if (op === 'signal') return reply(signal(origin, msg))
     if (!safeStorage.isEncryptionAvailable()) return reply({ fallback: true })
     const pk = (msg.publicKey ?? {}) as Record<string, unknown>
     const rpRaw = op === 'create' ? (pk.rp as Record<string, unknown> | undefined)?.id : pk.rpId
@@ -368,8 +457,10 @@ export function request(wc: WebContents, origin: string | undefined, op: string,
       rpId,
       user: r.create ? { name: r.create.user.name, displayName: r.create.user.displayName } : undefined,
       accounts: r.candidates.map(account),
-      synced: hooks.backedUp()
+      synced: hooks.backedUp(),
+      pinRequired: !!data.pin
     }
+    if (data.pin) r.pinRequired = true
     hooks.ui('passkey-prompt', r.prompt)
   })
 }
@@ -377,6 +468,8 @@ export function request(wc: WebContents, origin: string | undefined, op: string,
 async function doCreate(r: Req): Promise<Result> {
   const o = r.create!
   const { privateKey, publicKey } = await generate(o.alg)
+  // Секрет PRF рождается вместе с ключом: выводы шифрования сайтов считаем от него.
+  const prfSecret = o.prf ? crypto.randomBytes(32) : null
   const credId = crypto.randomBytes(16)
   const authData = Buffer.concat([
     sha256(r.rpId),
@@ -405,12 +498,18 @@ async function doCreate(r: Req): Promise<Result> {
     displayName: o.user.displayName,
     alg: o.alg,
     key: safeStorage.encryptString(pkcs8).toString('base64'),
+    ...(prfSecret ? { prf: safeStorage.encryptString(prfSecret.toString('base64')).toString('base64') } : {}),
+    ...(o.largeBlobWrite ? { blob: b64u(o.largeBlobWrite) } : {}),
     created: now,
     used: now,
     t: now
   })
   persist()
   const id = b64u(credId)
+  const ext: Record<string, unknown> = {}
+  if (o.credProps) ext.credProps = { rk: true }
+  if (o.prf) ext.prf = o.prfEval && prfSecret ? prfResults(prfSecret, o.prfEval) : {}
+  if (o.largeBlob) ext.largeBlob = { supported: true, ...(o.largeBlobWrite ? { written: true } : {}) }
   return {
     ok: true,
     cred: {
@@ -425,18 +524,44 @@ async function doCreate(r: Req): Promise<Result> {
         publicKeyAlgorithm: o.alg,
         transports: ['internal']
       },
-      clientExtensionResults: o.credProps ? { credProps: { rk: true } } : {}
+      clientExtensionResults: ext
     }
   }
 }
 
+/** Вывод PRF: HMAC-SHA256 от секрета ключа и salt сайта (RFC 9413). */
+const prfResults = (secret: Buffer, e: PrfEval): { first: string; second?: string } => {
+  const hmac = (salt: Buffer): string => b64u(crypto.createHmac('sha256', secret).update(salt).digest())
+  return { first: hmac(e.first), ...(e.second ? { second: hmac(e.second) } : {}) }
+}
+
+const prfSecretOf = (k: Passkey): Buffer | null => {
+  if (!k.prf) return null
+  try {
+    return Buffer.from(safeStorage.decryptString(Buffer.from(k.prf, 'base64')), 'base64')
+  } catch {
+    return null
+  }
+}
+
 function doGet(r: Req, k: Passkey): Result {
+  const o = r.get!
+  // PRF и largeBlob идут только к ключу того сайта, что и сам вход.
+  if (o.largeBlobWrite) {
+    k.blob = b64u(o.largeBlobWrite)
+    file.write(data, 1000)
+  }
   const authData = Buffer.concat([sha256(r.rpId), Buffer.from([flags(false)]), u32(0)])
-  const cd = clientData('webauthn.get', r.get!.challenge, r.origin)
+  const cd = clientData('webauthn.get', o.challenge, r.origin)
   const sig = sign(k, Buffer.concat([authData, sha256(cd)]))
   if (!sig) return fail('NotAllowedError', 'Ключ не расшифровался — он создан под другой учётной записью Windows.')
   k.used = Date.now()
   file.write(data, 1000)
+  const ext: Record<string, unknown> = {}
+  const secret = prfSecretOf(k)
+  if (o.prfEval) ext.prf = secret ? prfResults(secret, o.prfEval) : {}
+  if (o.largeBlobRead && k.blob) ext.largeBlob = { blob: k.blob }
+  if (o.largeBlobWrite) ext.largeBlob = { written: true }
   return {
     ok: true,
     cred: {
@@ -449,17 +574,22 @@ function doGet(r: Req, k: Passkey): Result {
         signature: b64u(sig),
         userHandle: k.userHandle
       },
-      clientExtensionResults: {}
+      clientExtensionResults: ext
     }
   }
 }
 
 /** Ответ пользователя в окне Masaki. other — отдать запрос встроенному WebAuthn (ключ безопасности). */
-export function answer(promptId: string, action: 'ok' | 'cancel' | 'other', recordId?: string): void {
+export function answer(promptId: string, action: 'ok' | 'cancel' | 'other', recordId?: string, pin?: string): void {
   const r = reqs.get(String(promptId))
   if (!r || r.conditional) return
   if (action === 'cancel') return finish(r, notAllowed())
   if (action === 'other') return finish(r, { fallback: true })
+  if (r.pinRequired && !verifyPin(pin)) {
+    // Окно остаётся: интерфейс покажет «неверный PIN», можно попробовать снова.
+    hooks.ui('passkey-pin-wrong', r.prompt?.id)
+    return
+  }
   if (r.prompt?.kind === 'exists') return finish(r, fail('InvalidStateError', 'Ключ доступа для этого аккаунта уже есть.'))
   if (r.prompt?.kind === 'none') return finish(r, notAllowed())
   if (r.kind === 'create') {
@@ -476,6 +606,39 @@ export function answer(promptId: string, action: 'ok' | 'cancel' | 'other', reco
   // иначе страница ждала бы до таймаута, а кнопка «Войти» выглядела бы мёртвой.
   if (k) finish(r, doGet(r, k))
   else finish(r, notAllowed())
+}
+
+/**
+ * Signal API: сервер удалён ключ, перечислил действующие или уточнил имя пользователя — приводим
+ * записи к тому же виду, чтобы список у поля и окно входа не предлагали удалённый на сайте ключ.
+ */
+function signal(origin: string, msg: Record<string, unknown>): Result {
+  const host = hostOf(origin)
+  if (!host) return fail('SecurityError', 'Ключи доступа работают только на защищённых сайтах.')
+  const rpId = (str(msg.rpId, 253) || host).toLowerCase()
+  if (!rpAllowed(rpId, host)) return fail('SecurityError', `Сайт ${host} не может работать с ключами для ${rpId}.`)
+  const kind = str(msg.kind, 32)
+  const now = Date.now()
+  const markDeleted = (k: Passkey): void => {
+    Object.assign(k, { deleted: true, key: '', prf: undefined, blob: undefined, userName: '', displayName: '', t: now })
+  }
+  if (kind === 'unknown') {
+    const credId = unb64u(msg.credentialId, 1023)
+    if (!credId) return fail('TypeError', 'Нужен credentialId.')
+    for (const k of live()) if (k.rpId === rpId && k.credId === b64u(credId)) markDeleted(k)
+  } else if (kind === 'all') {
+    const userHandle = str(msg.userId, 512)
+    const accepted = descs(msg.allAcceptedCredentialIds)
+    if (!accepted) return fail('TypeError', 'Неверный список ключей.')
+    const keep = new Set(accepted.map((d) => b64u(d.id)))
+    for (const k of live()) if (k.rpId === rpId && k.userHandle === userHandle && !keep.has(k.credId)) markDeleted(k)
+  } else if (kind === 'user') {
+    const userHandle = str(msg.userHandle, 512)
+    for (const k of live())
+      if (k.rpId === rpId && k.userHandle === userHandle) Object.assign(k, { userName: str(msg.name, 200), displayName: str(msg.displayName, 200), t: now })
+  } else return fail('TypeError', 'Неизвестный вид сигнала.')
+  persist()
+  return { ok: true, cred: null }
 }
 
 /** Окна, которые уже ждут ответа: интерфейс перечитывает их при своей загрузке. */
@@ -530,6 +693,10 @@ export interface PlainPasskey {
   alg: number
   /** Закрытый ключ PKCS#8 DER, base64url. */
   key: string
+  /** Секрет PRF (base64url) — в сейфе шифруется ключом пользователя. */
+  prf?: string
+  /** Большой блоб сайта (base64url). */
+  blob?: string
   created: number
 }
 
@@ -557,6 +724,8 @@ export function syncExport(): PlainPasskey[] {
       displayName: k.displayName,
       alg: k.alg,
       key,
+      prf: k.prf && !k.deleted ? prfSecretOf(k)?.toString('base64url') ?? '' : '',
+      blob: k.blob,
       created: k.created
     }
   })
@@ -577,6 +746,8 @@ export function syncApply(items: PlainPasskey[]): void {
       displayName: r.deleted ? '' : r.displayName,
       alg: r.alg,
       key: r.deleted ? '' : safeStorage.encryptString(Buffer.from(r.key, 'base64url').toString('base64')).toString('base64'),
+      prf: r.deleted || !r.prf ? undefined : safeStorage.encryptString(Buffer.from(r.prf, 'base64url').toString('base64')).toString('base64'),
+      blob: r.blob,
       created: r.created || r.t,
       used: k?.used ?? 0,
       t: r.t,

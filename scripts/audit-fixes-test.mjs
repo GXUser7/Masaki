@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const mode = process.argv[2]
-assert.ok(['unload', 'history', 'display', 'iframe', 'autofill'].includes(mode), 'Выберите режим: unload, history, display, iframe или autofill')
+assert.ok(['unload', 'history', 'display', 'iframe', 'autofill', 'passkey'].includes(mode), 'Выберите режим теста')
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'masaki-audit-'))
 const output = path.join(root, 'test-output')
 fs.mkdirSync(output, { recursive: true })
@@ -19,6 +19,39 @@ fs.mkdirSync(output, { recursive: true })
 const site = http.createServer((req, res) => {
   const p = new URL(req.url, 'http://localhost').pathname
   const html = (body) => `<!doctype html><meta charset="utf-8"><title>${p.slice(1) || 'домой'}</title><style>body{background:#152221;color:#e2f1e9;font:20px sans-serif;margin:40px}button{font:inherit;padding:8px 16px}</style>${body}`
+  if (p === '/pk') {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    return res.end(html(`<h1>ключи</h1><pre id="out"></pre>
+      <script>
+        const raw = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))
+        const show = (x) => (document.getElementById('out').textContent = typeof x === 'string' ? x : JSON.stringify(x))
+        async function create() {
+          try {
+            const c = await navigator.credentials.create({ publicKey: {
+              challenge: raw('aaaaaaaaaaaaaaaa'), rp: { name: 'PK Test' },
+              user: { id: raw('dXNlcjE='), name: 'user1', displayName: 'Пользователь 1' },
+              pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+              extensions: { prf: { eval: { first: raw('c2FsdDFzYWx0MQ==') } } }
+            }})
+            show({ step: 'created', id: c.id, prf: c.getClientExtensionResults().prf })
+          } catch (e) { show('create ERR ' + e.name) }
+        }
+        async function get(salt, allow) {
+          try {
+            const c = await navigator.credentials.get({ publicKey: {
+              challenge: raw('bbbbbbbbbbbbbbbb'), rpId: location.hostname,
+              allowCredentials: allow ? [{ type: 'public-key', id: raw(allow) }] : [],
+              extensions: { prf: { eval: { first: raw(salt) } } }
+            }})
+            show({ step: 'got', prf: c.getClientExtensionResults().prf })
+          } catch (e) { show('get ERR ' + e.name) }
+        }
+        async function signal(id) {
+          PublicKeyCredential.signalUnknownCredential({ rpId: location.hostname, credentialId: raw(id) })
+          show('signaled')
+        }
+      </script>`))
+  }
   if (p === '/shop') {
     res.setHeader('content-type', 'text/html; charset=utf-8')
     return res.end(html(`<h1>оформление</h1><form>
@@ -72,6 +105,8 @@ async function waitFor(fn, label) {
     if (await fn()) return
     await new Promise((resolve) => setTimeout(resolve, 80))
   }
+  console.log('UI ERRORS:', JSON.stringify(errors))
+  try { await shot('99-audit-' + mode + '-fail') } catch {}
   throw new Error('Не дождались: ' + label)
 }
 async function shot(name) {
@@ -149,6 +184,51 @@ try {
     assert.equal(await guest(`document.getElementById('c1').value`), 'TEST TESTOV', 'держатель подставлен')
     await shot('card')
     console.log('OK: адрес и карта подставляются одним выбором, форма заполняется целиком')
+  } else if (mode === 'passkey') {
+    // PRF: выводы от одного salt совпадают, от другого различаются; Signal API убирает удалённый на сайте ключ.
+    await app.evaluate(({ BrowserWindow }, [id, u]) => BrowserWindow.fromId(id).webContents.send('command', { type: 'open-url', url: u }), [mainId, base + '/pk'])
+    await page.waitForSelector('webview.wv.on', { timeout: 15000 })
+    await waitFor(async () => (await url()).endsWith('/pk'), 'страница ключей')
+    const wc = await page.evaluate(() => document.querySelector('webview.wv.on').getWebContentsId())
+    const guest = (code) => app.evaluate(({ webContents }, [id, code]) => webContents.fromId(id).executeJavaScript(code, true), [wc, code])
+    const out = () => guest(`document.getElementById('out').textContent`)
+    await waitFor(async () => (await guest(`document.readyState`)) === 'complete', 'готова')
+    await waitFor(async () => (await guest(`typeof create`)) === 'function', 'скрипт страницы')
+    const clickOk = async (label) => {
+      await waitFor(() => page.locator('.pk-card').count().then((n) => n > 0), 'окно ключа')
+      // Окно входа подтверждается кликом по аккаунту, окно создания — кнопкой «Создать».
+      // Доверенный клик Playwright у окна с анимацией нестабилен — жмём из самого интерфейса.
+      await page.waitForTimeout(300)
+      await page.evaluate(() => {
+        document.querySelector('.pk-card .pk-acc')?.click()
+        document.querySelector('.pk-card .perm-btn.primary')?.click()
+      })
+      await waitFor(() => page.locator('.pk-card').count().then((n) => n === 0), 'окно закрылось')
+    }
+    const started = await guest(`try { create(); null } catch (e) { 'THROW: ' + e.message }`)
+    if (typeof started === 'string' && started.startsWith('THROW')) throw new Error(started)
+    await clickOk()
+    await waitFor(async () => (await out()).includes('created'), 'ключ создан')
+    const r1 = JSON.parse((await out()).replace(/^/, ''))
+    await guest(`get('c2FsdDFzYWx0MQ==', '${r1.id}'); null`)
+    await clickOk()
+    await waitFor(async () => (await out()).includes('got'), 'вход по ключу')
+    const same = JSON.parse(await out())
+    assert.equal(same.prf.first, r1.prf.first, 'PRF от того же salt совпадает')
+    await guest(`get('c2FsdDJzYWx0MQ==', '${r1.id}'); null`)
+    await clickOk()
+    await waitFor(async () => (await out()).includes('got'), 'второй вход')
+    const diff = JSON.parse(await out())
+    assert.notEqual(diff.prf.first, r1.prf.first, 'PRF от другого salt другой')
+    await guest(`signal('${r1.id}')`)
+    await waitFor(async () => (await out()).includes('signaled'), 'сигнал ушёл')
+    await guest(`get('c2FsdDFzYWx0MQ==', ''); null`)
+    await waitFor(() => page.locator('.pk-card').count().then((n) => n > 0), 'окно «нет ключей»')
+    const title = await page.locator('.pk-title').textContent()
+    assert.ok((title ?? '').includes('нет ключей'), 'после сигнала ключа нет: ' + title)
+    await page.locator('.pk-card .perm-btn.primary').click()
+    await shot('passkey-signal')
+    console.log('OK: PRF детерминирован, Signal API сверяет сейф с сайтом')
   } else if (mode === 'iframe') {
     // Форма входа внутри iframe: guest.js теперь сессионный и работает во всех фреймах,
     // пароли подбираются по origin фрейма. Сохранённый пароль того же хоста подойдёт.

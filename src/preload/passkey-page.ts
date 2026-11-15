@@ -153,6 +153,11 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
     let payload: Record<string, unknown>
     try {
       const sel = pk.authenticatorSelection
+      const ext = (pk.extensions ?? {}) as {
+        credProps?: boolean
+        prf?: true | { eval?: { first?: BufferSource; second?: BufferSource } }
+        largeBlob?: { support?: 'required' | 'preferred'; write?: BufferSource }
+      }
       payload = {
         publicKey: {
           rp: { id: pk.rp?.id, name: pk.rp?.name },
@@ -165,7 +170,11 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
             ? { authenticatorAttachment: sel.authenticatorAttachment, residentKey: sel.residentKey, userVerification: sel.userVerification }
             : undefined,
           attestation: pk.attestation,
-          extensions: { credProps: !!(pk.extensions as { credProps?: boolean } | undefined)?.credProps }
+          extensions: {
+            credProps: !!ext.credProps,
+            ...(ext.prf ? { prf: typeof ext.prf === 'object' && ext.prf.eval ? { eval: { first: enc(ext.prf.eval.first), second: ext.prf.eval.second ? enc(ext.prf.eval.second) : undefined } } : {} } : {}),
+            ...(ext.largeBlob ? { largeBlob: { support: ext.largeBlob.support, ...(ext.largeBlob.write ? { write: enc(ext.largeBlob.write) } : {}) } } : {})
+          }
         }
       }
     } catch (e) {
@@ -179,6 +188,10 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
     if (!options || !pk) return origGet.call(this, options)
     let payload: Record<string, unknown>
     try {
+      const ext = (pk.extensions ?? {}) as {
+        prf?: { eval?: { first?: BufferSource; second?: BufferSource } }
+        largeBlob?: { read?: boolean; write?: BufferSource }
+      }
       payload = {
         mediation: options.mediation,
         publicKey: {
@@ -186,7 +199,9 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
           timeout: pk.timeout,
           rpId: pk.rpId,
           allowCredentials: descs(pk.allowCredentials),
-          userVerification: pk.userVerification
+          userVerification: pk.userVerification,
+          ...(ext.prf?.eval ? { extensions: { prf: { eval: { first: enc(ext.prf.eval.first), second: ext.prf.eval.second ? enc(ext.prf.eval.second) : undefined } } } } : {}),
+          ...(ext.largeBlob ? { extensions: { largeBlob: { read: ext.largeBlob.read, ...(ext.largeBlob.write ? { write: enc(ext.largeBlob.write) } : {}) } } } : {})
         }
       }
     } catch (e) {
@@ -215,8 +230,22 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
           conditionalGet: true,
           hybridTransport: false,
           passkeyPlatformAuthenticator: true,
-          userVerifyingPlatformAuthenticator: true
+          userVerifyingPlatformAuthenticator: true,
+          prf: true,
+          largeBlob: true
         }))
     )
   }
+  // Signal API: сервер сообщает, что ключ(и) у него больше не те, — менеджер сверяет свой сейф,
+  // чтобы список у поля не предлагал удалённый на сайте ключ. Ничего не возвращают (void).
+  const signal = (data: Record<string, unknown>): void => void bridge('signal', JSON.stringify(data)).catch(() => undefined)
+  method(PKC, 'signalUnknownCredential', (d: { rpId?: string; credentialId?: unknown }) => {
+    if (d && d.credentialId) signal({ kind: 'unknown', rpId: d.rpId, credentialId: enc(d.credentialId) })
+  })
+  method(PKC, 'signalAllAcceptedCredentials', (d: { rpId?: string; userId?: unknown; allAcceptedCredentialIds?: unknown }) => {
+    if (d) signal({ kind: 'all', rpId: d.rpId, userId: enc(d.userId), allAcceptedCredentialIds: descs(d.allAcceptedCredentialIds) })
+  })
+  method(PKC, 'signalCurrentUserDetails', (d: { rpId?: string; userHandle?: unknown; name?: string; displayName?: string }) => {
+    if (d) signal({ kind: 'user', rpId: d.rpId, userHandle: enc(d.userHandle), name: d.name ?? '', displayName: d.displayName ?? '' })
+  })
 }

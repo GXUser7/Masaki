@@ -238,6 +238,14 @@ export function PasskeySheet(): React.JSX.Element | null {
   const prompts = useStore((s) => s.pkPrompts)
   const activeId = useStore((s) => s.activeId)
   const p = prompts.find((x) => tabIdOfWebContents(x.wcId) === activeId)
+  const [pin, setPin] = useState('')
+  const [pinWrong, setPinWrong] = useState(false)
+  const pinRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    setPin('')
+    setPinWrong(false)
+    if (p?.pinRequired) requestAnimationFrame(() => pinRef.current?.focus())
+  }, [p?.id, p?.pinRequired])
   useEffect(() => {
     if (!p) return
     const onKey = (e: KeyboardEvent): void => {
@@ -246,13 +254,23 @@ export function PasskeySheet(): React.JSX.Element | null {
       window.masaki.passkeys.answer(p.id, 'cancel')
       useStore.setState((s) => ({ pkPrompts: s.pkPrompts.filter((x) => x.id !== p.id) }))
     }
+    const offWrong = window.masaki.passkeys.onPinWrong((id) => {
+      if (id === p.id) {
+        setPinWrong(true)
+        setPin('')
+        pinRef.current?.focus()
+      }
+    })
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      offWrong()
+    }
   }, [p])
   if (!p) return null
 
   const answer = (action: 'ok' | 'cancel' | 'other', account?: string) => (): void => {
-    window.masaki.passkeys.answer(p.id, action, account)
+    window.masaki.passkeys.answer(p.id, action, account, p.pinRequired && action === 'ok' ? pin : undefined)
     useStore.setState((s) => ({ pkPrompts: s.pkPrompts.filter((x) => x.id !== p.id) }))
   }
   const where = p.synced ? 'на этом компьютере и в вашем шифрованном сейфе на Google Диске' : 'на этом компьютере'
@@ -302,7 +320,14 @@ export function PasskeySheet(): React.JSX.Element | null {
         {p.kind === 'get' && (
           <div className="pk-accs" role="listbox" aria-label="Аккаунты">
             {p.accounts.map((a, i) => (
-              <button key={a.id} className="pk-acc" role="option" aria-selected={false} autoFocus={i === 0} onClick={answer('ok', a.id)}>
+              <button
+                key={a.id}
+                className="pk-acc"
+                role="option"
+                aria-selected={false}
+                autoFocus={i === 0 && !p.pinRequired}
+                onClick={answer('ok', a.id)}
+              >
                 <span className="pk-av">{letter(a.displayName || a.userName)}</span>
                 <span className="af-t">
                   <b>{a.displayName || a.userName || 'Без имени'}</b>
@@ -312,6 +337,27 @@ export function PasskeySheet(): React.JSX.Element | null {
               </button>
             ))}
           </div>
+        )}
+        {p.pinRequired && (
+          <label className="pd-label">
+            {pinWrong ? 'Неверный PIN — попробуйте ещё раз' : 'PIN-код ключей'}
+            <input
+              ref={pinRef}
+              type="password"
+              className={'pd-input' + (pinWrong ? ' bad' : '')}
+              value={pin}
+              autoComplete="off"
+              inputMode="numeric"
+              aria-label="PIN-код ключей доступа"
+              onChange={(e) => (setPin(e.target.value), setPinWrong(false))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && pin) {
+                  e.preventDefault()
+                  answer('ok', p.kind === 'get' ? p.accounts[0]?.id : undefined)()
+                }
+              }}
+            />
+          </label>
         )}
         <div className="pk-acts">
           {p.kind !== 'exists' && (
@@ -325,7 +371,7 @@ export function PasskeySheet(): React.JSX.Element | null {
               <button className="perm-btn tonal-b" onClick={answer('cancel')}>
                 Отмена
               </button>
-              <button className="perm-btn primary" autoFocus onClick={answer('ok')}>
+              <button className="perm-btn primary" autoFocus={!p.pinRequired} disabled={p.pinRequired && !pin} onClick={answer('ok')}>
                 Создать
               </button>
             </>
