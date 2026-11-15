@@ -28,7 +28,9 @@ const shot = async (name) => {
 }
 /** Аддоны — командой палитры (Ctrl+Shift+A теперь поиск по вкладкам, как в Chrome). */
 async function openAddons() {
-  await page.keyboard.press('Control+KeyK')
+  // Синтетические клавиши Playwright не проходят через before-input-event главного процесса, а фокус
+  // мог остаться во вкладке — палитру открывает та же команда, что у main, и поле в ней само в фокусе.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('command', { type: 'palette', withUrl: false }))
   await page.waitForSelector('.cmd')
   await page.keyboard.type('>аддоны')
   await page.waitForTimeout(300)

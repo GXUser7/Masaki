@@ -127,9 +127,12 @@ export function initDevices(partition: string, h: Hooks): void {
     // Без хоста (внутренние запросы) не спрашиваем.
     if (!authInfo.host) return
     if (!hooks.hasWindow()) return
+    const meta = { host: authInfo.host + (authInfo.port ? ':' + authInfo.port : ''), realm: authInfo.realm ?? '', proxy: authInfo.isProxy }
+    // Сайт с авторетраем может стучаться много раз в секунду: пока пользователь не ответил,
+    // повторные 401 того же realm молча отклоняем — иначе окна входа плодились бы бесконечно.
+    for (const a of [...authAsks.values()]) if (a.meta.host === meta.host && a.meta.realm === meta.realm) return
     event.preventDefault()
     const id = 'a' + randomUUID()
-    const meta = { host: authInfo.host + (authInfo.port ? ':' + authInfo.port : ''), realm: authInfo.realm ?? '', proxy: authInfo.isProxy }
     authAsks.set(id, { meta, done: (username, password) => callback(username, password) })
     hooks.ui('auth-ask', { id, ...meta })
   })

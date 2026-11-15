@@ -728,6 +728,9 @@ function setupBrowsingSession(): void {
   // скрипт входа Google — на всю сессию: во вкладках он повторяет guest.ts, в окне «Войти через Google» — один.
   ses.registerPreloadScript({ type: 'frame', id: 'masaki-popup', filePath: path.join(__dirname, '../preload/popup.js') })
   ses.registerPreloadScript({ type: 'frame', id: 'masaki-tab-lifecycle', filePath: path.join(__dirname, '../preload/tab-lifecycle.js') })
+  // guest.js тоже сессионный: он должен работать в iframe — там живут формы входа и запросы ключей
+  // доступа (пароль подставляется по origin самого фрейма, не сайта сверху).
+  ses.registerPreloadScript({ type: 'frame', id: 'masaki-tab-guest', filePath: path.join(__dirname, '../preload/guest.js') })
   listenHeaders(ses)
   // Слушатель у сессии один на всё: вход в Google, заголовки запросов моста YouCloud и токен,
   // с которым soundcloud.com ходит в свой API (им YouCloud продлевает истёкшую сессию).
@@ -942,8 +945,11 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
     return { action: 'deny' }
   })
   ui.on('will-attach-webview', (_e, prefs, params) => {
-    prefs.preload = path.join(__dirname, '../preload/guest.js')
+    // guest.js ставится на всю сессию (см. setupBrowsingSession): атрибутом preload он выполнялся бы
+    // только в главном фрейме, а пароли и ключи доступа нужны и в iframe. Без nodeIntegrationInSubFrames
+    // preload'ы в подфреймах не запускаются вовсе; nodeIntegration при этом остаётся выключенным.
     prefs.nodeIntegration = false
+    prefs.nodeIntegrationInSubFrames = true
     prefs.contextIsolation = true
     prefs.sandbox = true
     if (testHeadless) prefs.backgroundThrottling = false
@@ -1024,6 +1030,10 @@ function dropUiPending(): void {
 function watchUnload(contents: WebContents): void {
   contents.on('will-prevent-unload', (e) => {
     if (!win || testHeadless) return e.preventDefault()
+    // Синхронное окно останавливает весь главный процесс — его обязаны видеть: поднимаем окно,
+    // иначе свернутый Masaki «замер» бы без видимой причины.
+    if (win.isMinimized()) win.restore()
+    win.focus()
     const choice = dialog.showMessageBoxSync(win, {
       type: 'warning',
       buttons: ['Остаться', 'Покинуть'],
@@ -1249,9 +1259,10 @@ function startSync(): Promise<void> {
 
 // ---------- Пароли ----------
 
-/** Сообщения от скрипта страниц принимаем только из вкладок; сайт — по самому фрейму, а не со слов страницы. */
+/** Сообщения от скрипта страниц принимаем только из вкладок; сайт — по самому фрейму, а не со слов страницы.
+ *  Фрейм подойдёт любой: у формы в iframe свой origin, и пароли/ключи сайта берутся по нему. */
 function fromTab(e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): string | undefined {
-  if (e.sender.getType() !== 'webview' || !e.senderFrame || e.senderFrame.parent) return undefined
+  if (e.sender.getType() !== 'webview' || !e.senderFrame) return undefined
   return e.senderFrame.origin
 }
 
@@ -1587,6 +1598,10 @@ function registerIpc(): void {
       if (iconData.size >= 300) iconData.clear()
       data = fetchAsDataUrl(iconUrl, 100_000)
       iconData.set(iconUrl, data)
+      // Неудача (сеть, таймаут) не должна кэшироваться навсегда: значок обновится при следующем спросе.
+      data.catch(() => {
+        if (iconData.get(iconUrl) === data) iconData.delete(iconUrl)
+      })
     }
     return data
   })
@@ -1843,6 +1858,10 @@ async function fetchAsDataUrl(url: string, maxBytes = 200_000): Promise<string |
     if (!res.ok) return null
     const type = (res.headers.get('content-type') ?? 'image/png').split(';')[0]
     if (!type.startsWith('image/')) return null
+    // Размер смотрим до скачивания: адрес значка приносит страница, и «картинка» на гигабайт
+    // осела бы в памяти главного процесса.
+    const len = Number(res.headers.get('content-length') ?? 0)
+    if (len > maxBytes) return null
     const buf = Buffer.from(await res.arrayBuffer())
     if (buf.length > maxBytes) return null
     return `data:${type};base64,${buf.toString('base64')}`

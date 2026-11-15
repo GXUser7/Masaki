@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const mode = process.argv[2]
-assert.ok(['unload', 'history', 'display'].includes(mode), 'Выберите unload, history или display')
+assert.ok(['unload', 'history', 'display', 'iframe'].includes(mode), 'Выберите unload, history, display или iframe')
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'masaki-audit-'))
 const output = path.join(root, 'test-output')
 fs.mkdirSync(output, { recursive: true })
@@ -19,6 +19,14 @@ fs.mkdirSync(output, { recursive: true })
 const site = http.createServer((req, res) => {
   const p = new URL(req.url, 'http://localhost').pathname
   const html = (body) => `<!doctype html><meta charset="utf-8"><title>${p.slice(1) || 'домой'}</title><style>body{background:#152221;color:#e2f1e9;font:20px sans-serif;margin:40px}button{font:inherit;padding:8px 16px}</style>${body}`
+  if (p === '/login-frame') {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    return res.end(html(`<input id="user" type="email" autocomplete="username" placeholder="логин в iframe"><input id="pass" type="password">`))
+  }
+  if (p === '/with-frame') {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    return res.end(html(`<h1>страница с формой внутри</h1><iframe id="f" src="/login-frame" style="width:420px;height:120px;border:1px solid #456"></iframe>`))
+  }
   if (p === '/unload') {
     res.setHeader('content-type', 'text/html; charset=utf-8')
     return res.end(html(`<h1>уход</h1><button id="nav">перевести</button>
@@ -108,6 +116,22 @@ try {
     assert.equal(await page.locator('.dlp-row').count(), before - 1, 'запись удалена')
     await shot('removed')
     console.log('OK: история открывается по Ctrl+H, записи на месте, удаление работает')
+  } else if (mode === 'iframe') {
+    // Форма входа внутри iframe: guest.js теперь сессионный и работает во всех фреймах,
+    // пароли подбираются по origin фрейма. Сохранённый пароль того же хоста подойдёт.
+    await app.evaluate(({ BrowserWindow }, [id, u]) => BrowserWindow.fromId(id).webContents.send('command', { type: 'open-url', url: u }), [mainId, base + '/with-frame'])
+    await page.waitForSelector('webview.wv.on', { timeout: 15000 })
+    await waitFor(async () => (await url()).endsWith('/with-frame'), 'страница с iframe')
+    const wc = await page.evaluate(() => document.querySelector('webview.wv.on').getWebContentsId())
+    const guest = (code) => app.evaluate(({ webContents }, [id, code]) => webContents.fromId(id).executeJavaScript(code, true), [wc, code])
+    await waitFor(async () => (await guest(`!!document.getElementById('f')`)) === true, 'iframe на странице')
+    // Пароль этого сайта (origin фрейма) — сохраняем средствами самого Masaki.
+    await page.evaluate((u) => window.masaki.passwords.save({ url: u + '/login-frame', username: 'tester', password: 'parol-test' }), base)
+    // Фокус в поле внутри iframe — список аккаунтов Masaki должен появиться над вкладкой.
+    await guest(`document.getElementById('f').contentWindow.document.getElementById('user').focus()`)
+    await waitFor(() => page.locator('.af-menu').count().then((n) => n > 0), 'список аккаунтов у поля в iframe')
+    await shot('iframe-autofill')
+    console.log('OK: пароли работают в iframe (список у поля появился по origin фрейма)')
   } else {
     await app.evaluate(({ BrowserWindow }, [id, u]) => BrowserWindow.fromId(id).webContents.send('command', { type: 'open-url', url: u }), [mainId, base + '/display'])
     await page.waitForSelector('webview.wv.on', { timeout: 15000 })

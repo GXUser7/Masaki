@@ -3,6 +3,9 @@ import { installMediaHook } from './media-page'
 import { installPasskeys } from './passkey-page'
 
 // Скрипт для страниц во вкладках (изолированный мир: сама страница его не видит).
+// Ставится на всю сессию, поэтому работает и в iframe: там нужны пароли и ключи доступа, а служебные
+// события интерфейса (цвет фона, «взгляд», док, свайпы, плеер) идут только из главного фрейма.
+const TOP = window.top === window
 
 // Прозрачный документ опирается на Canvas браузера, а не на тему интерфейса Masaki.
 // Сообщаем цвет подложки отдельно: фоны html/body не переписываем, чтобы сохранить CSS сайта.
@@ -25,13 +28,16 @@ const scheduleCanvas = (): void => {
   if (!canvasFrame) canvasFrame = requestAnimationFrame(sendCanvas)
 }
 window.addEventListener('DOMContentLoaded', () => {
+  if (!TOP) return
   sendCanvas()
   new MutationObserver(scheduleCanvas).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
   // meta color-scheme и поздно загруженные стили тоже могут менять системный Canvas.
   if (document.head) new MutationObserver(scheduleCanvas).observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['content', 'media', 'disabled'] })
 })
-window.addEventListener('load', scheduleCanvas, true)
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', scheduleCanvas)
+if (TOP) {
+  window.addEventListener('load', scheduleCanvas, true)
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', scheduleCanvas)
+}
 
 // 1. Вход Google настраивает сессионный preload popup.ts до первого скрипта документа.
 
@@ -310,7 +316,7 @@ document.addEventListener(
 document.addEventListener(
   'click',
   (e) => {
-    if (!e.altKey || e.ctrlKey || e.shiftKey || e.metaKey || e.button !== 0) return
+    if (!TOP || !e.altKey || e.ctrlKey || e.shiftKey || e.metaKey || e.button !== 0) return
     const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null
     if (!a || !/^https?:/i.test(a.href)) return
     e.preventDefault()
@@ -328,12 +334,15 @@ document.addEventListener(
 const scrollTops = new WeakMap<EventTarget, number>()
 let scrollDir = ''
 let resizedAt = -Infinity
+// Док слушает только главный фрейм: прокрутка внутри iframe страницу не читает.
 window.addEventListener('resize', () => {
+  if (!TOP) return
   resizedAt = performance.now()
 })
 window.addEventListener(
   'scroll',
   (e) => {
+    if (!TOP) return
     const t = e.target
     const doc = t === document || t === document.documentElement || t === document.body
     if (!doc && ((t as Element).clientHeight < innerHeight * 0.5 || (t as Element).clientWidth < innerWidth * 0.4)) return
@@ -402,7 +411,7 @@ function dropSwipe(): void {
 window.addEventListener(
   'wheel',
   (e) => {
-    if (!e.isTrusted) return
+    if (!TOP || !e.isTrusted) return
     clearTimeout(swipeEnd)
     swipeEnd = setTimeout(endGesture, 140)
     if (!gesture) {
@@ -455,7 +464,7 @@ window.addEventListener(
 // Предзагрузка идёт только в главном фрейме вкладки: нажатие над iframe сюда не попадёт.
 // Наш слушатель поставлен раньше страничных, поэтому об отмене узнаём, когда событие обойдёт всех.
 window.addEventListener('mouseup', (e) => {
-  if (!e.isTrusted || (e.button !== 3 && e.button !== 4)) return
+  if (!TOP || !e.isTrusted || (e.button !== 3 && e.button !== 4)) return
   const dir = e.button === 3 ? 'back' : 'forward'
   setTimeout(() => {
     if (!e.defaultPrevented) ipcRenderer.send('nav:mouse', dir)
@@ -540,7 +549,7 @@ contextBridge.executeInMainWorld({
 // 7. Что играет: Media Session сайта — в мини-плеер Masaki (обложка, название, «следующий»).
 // Команды мини-плеера приходят сюда (webview.send) и зовут обработчики сайта, как медиаклавиши.
 let mediaRun: ((action: string, time: number) => void) | null = null
-contextBridge.executeInMainWorld({
+if (TOP) contextBridge.executeInMainWorld({
   func: installMediaHook,
   args: [
     (json: string): void => ipcRenderer.sendToHost('media', String(json).slice(0, 8000)),
@@ -551,7 +560,7 @@ contextBridge.executeInMainWorld({
 })
 const MEDIA_ACTIONS = new Set(['play', 'pause', 'previoustrack', 'nexttrack', 'seekto', 'seekbackward', 'seekforward'])
 ipcRenderer.on('media:action', (_e, action: string, time: number) => {
-  if (MEDIA_ACTIONS.has(action)) mediaRun?.(action, Number(time) || 0)
+  if (TOP && MEDIA_ACTIONS.has(action)) mediaRun?.(action, Number(time) || 0)
 })
 
 // 8. YouCloud: мост вместо расширения (main/youcloud.ts). Говорит с сайтом языком bridge.js

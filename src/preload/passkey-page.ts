@@ -120,13 +120,19 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
           if (done) return
           done = true
           signal?.removeEventListener('abort', onAbort)
-          const r = JSON.parse(text) as { ok?: boolean; fallback?: boolean; name?: string; message?: string; cred?: Wire }
-          // «Ключ безопасности…» — запрос уходит встроенному WebAuthn как есть.
-          if (r.fallback) return resolve(orig.call(self, options))
-          if (!r.ok || !r.cred) {
-            return reject(r.name === 'TypeError' ? new TypeError(r.message) : new DOMException(r.message ?? '', r.name ?? 'NotAllowedError'))
+          try {
+            const r = JSON.parse(text) as { ok?: boolean; fallback?: boolean; name?: string; message?: string; cred?: Wire }
+            // «Ключ безопасности…» — запрос уходит встроенному WebAuthn как есть.
+            if (r.fallback) return resolve(orig.call(self, options))
+            if (!r.ok || !r.cred) {
+              return reject(r.name === 'TypeError' ? new TypeError(r.message) : new DOMException(r.message ?? '', r.name ?? 'NotAllowedError'))
+            }
+            resolve(build(op === 'create', r.cred))
+          } catch (e) {
+            // Бросок внутри fulfilled-ветки отклонил бы лишь внутреннюю цепочку, а внешнее обещание
+            // осталось бы висеть навсегда — страница «зависла на входе». Отвечаем отказом.
+            reject(new DOMException(String((e as Error)?.message ?? e), 'NotAllowedError'))
           }
-          resolve(build(op === 'create', r.cred))
         },
         () => {
           if (done) return
@@ -139,9 +145,10 @@ export function installPasskeys(bridge: (op: string, json: string) => Promise<st
   const create = function (this: CredentialsContainer, options?: CredentialCreationOptions): Promise<Credential | null> {
     const pk = options?.publicKey
     if (!options || !pk) return origCreate.call(this, options)
-    // «Тихое» создание ключа после входа паролем пока не поддерживаем — как отказ пользователя.
+    // «Тихое» создание ключа после входа паролем пока не поддерживаем — внятный NotSupportedError,
+    // согласовый с getClientCapabilities (conditionalCreate: false), а не «пользователь отказал».
     if ((options as { mediation?: string }).mediation === 'conditional') {
-      return Promise.reject(new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError'))
+      return Promise.reject(new DOMException('Silent credential creation is not supported.', 'NotSupportedError'))
     }
     let payload: Record<string, unknown>
     try {
