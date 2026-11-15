@@ -21,6 +21,12 @@ export function SiteInfoSheet(): React.JSX.Element | null {
     setCookies(null)
     if (t?.kind !== 'web' || !/^https?:/i.test(t.url)) return
     void window.masaki.permissions.list().then((all) => setPerms(all.filter((p) => p.origin === new URL(t.url).origin)))
+    // Как в Chrome: Esc закрывает сведения о сайте.
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') useStore.setState({ siteInfo: false })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [open, t?.url, t?.kind])
 
   if (!open || !t || t.kind !== 'web' || !/^https?:/i.test(t.url)) return null
