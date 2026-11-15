@@ -95,6 +95,42 @@ export interface AuthAsk {
   proxy: boolean
 }
 
+/** Запись проверки паролей: слабый, повторённый или давно не менявшийся. */
+export interface PasswordAuditItem {
+  id: string
+  host: string
+  username: string
+  note: string
+  weak?: boolean
+  reused?: boolean
+  old?: boolean
+}
+
+export interface PasswordAudit {
+  weak: PasswordAuditItem[]
+  reused: PasswordAuditItem[]
+  old: PasswordAuditItem[]
+}
+
+/** Адрес для автозаполнения (список у поля: что подставить одним выбором). */
+export interface AddressItem {
+  id: string
+  name: string
+  summary: string
+  phone: string
+  email: string
+}
+
+/** Карта в списке: номер показывается только последними цифрами. */
+export interface CardItem {
+  id: string
+  nick: string
+  holder: string
+  last4: string
+  expMonth: number
+  expYear: number
+}
+
 export interface SitePermission {
   /** Полный origin — по нему решение и сбрасывается. */
   origin: string
@@ -482,6 +518,8 @@ export interface AutofillItem {
   username: string
   host: string
   passkey?: boolean
+  /** Адрес или карта: заполнит всю форму, а не одно поле. */
+  kind?: 'address' | 'card'
 }
 
 /** Поле входа на странице получило фокус: где показать список аккаунтов для автозаполнения. */
@@ -819,6 +857,23 @@ export interface MasakiApi {
     fill(wcId: number, id: string): void
     never(): Promise<string[]>
     forgetNever(origin: string): void
+    onChanged(cb: () => void): () => void
+    /** Случайный пароль для нового входа. */
+    generate(len?: number): Promise<string>
+    /** Проверка сейфа: слабые, повторённые и старые пароли. */
+    audit(): Promise<PasswordAudit>
+    /** Экспорт CSV открытым текстом (файл выбирает пользователь). */
+    exportCsv(): Promise<{ ok: boolean; error?: string; count?: number }>
+  }
+  /** Адреса и карты для автозаполнения; номер карты зашифрован Windows. */
+  autofill: {
+    addresses(): Promise<AddressItem[]>
+    cards(): Promise<CardItem[]>
+    saveAddress(p: Record<string, string | undefined> & { id?: string }): Promise<{ ok: boolean; error?: string }>
+    saveCard(p: { id?: string; holder?: string; number?: string; exp?: string; nick?: string }): Promise<{ ok: boolean; error?: string }>
+    remove(kind: 'address' | 'card', id: string): void
+    /** Вписать выбранную запись в поля формы вкладки (wcId — webContents вкладки). */
+    fill(wcId: number, kind: 'address' | 'card', id: string): void
     onChanged(cb: () => void): () => void
   }
   passkeys: {

@@ -21,10 +21,11 @@ import os from 'os'
 import path from 'path'
 import { JsonFile } from './store'
 import type { PlainLogin } from './passwords'
+import type { PlainAutofill } from './autofill'
 import type { PlainPasskey } from './passkeys'
 
 /** Запись сейфа: пароль или ключ доступа (у ключа kind: 'passkey'). */
-export type VaultItem = PlainLogin | PlainPasskey
+export type VaultItem = PlainLogin | PlainPasskey | PlainAutofill
 import type {
   HistoryEntry,
   SavedTab,

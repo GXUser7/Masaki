@@ -30,6 +30,7 @@ import * as passwords from './passwords'
 import * as passkeys from './passkeys'
 import { answerExternal, initExternalProtocols, requestExternal, watchExternalProtocols } from './externalProtocols'
 import { dropDevicePending, initDevices } from './devices'
+import * as autofill from './autofill'
 import { searchImage } from './searchImage'
 import { initTabMemory, noteTabCreation, prepareTabRestore, restoreAttachedTab } from './tabMemory'
 import {
@@ -1249,10 +1250,11 @@ function startSync(): Promise<void> {
     },
     state: (st) => win?.webContents.send('sync-state', st),
     historyLimit: HISTORY_LIMIT,
-    passwordsExport: () => [...passwords.syncExport(), ...passkeys.syncExport()],
+    passwordsExport: () => [...passwords.syncExport(), ...passkeys.syncExport(), ...autofill.syncExport()],
     passwordsApply: (items) => {
-      passwords.syncApply(items.filter((i) => !passkeys.isPlainPasskey(i)) as passwords.PlainLogin[])
+      passwords.syncApply(items.filter((i) => !passkeys.isPlainPasskey(i) && !autofill.isPlainAddress(i) && !autofill.isPlainCard(i)) as passwords.PlainLogin[])
       passkeys.syncApply(items.filter(passkeys.isPlainPasskey))
+      autofill.syncApply(items.filter((i) => autofill.isPlainAddress(i) || autofill.isPlainCard(i)))
     }
   })
 }
@@ -1305,6 +1307,18 @@ function registerPasswordIpc(): void {
   })
   ipcMain.handle('passwords:never', () => passwords.neverList())
   ipcMain.on('passwords:forget-never', (_e, origin: string) => passwords.forgetNever(String(origin)))
+  ipcMain.handle('passwords:generate', (_e, len: unknown) => passwords.generate(typeof len === 'number' ? len : 16))
+  ipcMain.handle('passwords:audit', () => passwords.audit())
+  ipcMain.handle('passwords:export', async () => {
+    if (!win) return { ok: false, error: 'Нет окна Masaki.' }
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: 'Экспорт паролей — в файле они открытым текстом, храните осторожно',
+      defaultPath: path.join(app.getPath('downloads'), 'Masaki-пароли.csv'),
+      filters: [{ name: 'CSV', extensions: ['csv'] }]
+    })
+    if (canceled || !filePath) return { ok: true }
+    return passwords.exportTo(filePath)
+  })
 
   // Ключи доступа: запросы WebAuthn из вкладок (сайт — по фрейму) и ответы пользователя из интерфейса.
   for (const op of ['create', 'get', 'abort'] as const) {
@@ -1332,6 +1346,34 @@ function registerPasswordIpc(): void {
   ipcMain.on('passkeys:use', (e, wcId: number, id: string) => {
     const wc = webContents.fromId(Number(wcId))
     if (fromUi(e) && wc && wc.getType() === 'webview') passkeys.useConditional(wc, String(id))
+  })
+
+  // Адреса и карты: список у поля страницы, заполнение формы, хранение (номер карты — safeStorage).
+  const fromAnyUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => !!win && e.sender === win.webContents
+  // Список у поля формы (фрейм — любой, origin его же). Полный номер карты уходит только при заполнении.
+  ipcMain.handle('af:list', (e, kind: unknown) => {
+    if (!fromTab(e) || (kind !== 'address' && kind !== 'card')) return []
+    return kind === 'address'
+      ? autofill.listAddresses().map((a) => ({ id: a.id, username: a.summary || a.name || 'Адрес', host: 'Адрес', kind: 'address' as const }))
+      : autofill.listCards().map((c) => ({
+          id: c.id,
+          username: `•••• ${c.last4}${c.expMonth ? ` · ${String(c.expMonth).padStart(2, '0')}/${String(c.expYear).slice(-2)}` : ''}`,
+          host: c.nick || c.holder || 'Карта',
+          kind: 'card' as const
+        }))
+  })
+  ipcMain.handle('af:addresses', (e) => (fromAnyUi(e) ? autofill.listAddresses() : []))
+  ipcMain.handle('af:cards', (e) => (fromAnyUi(e) ? autofill.listCards() : []))
+  ipcMain.handle('af:save-address', (e, p: Record<string, string>) => (fromAnyUi(e) ? autofill.saveAddress(p ?? {}) : { ok: false }))
+  ipcMain.handle('af:save-card', (e, p: { holder?: string; number?: string; exp?: string; nick?: string; id?: string }) =>
+    fromAnyUi(e) ? autofill.saveCard(p ?? {}) : { ok: false }
+  )
+  ipcMain.on('af:remove', (e, kind: unknown, id: unknown) => {
+    if (fromAnyUi(e) && (kind === 'address' || kind === 'card') && typeof id === 'string') autofill.remove(kind, id)
+  })
+  ipcMain.on('af:fill', (e, wcId: unknown, kind: unknown, id: unknown) => {
+    if (!fromAnyUi(e) || typeof wcId !== 'number' || (kind !== 'address' && kind !== 'card') || typeof id !== 'string') return
+    autofill.fill(wcId, kind, id)
   })
 }
 
@@ -1960,6 +2002,10 @@ if (!app.requestSingleInstanceLock()) {
       ui: (channel, payload) => win?.webContents.send(channel, payload),
       changed: () => sync.onPasswordsChanged()
     })
+    await autofill.initAutofill({
+      ui: (channel, payload) => win?.webContents.send(channel, payload),
+      changed: () => sync.onPasswordsChanged()
+    })
     await passkeys.initPasskeys({
       ui: (channel, payload) => win?.webContents.send(channel, payload),
       changed: () => sync.onPasswordsChanged(),
@@ -2012,6 +2058,7 @@ if (!app.requestSingleInstanceLock()) {
     permissionsFile.flushSync()
     sync.flushSync()
     passwords.flushPasswords()
+    autofill.flushAutofill()
     passkeys.flushPasskeys()
     flushDownloads()
   })

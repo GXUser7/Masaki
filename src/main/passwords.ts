@@ -10,7 +10,7 @@ import fs from 'fs'
 import path from 'path'
 import { getDomain } from 'tldts'
 import { JsonFile } from './store'
-import type { AutofillRequest, PasswordCsv, PasswordImportResult, PasswordItem, PasswordOffer } from '../shared/types'
+import type { AutofillRequest, PasswordAudit, PasswordAuditItem, PasswordCsv, PasswordImportResult, PasswordItem, PasswordOffer } from '../shared/types'
 
 export interface Login {
   id: string
@@ -110,6 +110,77 @@ const hostOf = (origin: string): string => {
 
 function item(l: Login): PasswordItem {
   return { id: l.id, origin: l.origin, host: hostOf(l.origin), username: l.username, note: l.note, updated: l.updated, used: l.used }
+}
+
+// ---------- Генерация, проверка, экспорт ----------
+
+// Похожие знаки (0O1lI|) из набора убраны: пароль читают с экрана и диктуют голосом.
+const GEN = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*()-_=+?'
+const GEN_LOWER = GEN.toLowerCase()
+const GEN_UPPER = GEN.toUpperCase()
+const GEN_DIGITS = '23456789'
+
+/** Случайный пароль: гарантированно есть строчные, заглавные и цифры; длина 8–64, по умолчанию 16. */
+export function generate(len = 16): string {
+  const n = Math.min(Math.max(Math.round(len) || 16, 8), 64)
+  const pick = (from: string): string => from[crypto.randomInt(from.length)]
+  const out: string[] = [pick(GEN_LOWER), pick(GEN_UPPER), pick(GEN_DIGITS)]
+  while (out.length < n) out.push(pick(GEN))
+  // Перемешиваем Фишером—Йетсом: первые три знака иначе всегда были бы «строчная, заглавная, цифра».
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1)
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out.join('')
+}
+
+const auditItem = (l: Login): PasswordAuditItem => ({ id: l.id, host: hostOf(l.origin), username: l.username, note: l.note })
+
+/** Проверка сейфа: слабые, повторённые на разных сайтах и давно не менявшиеся пароли. */
+export function audit(): PasswordAudit {
+  const items: PasswordAuditItem[] = []
+  const byValue = new Map<string, Login[]>()
+  for (const l of live()) {
+    const pw = decrypt(l)
+    if (pw == null) continue
+    if (pw) {
+      const same = byValue.get(pw)
+      if (same) same.push(l)
+      else byValue.set(pw, [l])
+    }
+    const weak = pw.length < 10 || !/[a-zа-яё]/i.test(pw) || !/\d/.test(pw)
+    if (weak) items.push({ ...auditItem(l), weak: true })
+  }
+  const reused: PasswordAuditItem[] = []
+  for (const same of byValue.values()) {
+    if (same.length < 2 || siteOf(same[0].origin) !== siteOf(same[1].origin)) continue
+    reused.push(...same.map((l) => ({ ...auditItem(l), reused: true })))
+  }
+  const year = 365 * 24 * 60 * 60_000
+  const old = live()
+    .filter((l) => l.updated && Date.now() - l.updated > year)
+    .map((l) => ({ ...auditItem(l), old: true }))
+  return { weak: items, reused, old }
+}
+
+/** Экспорт CSV (как в Chrome: пользователь сам попросил и сам выбрал файл). Пароли — открытым текстом. */
+export function exportTo(file: string): { ok: boolean; error?: string; count?: number } {
+  const esc = (v: string): string => (/^[=+@-]/.test(v) ? "'" : '') + v.replace(/"/g, '""')
+  const lines = ['name,url,username,password,note']
+  let count = 0
+  for (const l of live()) {
+    const pw = decrypt(l)
+    if (pw == null) continue
+    lines.push([esc(hostOf(l.origin)), esc(l.origin), esc(l.username), esc(pw), esc(l.note)].join(','))
+    count++
+  }
+  try {
+    // BOM, чтобы Excel открыл кириллицу правильно; CRLF — как у экспортов Chrome.
+    fs.writeFileSync(file, '﻿' + lines.join('\r\n') + '\r\n', { mode: 0o600 })
+    return { ok: true, count }
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e) }
+  }
 }
 
 export function list(): PasswordItem[] {

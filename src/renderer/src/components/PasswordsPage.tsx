@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { PasskeyItem, PasswordImportResult, PasswordItem } from '../../../shared/types'
+import type { AddressItem, CardItem, PasskeyItem, PasswordAudit, PasswordImportResult, PasswordItem } from '../../../shared/types'
 import { useStore } from '../store'
 import { Icon } from './Icon'
 import { Fav } from './parts'
@@ -73,6 +73,15 @@ function Editor({ item, onDone }: { item?: PasswordItem; onDone: () => void }): 
           />
           <button className="ib" aria-label={show ? 'Скрыть пароль' : 'Показать пароль'} onClick={() => setShow(!show)}>
             <Icon name={show ? 'visibilityOff' : 'visibility'} />
+          </button>
+          {/* Генератор, как у Chrome при регистрации: 16 знаков, похожие 0O1lI исключены. */}
+          <button
+            className="ib"
+            aria-label="Сгенерировать пароль"
+            title="Сгенерировать пароль"
+            onClick={() => void window.masaki.passwords.generate().then((p) => (setPassword(p), setShow(true)))}
+          >
+            <Icon name="sync" />
           </button>
         </span>
         <input placeholder="Заметка" value={note} onChange={(e) => setNote(e.target.value)} aria-label="Заметка" />
@@ -191,6 +200,216 @@ function PasskeyRow({ it }: { it: PasskeyItem }): React.JSX.Element {
   )
 }
 
+/** Раздел «Проверка паролей»: слабые, повторённые на разных сайтах и старые. */
+function AuditSection({ rev }: { rev: number }): React.JSX.Element {
+  const [report, setReport] = useState<PasswordAudit | null>(null)
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (open) void window.masaki.passwords.audit().then(setReport)
+  }, [open, rev])
+  const total = report ? report.weak.length + report.reused.length + report.old.length : 0
+  const group = (title: string, hint: string, list: typeof report extends null ? never : NonNullable<typeof report>['weak']) =>
+    list.length > 0 && (
+      <div className="pw-audit-group">
+        <b>{title}</b>
+        {list.map((it) => (
+          <div key={it.id + title} className="pw-audit-row lift">
+            <Fav url={'https://' + it.host} title={it.host} />
+            <span className="pw-t">
+              <b>{it.host}</b>
+              <small>{it.username || 'без логина'}</small>
+            </span>
+            <small className="pw-audit-why">{hint}</small>
+          </div>
+        ))}
+      </div>
+    )
+  return (
+    <section>
+      <h2>Проверка паролей</h2>
+      <p className="hint">
+        {report
+          ? total === 0
+            ? 'Слабых, повторённых и старых паролей не нашлось.'
+            : `Замечаний: ${total}.`
+          : 'Проверяет сейф: короткие пароли без цифр, один и тот же пароль на разных сайтах и те, что не менялись больше года.'}
+      </p>
+      <button className="tonal" onClick={() => setOpen(!open)}>
+        <Icon name={open ? 'close' : 'check'} />
+        {open ? 'Скрыть' : 'Проверить'}
+      </button>
+      {report && open && (
+        <div className="pw-audit">
+          {group('Слабые', 'короче 10 знаков или без цифр', report.weak)}
+          {group('Повторённые', 'тот же пароль стоит на другом сайте', report.reused)}
+          {group('Старые', 'не менялись больше года', report.old)}
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** Форма адреса: однострочная сетка, всё необязательно, кроме чего-то одного заполненного. */
+function AddressEditor({ item, onDone }: { item?: AddressItem; onDone: () => void }): React.JSX.Element {
+  const [f, setF] = useState<Record<string, string>>({
+    name: item?.name ?? '',
+    organization: '',
+    street: '',
+    city: '',
+    state: '',
+    zip: '',
+    country: '',
+    phone: '',
+    email: ''
+  })
+  const [err, setErr] = useState<string | null>(null)
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value })
+  const save = (): void => {
+    void window.masaki.autofill.saveAddress({ id: item?.id, ...f }).then((r) => {
+      if (r.ok) onDone()
+      else setErr(r.error ?? 'Не получилось')
+    })
+  }
+  const field = (k: string, label: string) => (
+    <input placeholder={label} value={f[k]} onChange={set(k)} aria-label={label} spellCheck={false} />
+  )
+  return (
+    <div className="pw-edit">
+      <div className="pw-edit-row">{field('name', 'Имя и фамилия')}{field('organization', 'Организация')}</div>
+      <div className="pw-edit-row">{field('street', 'Улица, дом, квартира')}</div>
+      <div className="pw-edit-row">{field('city', 'Город')}{field('state', 'Регион')}{field('zip', 'Индекс')}</div>
+      <div className="pw-edit-row">{field('country', 'Страна')}{field('phone', 'Телефон')}{field('email', 'Почта')}</div>
+      {err && <p className="err-text">{err}</p>}
+      <div className="pw-edit-acts">
+        <button className="perm-btn ghost" onClick={onDone}>Отмена</button>
+        <button className="perm-btn primary" onClick={save}>Сохранить</button>
+      </div>
+    </div>
+  )
+}
+
+/** Форма карты: номер проверяется Луном, хранится зашифрованным Windows, в списке — последние 4 цифры. */
+function CardEditor({ item, onDone }: { item?: CardItem; onDone: () => void }): React.JSX.Element {
+  const [holder, setHolder] = useState(item?.holder ?? '')
+  const [number, setNumber] = useState('')
+  const [exp, setExp] = useState(item?.expMonth ? `${String(item.expMonth).padStart(2, '0')}/${String(item.expYear).slice(-2)}` : '')
+  const [nick, setNick] = useState(item?.nick ?? '')
+  const [err, setErr] = useState<string | null>(null)
+  const save = (): void => {
+    void window.masaki.autofill.saveCard({ id: item?.id, holder, number, exp, nick }).then((r) => {
+      if (r.ok) onDone()
+      else setErr(r.error ?? 'Не получилось')
+    })
+  }
+  return (
+    <div className="pw-edit">
+      <div className="pw-edit-row">
+        <span className="pw-pass">
+          <input
+            placeholder={item ? `Новый номер (•••• ${item.last4})` : 'Номер карты'}
+            value={number}
+            onChange={(e) => setNumber(e.target.value)}
+            aria-label="Номер карты"
+            inputMode="numeric"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </span>
+        <input placeholder="Имя держателя" value={holder} onChange={(e) => setHolder(e.target.value)} aria-label="Имя держателя" spellCheck={false} />
+      </div>
+      <div className="pw-edit-row">
+        <input placeholder="Срок ММ/ГГ" value={exp} onChange={(e) => setExp(e.target.value)} aria-label="Срок действия" inputMode="numeric" spellCheck={false} />
+        <input placeholder="Название (например, «Личная»)" value={nick} onChange={(e) => setNick(e.target.value)} aria-label="Название карты" />
+      </div>
+      {err && <p className="err-text">{err}</p>}
+      <div className="pw-edit-acts">
+        <button className="perm-btn ghost" onClick={onDone}>Отмена</button>
+        <button className="perm-btn primary" disabled={!holder && !number} onClick={save}>Сохранить</button>
+      </div>
+    </div>
+  )
+}
+
+/** Разделы «Адреса» и «Карты»: списки с правкой, подстановка у полей форм на сайтах. */
+function AutofillSection(): React.JSX.Element {
+  const rev = useStore((s) => s.pwRev)
+  const [addresses, setAddresses] = useState<AddressItem[]>([])
+  const [cards, setCards] = useState<CardItem[]>([])
+  const [editing, setEditing] = useState<string | null>(null) // 'new-address' | 'new-card' | id
+  useEffect(() => {
+    void window.masaki.autofill.addresses().then(setAddresses)
+    void window.masaki.autofill.cards().then(setCards)
+  }, [rev])
+  return (
+    <section>
+      <h2>Адреса и карты</h2>
+      <p className="hint">
+        Подставляются у полей форм: адрес — в поля имени, телефона, улицы и индекса; карта — в поля оплаты.
+        Номер карты хранится зашифрованным Windows и заполняет форму только по вашему выбору.
+      </p>
+      <div className="pw-bar-tools">
+        <button className="tonal" onClick={() => setEditing(editing === 'new-address' ? null : 'new-address')}>
+          <Icon name="add" /> Адрес
+        </button>
+        <button className="tonal" onClick={() => setEditing(editing === 'new-card' ? null : 'new-card')}>
+          <Icon name="add" /> Карта
+        </button>
+      </div>
+      {editing === 'new-address' && <AddressEditor onDone={() => setEditing(null)} />}
+      {editing === 'new-card' && <CardEditor onDone={() => setEditing(null)} />}
+      <div className="pw-list">
+        {addresses.map((a) => (
+          <div key={a.id} className="pw-row">
+            <Fav url="about:blank" title="Адрес" />
+            <span className="pw-t">
+              <b>{a.name || 'Адрес'}</b>
+              <small>{[a.summary, a.phone, a.email].filter(Boolean).join(' · ')}</small>
+            </span>
+            {editing === a.id ? (
+              <AddressEditor item={a} onDone={() => setEditing(null)} />
+            ) : (
+              <>
+                <button className="ib" aria-label="Изменить адрес" title="Изменить" onClick={() => setEditing(a.id)}>
+                  <Icon name="edit" />
+                </button>
+                <button className="ib" aria-label="Удалить адрес" title="Удалить" onClick={() => window.masaki.autofill.remove('address', a.id)}>
+                  <Icon name="delete" />
+                </button>
+              </>
+            )}
+          </div>
+        ))}
+        {cards.map((c) => (
+          <div key={c.id} className="pw-row">
+            <Fav url="about:blank" title="Карта" />
+            <span className="pw-t">
+              <b>{c.nick || c.holder || 'Карта'}</b>
+              <small>
+                •••• {c.last4}
+                {c.expMonth ? ` · ${String(c.expMonth).padStart(2, '0')}/${String(c.expYear).slice(-2)}` : ''}
+                {c.holder ? ` · ${c.holder}` : ''}
+              </small>
+            </span>
+            {editing === c.id ? (
+              <CardEditor item={c} onDone={() => setEditing(null)} />
+            ) : (
+              <>
+                <button className="ib" aria-label="Изменить карту" title="Изменить" onClick={() => setEditing(c.id)}>
+                  <Icon name="edit" />
+                </button>
+                <button className="ib" aria-label="Удалить карту" title="Удалить" onClick={() => window.masaki.autofill.remove('card', c.id)}>
+                  <Icon name="delete" />
+                </button>
+              </>
+            )}
+          </div>
+        ))}
+        {!addresses.length && !cards.length && <p className="hint">Пока ничего нет — добавьте адрес или карту.</p>}
+      </div>
+    </section>
+  )
+}
+
 /** masaki://passwords — менеджер паролей. */
 export function PasswordsPage(): React.JSX.Element {
   const rev = useStore((s) => s.pwRev)
@@ -242,6 +461,18 @@ export function PasswordsPage(): React.JSX.Element {
               <Icon name="download" />
               Импорт CSV…
             </button>
+            <button
+              className="tonal"
+              onClick={() =>
+                void window.masaki.passwords.exportCsv().then((r) => {
+                  if (r.error) setMsg(r.error)
+                  else if (r.count != null) setMsg(`Экспортировано ${r.count} в CSV — в файле пароли открытым текстом.`)
+                })
+              }
+            >
+              <Icon name="doc" />
+              Экспорт CSV…
+            </button>
           </div>
           {msg && <p className="hint ci-done">{msg}</p>}
           {editing === 'new' && <Editor onDone={() => setEditing(null)} />}
@@ -262,6 +493,8 @@ export function PasswordsPage(): React.JSX.Element {
             {items && items.length > 0 && shown.length === 0 && <p className="hint">Ничего не нашлось.</p>}
           </div>
         </section>
+        <AuditSection rev={rev} />
+        <AutofillSection />
         <section>
           <h2>Ключи доступа</h2>
           <p className="hint">

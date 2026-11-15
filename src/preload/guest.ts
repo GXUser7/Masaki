@@ -182,8 +182,10 @@ function offerFor(t: HTMLInputElement, explicit = false): void {
 }
 
 document.addEventListener('focusin', (e) => {
-  if (e.target instanceof HTMLInputElement) offerFor(e.target)
-  else hide()
+  if (e.target instanceof HTMLInputElement) {
+    offerFor(e.target)
+    offerAf(e.target)
+  } else hide()
 }, true)
 document.addEventListener('pointerdown', (e) => {
   const t = e.target
@@ -245,6 +247,45 @@ ipcRenderer.on('pw:fill', (_e, d: { username: string; password: string }) => {
     if (f.pass) {
       filledValues.set(f.pass, d.password)
       setValue(f.pass, d.password)
+    }
+  } finally {
+    filling = false
+  }
+})
+
+// 3б. Адреса и карты: поле с autocomplete «name|tel|postal-code|cc-number|…» показывает список записей,
+// выбор заполняет ВСЮ форму сразу (адрес — улицу, город, индекс; карту — номер, срок, держателя).
+const AF_AUTOS = /^(name|fname|lname|email|tel|organization|street-address|address-line[12]|address-level[123]|postal-code|country|cc-name|cc-number|cc-exp|cc-exp-month|cc-exp-year|cc-csc)$/
+const isCcField = (t: HTMLInputElement): boolean => /^cc-/.test((t.getAttribute('autocomplete') || '').toLowerCase())
+
+async function offerAf(t: HTMLInputElement): Promise<void> {
+  const ac = (t.getAttribute('autocomplete') || '').toLowerCase().trim()
+  if (!AF_AUTOS.test(ac) || t.disabled || t.readOnly) return
+  const kind = isCcField(t) ? 'card' : 'address'
+  const request = ++focusRequest
+  const items = (await ipcRenderer.invoke('af:list', kind).catch(() => [])) as Item[]
+  if (request !== focusRequest || filling || !t.isConnected || document.activeElement !== t) return
+  if (!Array.isArray(items) || !items.length) return
+  keys = []
+  const f: Fields = { user: null, pass: null, focus: t }
+  active = f
+  show(f, items)
+}
+
+/** Заполнить всю форму значениями выбранной записи (autocomplete поля ↔ ключ значения, иначе name/id). */
+ipcRenderer.on('af:fill', (_e, values: Record<string, string>) => {
+  const scope: ParentNode = active?.focus ? (active.focus.form ?? document) : document
+  hide()
+  filling = true
+  try {
+    for (const input of inputsIn(scope)) {
+      const ac = (input.getAttribute('autocomplete') || input.autocomplete || '').toLowerCase().trim()
+      const key = values[ac] !== undefined ? ac : (input.name || input.id || '').toLowerCase()
+      const v = key ? values[key] : undefined
+      if (v && input.value !== v) {
+        filledValues.set(input, v)
+        setValue(input, v)
+      }
     }
   } finally {
     filling = false

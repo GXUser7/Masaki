@@ -141,6 +141,7 @@ export function pickAutofill(index: number): void {
   const it = af?.req.items[index]
   if (!af || !it) return
   if (it.passkey) window.masaki.passkeys.useConditional(af.wcId, it.id)
+  else if (it.kind) window.masaki.autofill.fill(af.wcId, it.kind, it.id)
   else window.masaki.passwords.fill(af.wcId, it.id)
   useStore.setState({ autofill: null })
 }
@@ -199,17 +200,17 @@ export function AutofillMenu(): React.JSX.Element | null {
         <button
           key={it.id}
           id={`af-${i}`}
-          className={'af-row' + (it.passkey ? ' af-pk' : '') + (af.sel === i ? ' on' : '')}
+          className={'af-row' + (it.passkey || it.kind ? ' af-pk' : '') + (af.sel === i ? ' on' : '')}
           role="option"
           aria-selected={af.sel === i}
           onMouseDown={pick(i)}
         >
           <span className="af-ic">
-            <Icon name={it.passkey ? 'passkey' : 'key'} />
+            <Icon name={it.passkey ? 'passkey' : it.kind === 'card' ? 'shield' : it.kind === 'address' ? 'location' : 'key'} />
           </span>
           <span className="af-t">
             <b>{it.username || 'Без логина'}</b>
-            <small>{it.passkey ? `Ключ доступа · ${it.host}` : `${it.host} · ••••••••`}</small>
+            <small>{it.passkey ? `Ключ доступа · ${it.host}` : it.kind ? it.host : `${it.host} · ••••••••`}</small>
           </span>
         </button>
       ))}

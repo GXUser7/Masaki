@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const mode = process.argv[2]
-assert.ok(['unload', 'history', 'display', 'iframe'].includes(mode), 'Выберите unload, history, display или iframe')
+assert.ok(['unload', 'history', 'display', 'iframe', 'autofill'].includes(mode), 'Выберите режим: unload, history, display, iframe или autofill')
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'masaki-audit-'))
 const output = path.join(root, 'test-output')
 fs.mkdirSync(output, { recursive: true })
@@ -19,6 +19,13 @@ fs.mkdirSync(output, { recursive: true })
 const site = http.createServer((req, res) => {
   const p = new URL(req.url, 'http://localhost').pathname
   const html = (body) => `<!doctype html><meta charset="utf-8"><title>${p.slice(1) || 'домой'}</title><style>body{background:#152221;color:#e2f1e9;font:20px sans-serif;margin:40px}button{font:inherit;padding:8px 16px}</style>${body}`
+  if (p === '/shop') {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    return res.end(html(`<h1>оформление</h1><form>
+      <input id="a1" autocomplete="name"><input id="a2" autocomplete="tel"><input id="a3" autocomplete="postal-code">
+      <input id="c1" autocomplete="cc-name"><input id="c2" autocomplete="cc-number"><input id="c3" autocomplete="cc-exp">
+    </form>`))
+  }
   if (p === '/login-frame') {
     res.setHeader('content-type', 'text/html; charset=utf-8')
     return res.end(html(`<input id="user" type="email" autocomplete="username" placeholder="логин в iframe"><input id="pass" type="password">`))
@@ -116,6 +123,32 @@ try {
     assert.equal(await page.locator('.dlp-row').count(), before - 1, 'запись удалена')
     await shot('removed')
     console.log('OK: история открывается по Ctrl+H, записи на месте, удаление работает')
+  } else if (mode === 'autofill') {
+    // Адрес и карта подставляются у полей форм одним выбором; номер карты уходит на страницу только так.
+    await page.evaluate(() => window.masaki.autofill.saveAddress({ name: 'Тест Тестов', street: 'ул. Примерная, 1', city: 'Москва', zip: '101000', phone: '+7 900 000-00-00' }))
+    await page.evaluate(() => window.masaki.autofill.saveCard({ holder: 'TEST TESTOV', number: '4242 4242 4242 4242', exp: '12/29', nick: 'Тестовая' }))
+    await app.evaluate(({ BrowserWindow }, [id, u]) => BrowserWindow.fromId(id).webContents.send('command', { type: 'open-url', url: u }), [mainId, base + '/shop'])
+    await page.waitForSelector('webview.wv.on', { timeout: 15000 })
+    await waitFor(async () => (await url()).endsWith('/shop'), 'форма магазина')
+    const wc = await page.evaluate(() => document.querySelector('webview.wv.on').getWebContentsId())
+    const guest = (code) => app.evaluate(({ webContents }, [id, code]) => webContents.fromId(id).executeJavaScript(code, true), [wc, code])
+    await waitFor(async () => (await guest(`document.readyState`)) === 'complete', 'форма готова')
+    // Адрес: фокус в поле имени — список — выбор — все поля адреса заполнены.
+    await guest(`document.getElementById('a1').focus()`)
+    await waitFor(() => page.locator('.af-menu').count().then((n) => n > 0), 'список адресов у поля')
+    await page.locator('.af-menu .af-row').first().dispatchEvent('mousedown')
+    await waitFor(async () => (await guest(`document.getElementById('a2').value`)) === '+7 900 000-00-00', 'телефон подставлен')
+    assert.equal(await guest(`document.getElementById('a3').value`), '101000', 'индекс подставлен')
+    await shot('address')
+    // Карта: номер целиком, срок и держатель.
+    await guest(`document.getElementById('c2').focus()`)
+    await waitFor(() => page.locator('.af-menu').count().then((n) => n > 0), 'список карт у поля')
+    await page.locator('.af-menu .af-row').first().dispatchEvent('mousedown')
+    await waitFor(async () => (await guest(`document.getElementById('c2').value`)) === '4242424242424242', 'номер карты подставлен')
+    assert.equal(await guest(`document.getElementById('c3').value`), '12/29', 'срок подставлен')
+    assert.equal(await guest(`document.getElementById('c1').value`), 'TEST TESTOV', 'держатель подставлен')
+    await shot('card')
+    console.log('OK: адрес и карта подставляются одним выбором, форма заполняется целиком')
   } else if (mode === 'iframe') {
     // Форма входа внутри iframe: guest.js теперь сессионный и работает во всех фреймах,
     // пароли подбираются по origin фрейма. Сохранённый пароль того же хоста подойдёт.

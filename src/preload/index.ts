@@ -183,7 +183,19 @@ const api: MasakiApi = {
     fill: (wcId, id) => ipcRenderer.send('passwords:fill', wcId, id),
     never: () => ipcRenderer.invoke('passwords:never'),
     forgetNever: (origin) => ipcRenderer.send('passwords:forget-never', origin),
-    onChanged: (cb) => listen<void>('passwords-changed', () => cb())
+    onChanged: (cb) => listen<void>('passwords-changed', () => cb()),
+    generate: (len) => ipcRenderer.invoke('passwords:generate', len),
+    audit: () => ipcRenderer.invoke('passwords:audit'),
+    exportCsv: () => ipcRenderer.invoke('passwords:export')
+  },
+  autofill: {
+    addresses: () => ipcRenderer.invoke('af:addresses'),
+    cards: () => ipcRenderer.invoke('af:cards'),
+    saveAddress: (p) => ipcRenderer.invoke('af:save-address', p),
+    saveCard: (p) => ipcRenderer.invoke('af:save-card', p),
+    remove: (kind, id) => ipcRenderer.send('af:remove', kind, id),
+    fill: (wcId, kind, id) => ipcRenderer.send('af:fill', wcId, kind, id),
+    onChanged: (cb) => listen<void>('autofill-changed', () => cb())
   },
   passkeys: {
     list: () => ipcRenderer.invoke('passkeys:list'),
