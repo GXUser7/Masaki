@@ -66,7 +66,8 @@ import {
   type SavedSession,
   type SavedTab,
   type Settings,
-  type SyncOptions
+  type SyncOptions,
+  type UnloadAsk
 } from '../shared/types'
 
 // Имя сессии осталось от старого названия (Frost): в ней куки и входы пользователя, не менять.
@@ -558,9 +559,16 @@ function startExtensions(): Promise<void> {
     changed: extChanged,
     confirmInstall: (p) =>
       new Promise((resolve) => {
-        if (!win) return resolve(false)
+        // Без ответа магазин ждёт вечно («навсегда устанавливает»): окно перезагрузилось, ответ утерян.
+        // Через три минуты считаем отказом — кнопку «Установить» на сайте можно нажать снова.
+        const done = (ok: boolean): void => {
+          clearTimeout(timer)
+          resolve(ok)
+        }
+        const timer = setTimeout(() => done(false), 3 * 60_000)
+        if (!win) return done(false)
         installPrompts.get(p.id)?.(false)
-        installPrompts.set(p.id, resolve)
+        installPrompts.set(p.id, done)
         if (win.isMinimized()) win.restore()
         win.webContents.send('ext:install-prompt', p)
       })
@@ -983,6 +991,38 @@ function dropUiPending(): void {
     installPrompts.delete(id)
     resolve(false)
   }
+  // Вопросы ухода снимаем молчанием — это «остаться»: страница не теряет введённое.
+  for (const id of [...unloadAsks.keys()]) {
+    unloadAsks.delete(id)
+    win?.webContents.send('unload-gone', id)
+  }
+}
+
+/**
+ * Сайт просит подтверждение перед уходом (beforeunload: Google Docs, редакторы, банки). Без обработчика
+ * 'will-prevent-unload' любая навигация во вкладке отменялась молча — «обновить» и «назад» ничего не делали,
+ * и сайт выглядел намертво зависшим. Спрашиваем стеклянной плашкой интерфейса; навигация стоит до ответа,
+ * как у системного окна в Chrome.
+ */
+const unloadAsks = new Map<string, { wcId: number; event: Electron.Event; origin: string }>()
+
+/** Повесить вопрос «покинуть страницу?» на содержимое (вкладка или всплывающее окно сайта). */
+function watchUnload(contents: WebContents): void {
+  contents.on('will-prevent-unload', (e) => {
+    const id = 'u' + randomUUID()
+    const origin = originLabel(originOf(contents.getURL()))
+    unloadAsks.set(id, { wcId: contents.id, event: e, origin })
+    // Вкладку закрыли — вопрос уходит сам; страницы больше нет.
+    contents.once('destroyed', () => {
+      if (unloadAsks.delete(id)) win?.webContents.send('unload-gone', id)
+    })
+    win?.webContents.send('unload-ask', { id, wcId: contents.id, origin })
+  })
+}
+
+/** Все ожидающие вопросы (для перечитывания при загрузке интерфейса). */
+function unloadAskList(): UnloadAsk[] {
+  return [...unloadAsks.entries()].map(([id, a]) => ({ id, wcId: a.wcId, origin: a.origin }))
 }
 
 function askJsDialog(e: Electron.IpcMainEvent, d: unknown): void {
@@ -1094,11 +1134,13 @@ app.on('web-contents-created', (_e, contents) => {
   // Всплывающее окно сайта (вход через Google, оплата) живёт в сессии вкладок, но это не webview.
   if (contents.getType() === 'window' && contents.session === session.fromPartition(PARTITION)) {
     watchExternalProtocols(contents)
+    watchUnload(contents)
     contents.setWindowOpenHandler(({ url }) => ({ action: requestExternal(contents, url) ? 'deny' : 'allow' }))
   }
   if (contents.getType() !== 'webview') return
   noteTabCreation(contents)
   watchExternalProtocols(contents)
+  watchUnload(contents)
   attachShortcuts(contents, true)
   watchWebview(contents)
   extensions.trackTab(contents)
@@ -1256,6 +1298,9 @@ function registerPasswordIpc(): void {
   ipcMain.handle('pk:conditional', (e) => (fromTab(e) ? passkeys.conditionalItems(e.sender) : []))
   const fromUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => !!win && e.sender === win.webContents
   ipcMain.handle('passkeys:list', (e) => (fromUi(e) ? passkeys.list() : []))
+  // Окна ключей, которые уже ждут ответа: интерфейс перечитывает их при загрузке (иначе после его
+  // перезапуска окно терялось, а сайт ждал до таймаута).
+  ipcMain.handle('passkeys:prompts', (e) => (fromUi(e) ? passkeys.prompts() : []))
   ipcMain.handle('passkeys:remove', (e, id: string) => {
     if (fromUi(e)) passkeys.remove(String(id))
   })
@@ -1362,6 +1407,12 @@ function registerIpc(): void {
     historyFile.write(history, 0)
     sync.onHistoryCleared()
   })
+  ipcMain.on('history:remove', (_e, entry: HistoryEntry) => {
+    if (!entry || typeof entry.url !== 'string' || typeof entry.time !== 'number') return
+    history = history.filter((h) => !(h.url === entry.url && h.time === entry.time))
+    historyFile.write(history, 0)
+    sync.onHistoryChanged()
+  })
 
   const downloadUi = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
     !!win && e.sender === win.webContents && e.senderFrame === win.webContents.mainFrame
@@ -1428,6 +1479,17 @@ function registerIpc(): void {
     }
   })
   ipcMain.on('js:dialog', askJsDialog)
+  // Уход со страницы: ответ только из интерфейса Masaki. true — покинуть (у will-prevent-unload
+  // preventDefault означает «всё же выгрузить»), false — остаться на странице.
+  ipcMain.on('unload:answer', (e, id: unknown, leave: unknown) => {
+    if (!downloadUi(e) || typeof id !== 'string') return
+    const ask = unloadAsks.get(id)
+    if (!ask) return
+    unloadAsks.delete(id)
+    if (leave === true) ask.event.preventDefault()
+    win?.webContents.send('unload-gone', id)
+  })
+  ipcMain.handle('unload:list', (e) => (downloadUi(e) ? unloadAskList() : []))
   // Ответ на окно страницы — только из интерфейса Masaki, не из самой страницы.
   ipcMain.on('js:answer', (e, id: unknown, ok: unknown, value: unknown, mute: unknown) => {
     if (!downloadUi(e) || typeof id !== 'string') return

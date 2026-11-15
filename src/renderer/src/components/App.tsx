@@ -17,7 +17,7 @@ import { AutofillMenu, PasskeySheet, PasswordBar } from './PasswordUi'
 import { ExtInstallSheet } from './ExtInstall'
 import { matchesPanel, syncGlassAll } from '../lib/glass'
 import { Grain } from './parts'
-import { PageDialog, PermissionBar } from './Permissions'
+import { PageDialog, PermissionBar, UnloadBar } from './Permissions'
 import { openInputMenu, openPageMenu } from '../menus'
 import { NewTab } from './NewTab'
 import { Palette } from './Palette'
@@ -108,6 +108,9 @@ export function App(): React.JSX.Element {
       useStore.getState().loadAccounts()
       useStore.setState({ sync: await window.masaki.sync.state() })
       useStore.setState({ update: await window.masaki.update.state() })
+      // Окна, что уже ждали ответа, пока интерфейса не было (ключи доступа, уход со страницы).
+      useStore.setState({ pkPrompts: await window.masaki.passkeys.prompts() })
+      useStore.setState({ unloadAsks: await window.masaki.unload.asks() })
     })()
     // Запасной путь для хоткеев: обычно их ловит главный процесс и до окна они не доходят.
     const onKey = (e: KeyboardEvent): void => {
@@ -174,7 +177,9 @@ export function App(): React.JSX.Element {
       window.masaki.passkeys.onPrompt((p) => useStore.setState((st) => ({ pkPrompts: [...st.pkPrompts.filter((x) => x.id !== p.id), p] }))),
       window.masaki.passkeys.onPromptClose((id) => useStore.setState((st) => ({ pkPrompts: st.pkPrompts.filter((x) => x.id !== id) }))),
       window.masaki.jsDialogs.onShow((d) => useStore.setState((st) => ({ jsDialogs: [...st.jsDialogs.filter((x) => x.id !== d.id), d] }))),
-      window.masaki.jsDialogs.onClose((id) => useStore.setState((st) => ({ jsDialogs: st.jsDialogs.filter((x) => x.id !== id) })))
+      window.masaki.jsDialogs.onClose((id) => useStore.setState((st) => ({ jsDialogs: st.jsDialogs.filter((x) => x.id !== id) }))),
+      window.masaki.unload.onAsk((a) => useStore.setState((st) => ({ unloadAsks: [...st.unloadAsks.filter((x) => x.id !== a.id), a] }))),
+      window.masaki.unload.onGone((id) => useStore.setState((st) => ({ unloadAsks: st.unloadAsks.filter((x) => x.id !== id) })))
     ]
     return () => offs.forEach((off) => off())
   }, [])
@@ -341,6 +346,7 @@ export function App(): React.JSX.Element {
           <SwipeArrow />
           {findOpen && active.kind === 'web' && <FindBar />}
           <PermissionBar />
+          <UnloadBar />
           <PasswordBar />
           <PasskeySheet />
           <PageDialog />

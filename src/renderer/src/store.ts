@@ -15,6 +15,7 @@ import type {
   SavedSession,
   Settings,
   SyncState,
+  UnloadAsk,
   UpdateState,
   TabGroup
 } from '../../shared/types'
@@ -249,6 +250,8 @@ interface Store {
   pkPrompts: PasskeyPrompt[]
   /** Окна страниц (alert / confirm / prompt) — страница стоит, пока не ответят. */
   jsDialogs: JsDialog[]
+  /** Сайты, просящие подтвердить уход со страницы (beforeunload): Google Docs, редакторы, банки. */
+  unloadAsks: UnloadAsk[]
   groups: TabGroup[]
   archive: ArchivedTab[]
   /** Свои раскладки окна у кнопки «развернуть»: где показать. */
@@ -365,6 +368,7 @@ export const useStore = create<Store>((set, get) => ({
   pwRev: 0,
   pkPrompts: [],
   jsDialogs: [],
+  unloadAsks: [],
   groups: [],
   archive: [],
   snap: null,

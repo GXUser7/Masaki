@@ -14,6 +14,7 @@ import type {
   JsDialog,
   Settings,
   SyncState,
+  UnloadAsk,
   UpdateState,
   WindowState
 } from '../shared/types'
@@ -76,6 +77,7 @@ const api: MasakiApi = {
   history: {
     list: () => ipcRenderer.invoke('history:list'),
     add: (e) => ipcRenderer.send('history:add', e),
+    remove: (e) => ipcRenderer.send('history:remove', e),
     clear: () => ipcRenderer.send('history:clear'),
     onChanged: (cb) => listen<HistoryEntry[]>('history-changed', cb)
   },
@@ -187,6 +189,7 @@ const api: MasakiApi = {
     onChanged: (cb) => listen<void>('passkeys-changed', () => cb()),
     onPrompt: (cb) => listen<PasskeyPrompt>('passkey-prompt', cb),
     onPromptClose: (cb) => listen<string>('passkey-prompt-close', cb),
+    prompts: () => ipcRenderer.invoke('passkeys:prompts'),
     answer: (id, action, account) => ipcRenderer.send('passkeys:answer', id, action, account),
     useConditional: (wcId, id) => ipcRenderer.send('passkeys:use', wcId, id)
   },
@@ -206,6 +209,12 @@ const api: MasakiApi = {
     onShow: (cb) => listen<JsDialog>('js-dialog', cb),
     onClose: (cb) => listen<string>('js-dialog-close', cb),
     answer: (id, ok, value, mute) => ipcRenderer.send('js:answer', id, ok, value, mute)
+  },
+  unload: {
+    asks: () => ipcRenderer.invoke('unload:list'),
+    onAsk: (cb) => listen<UnloadAsk>('unload-ask', cb),
+    onGone: (cb) => listen<string>('unload-gone', cb),
+    answer: (id, leave) => ipcRenderer.send('unload:answer', id, leave)
   },
   pageAction: (wcId, a) => ipcRenderer.send('page:action', wcId, a),
   uiEdit: (cmd) => ipcRenderer.send('ui:edit', cmd),

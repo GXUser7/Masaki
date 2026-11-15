@@ -60,6 +60,13 @@ export interface PermissionPrompt {
   externalUrl?: string
 }
 
+/** Сайт просит подтверждение перед уходом (beforeunload): Google Docs, редакторы, банки. */
+export interface UnloadAsk {
+  id: string
+  wcId: number
+  origin: string
+}
+
 export interface SitePermission {
   /** Полный origin — по нему решение и сбрасывается. */
   origin: string
@@ -649,6 +656,8 @@ export interface MasakiApi {
   history: {
     list(): Promise<HistoryEntry[]>
     add(e: HistoryEntry): void
+    /** Убрать одну запись (крестик у строки истории, как в Chrome). */
+    remove(e: HistoryEntry): void
     clear(): void
     onChanged(cb: (h: HistoryEntry[]) => void): () => void
   }
@@ -790,6 +799,8 @@ export interface MasakiApi {
     onChanged(cb: () => void): () => void
     onPrompt(cb: (p: PasskeyPrompt) => void): () => void
     onPromptClose(cb: (id: string) => void): () => void
+    /** Окна ключей, которые уже ждут ответа: перечитать при загрузке интерфейса. */
+    prompts(): Promise<PasskeyPrompt[]>
     /** ok — создать / войти выбранным аккаунтом (account — id записи); other — ключ безопасности. */
     answer(id: string, action: 'ok' | 'cancel' | 'other', account?: string): void
     /** Ключ выбран в списке автозаполнения у поля входа (wcId — webContents вкладки). */
@@ -812,6 +823,13 @@ export interface MasakiApi {
     onShow(cb: (d: JsDialog) => void): () => void
     onClose(cb: (id: string) => void): () => void
     answer(id: string, ok: boolean, value?: string, mute?: boolean): void
+  }
+  /** Сайт просит подтверждение перед уходом (beforeunload): спросить и ответить «покинуть / остаться». */
+  unload: {
+    asks(): Promise<UnloadAsk[]>
+    onAsk(cb: (a: UnloadAsk) => void): () => void
+    onGone(cb: (id: string) => void): () => void
+    answer(id: string, leave: boolean): void
   }
   pageAction(wcId: number, a: PageAction): void
   uiEdit(cmd: 'cut' | 'copy' | 'paste' | 'selectAll' | 'undo' | 'redo'): void

@@ -45,8 +45,19 @@ function frame(op: number, data: unknown): Buffer {
 function tryPipe(p: string): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const s = net.createConnection(p)
-    s.once('connect', () => resolve(s))
-    s.once('error', reject)
+    const timer = setTimeout(() => {
+      // Канал жив, но Discord завис: без лимита «connect» не наступил бы никогда, и статус бы умер.
+      s.destroy()
+      reject(new Error('Discord не ответил'))
+    }, 5000)
+    s.once('connect', () => {
+      clearTimeout(timer)
+      resolve(s)
+    })
+    s.once('error', (e) => {
+      clearTimeout(timer)
+      reject(e)
+    })
   })
 }
 

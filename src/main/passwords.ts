@@ -269,7 +269,7 @@ function readCsv(file: string): { logins: CsvLogin[]; skipped: number } {
   return { logins, skipped }
 }
 
-export function importCsv(file: string, removeAfter: boolean): PasswordImportResult {
+export async function importCsv(file: string, removeAfter: boolean): Promise<PasswordImportResult> {
   if (!safeStorage.isEncryptionAvailable()) return { added: 0, updated: 0, skipped: 0, error: 'Шифрование Windows недоступно' }
   let parsed: { logins: CsvLogin[]; skipped: number }
   try {
@@ -278,10 +278,14 @@ export function importCsv(file: string, removeAfter: boolean): PasswordImportRes
     return { added: 0, updated: 0, skipped: 0, error: e instanceof Error ? e.message : String(e) }
   }
   const res: PasswordImportResult = { added: 0, updated: 0, skipped: parsed.skipped }
+  // Шифрование DPAPI на каждую строку: на тысячах записей это секунды. Отдаём потоку главный процесс
+  // между партиями, чтобы вкладки в этот момент не замерзали.
+  let n = 0
   for (const l of parsed.logins) {
     const r = upsert(l.origin, l.username, l.password, l.note)
     if (r === 'added') res.added++
     else if (r === 'updated') res.updated++
+    if (++n % 50 === 0) await new Promise((resolve) => setImmediate(resolve))
   }
   persist()
   // Файл с открытыми паролями на диске оставлять нельзя.
@@ -315,7 +319,7 @@ export function csvDownloaded(file: string): void {
   hooks.ui('passwords-csv', { id, filename: path.basename(file), count } satisfies PasswordCsv)
 }
 
-export function importDownloaded(id: string): PasswordImportResult {
+export async function importDownloaded(id: string): Promise<PasswordImportResult> {
   const f = csvFiles.get(id)
   csvFiles.delete(id)
   if (!f) return { added: 0, updated: 0, skipped: 0, error: 'Файл уже обработан' }

@@ -11,6 +11,7 @@
 
 import { safeStorage, type WebContents } from 'electron'
 import crypto from 'crypto'
+import util from 'util'
 import { getDomain, getPublicSuffix } from 'tldts'
 import { JsonFile } from './store'
 import type { AutofillItem, PasskeyItem, PasskeyPrompt } from '../shared/types'
@@ -90,6 +91,14 @@ const u32 = (n: number): Buffer => {
   return b
 }
 
+/** Пара ключей для нового ключа доступа. RSA-2048 здесь занимает до секунды — только асинхронно,
+ *  иначе главный процесс замрёт в момент создания, и с ним все вкладки. */
+function generate(alg: number): Promise<{ privateKey: crypto.KeyObject; publicKey: crypto.KeyObject }> {
+  if (alg === -7) return util.promisify(crypto.generateKeyPair)('ec', { namedCurve: 'P-256' })
+  if (alg === -8) return util.promisify(crypto.generateKeyPair)('ed25519')
+  return util.promisify(crypto.generateKeyPair)('rsa', { modulusLength: 2048, publicExponent: 65537 })
+}
+
 /** Карта CBOR с порядком ключей как задан (для COSE и attestationObject он важен). */
 type CborMap = { map: [string | number, Cbor][] }
 type Cbor = number | string | Buffer | CborMap
@@ -112,12 +121,6 @@ function cbor(v: Cbor): Buffer {
 }
 
 // ---------- Ключи ----------
-
-function generate(alg: number): { privateKey: crypto.KeyObject; publicKey: crypto.KeyObject } {
-  if (alg === -7) return crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' })
-  if (alg === -8) return crypto.generateKeyPairSync('ed25519')
-  return crypto.generateKeyPairSync('rsa', { modulusLength: 2048, publicExponent: 65537 })
-}
 
 /** Открытый ключ в формате COSE (RFC 9053), как его ждут сайты в attestedCredentialData. */
 function coseKey(alg: number, pub: crypto.KeyObject): Buffer {
@@ -318,11 +321,10 @@ export function request(wc: WebContents, origin: string | undefined, op: string,
     if (!rpAllowed(rpId, host)) return reply(fail('SecurityError', `Сайт ${host} не может работать с ключами для ${rpId}.`))
     const conditional = op === 'get' && msg.mediation === 'conditional'
 
-    // Одновременно — один запрос на вкладку; новый запрос снимает ожидающий из автозаполнения.
+    // Одновременно — один запрос на вкладку: как в Chrome, новый снимает старый (иначе сайты с
+    // авторетраем получали бы серию отказов, а старый запрос ждал бы свой таймаут зря).
     for (const r of [...reqs.values()]) {
-      if (r.wc !== wc) continue
-      if (r.conditional) finish(r, fail('AbortError', 'Запрос заменён новым.'))
-      else return reply(fail('NotAllowedError', 'Уже идёт другой запрос ключа доступа.'))
+      if (r.wc === wc) finish(r, fail('AbortError', 'Запрос заменён новым.'))
     }
 
     const r: Req = { key, reqId, wc, kind: op, conditional, origin, rpId, candidates: [], done: reply }
@@ -346,7 +348,10 @@ export function request(wc: WebContents, origin: string | undefined, op: string,
     if (conditional) {
       // Запрос часто начинается после фокуса/загрузки настроек сайта: обновляем уже открытое поле.
       wc.send('pk:conditional-changed')
-      return // ждёт выбора в списке у поля входа, без таймаута — как в Chrome
+      // Ждёт выбора в списке у поля входа — дольше обычного, но не вечно: SPA-переход не всегда
+      // замечается навигацией, а забытый запрос держал бы вкладку «входящей» до закрытия.
+      r.timer = setTimeout(() => finish(r, notAllowed()), 30 * 60_000)
+      return
     }
 
     const timeout = Math.min(Math.max(Number(pk.timeout) || 300_000, 30_000), 600_000)
@@ -369,9 +374,9 @@ export function request(wc: WebContents, origin: string | undefined, op: string,
   })
 }
 
-function doCreate(r: Req): Result {
+async function doCreate(r: Req): Promise<Result> {
   const o = r.create!
-  const { privateKey, publicKey } = generate(o.alg)
+  const { privateKey, publicKey } = await generate(o.alg)
   const credId = crypto.randomBytes(16)
   const authData = Buffer.concat([
     sha256(r.rpId),
@@ -457,9 +462,25 @@ export function answer(promptId: string, action: 'ok' | 'cancel' | 'other', reco
   if (action === 'other') return finish(r, { fallback: true })
   if (r.prompt?.kind === 'exists') return finish(r, fail('InvalidStateError', 'Ключ доступа для этого аккаунта уже есть.'))
   if (r.prompt?.kind === 'none') return finish(r, notAllowed())
-  if (r.kind === 'create') return finish(r, doCreate(r))
+  if (r.kind === 'create') {
+    // RSA-ключ создаётся до секунды — асинхронно. Ответ нужен ровно один, поэтому снимаем запрос со
+    // учёта (навигация и новый запрос его больше не тронут) и доставляем результат, когда готов.
+    reqs.delete(r.key)
+    clearTimeout(r.timer)
+    if (r.prompt) hooks.ui('passkey-prompt-close', r.prompt.id)
+    void doCreate(r).then((res) => r.done(res), (e) => r.done(fail('UnknownError', String((e as Error)?.message ?? e))))
+    return
+  }
   const k = r.candidates.find((x) => x.id === recordId && !x.deleted)
+  // Ключ могли удалить, пока окно висело (например, пришло удаление с другого устройства) — не молчать:
+  // иначе страница ждала бы до таймаута, а кнопка «Войти» выглядела бы мёртвой.
   if (k) finish(r, doGet(r, k))
+  else finish(r, notAllowed())
+}
+
+/** Окна, которые уже ждут ответа: интерфейс перечитывает их при своей загрузке. */
+export function prompts(): PasskeyPrompt[] {
+  return [...reqs.values()].map((r) => r.prompt).filter((p): p is PasskeyPrompt => !!p)
 }
 
 /** Ключи для списка автозаполнения — если страница ждёт вход по ключу (mediation: conditional). */

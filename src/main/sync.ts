@@ -600,7 +600,8 @@ export async function signIn(external = false, hint = ''): Promise<{ ok: boolean
         redirect_uri: redirect,
         grant_type: 'authorization_code',
         code_verifier: verifier
-      }).toString()
+      }).toString(),
+      signal: AbortSignal.timeout(30_000)
     })
     const tok = (await res.json()) as {
       access_token?: string
@@ -644,7 +645,10 @@ export async function signIn(external = false, hint = ''): Promise<{ ok: boolean
 
 async function revoke(token: string | undefined): Promise<void> {
   if (!token) return
-  await net.fetch(REVOKE_URL, { method: 'POST', headers: form, body: 'token=' + encodeURIComponent(token) }).catch(() => undefined)
+  // Лимит: зависший ответ Google не должен держать «Выйти» навсегда.
+  await net
+    .fetch(REVOKE_URL, { method: 'POST', headers: form, body: 'token=' + encodeURIComponent(token), signal: AbortSignal.timeout(30_000) })
+    .catch(() => undefined)
 }
 
 export async function signOut(): Promise<void> {
@@ -681,7 +685,8 @@ async function accessToken(): Promise<string> {
       client_secret: client.secret,
       refresh_token: secret.refreshToken,
       grant_type: 'refresh_token'
-    }).toString()
+    }).toString(),
+    signal: AbortSignal.timeout(30_000)
   })
   const tok = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: string }
   if (tok.error === 'invalid_grant') {
@@ -719,7 +724,12 @@ async function driveError(res: Response): Promise<string> {
 
 async function drive(url: string, init: RequestInit = {}, retry = true): Promise<Response> {
   const token = await accessToken()
-  const res = await net.fetch(url, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: 'Bearer ' + token } })
+  // Лимит: зависший ответ Google не должен держать цикл синхронизации навсегда.
+  const res = await net.fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(60_000),
+    headers: { ...(init.headers as Record<string, string>), Authorization: 'Bearer ' + token }
+  })
   if (res.status === 401 && retry) {
     access = null
     return drive(url, init, false)
