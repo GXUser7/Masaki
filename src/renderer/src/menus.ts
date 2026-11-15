@@ -16,6 +16,19 @@ function short(text: string, n = 28): string {
   return t.length > n ? t.slice(0, n) + '…' : t
 }
 
+/** Адрес страницы у переводчика: хост кодируется в поддомен (example.com → example-com.translate.goog). */
+export function translatePageUrl(pageUrl: string, tl = 'ru'): string | null {
+  try {
+    const u = new URL(pageUrl)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    const host = u.hostname.replace(/-/g, '--').replace(/\./g, '-')
+    const params = new URLSearchParams({ _x_tr_sl: 'auto', _x_tr_tl: tl, _x_tr_hl: tl })
+    return `https://${host}.translate.goog${u.pathname}${u.search ? '?' + params + '&' + u.search.slice(1) : '?' + params}`
+  } catch {
+    return null
+  }
+}
+
 /**
  * Меню страницы. Electron отдаёт координаты клика уже в системе окна — по ним ставим меню,
  * а для «Просмотреть код» и «Копировать картинку» переводим их в координаты самой страницы.
@@ -151,7 +164,12 @@ export function openPageMenu(p: PageMenuParams): void {
         icon: 'translate',
         label: 'Перевести на русский',
         disabled: !web,
-        run: () => S().navigate('https://translate.google.com/translate?sl=auto&tl=ru&u=' + encodeURIComponent(p.pageURL), { raw: true })
+        // Формат «translate.google.com/translate?u=…» Google отключил; живой путь — домен *.translate.goog
+        // в той же вкладке: страница остаётся на своём месте, ссылки внутри тоже переводятся.
+        run: () => {
+          const url = translatePageUrl(p.pageURL)
+          if (url) S().navigate(url, { raw: true })
+        }
       },
       { kind: 'item', icon: 'qr', label: 'Создать QR-код страницы', run: () => S().showQr(p.pageURL) },
       { kind: 'item', icon: 'download', label: 'Сохранить страницу как…', kbd: 'Ctrl S', run: act({ type: 'save-page' }) },

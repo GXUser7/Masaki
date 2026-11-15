@@ -680,14 +680,26 @@ function describePermission(permission: string, asked: string[]): Omit<Permissio
  * Единственный onHeadersReceived сессии вкладок: Electron держит одного слушателя на событие, а ответы
  * нужны и YouCloud (звук YouTube, который слышит волна плеера), и блокировщику рекламы (его CSP).
  * Без блокировщика слушаем только googlevideo.
+ * Исключение до callback оставило бы запрос висеть навсегда — страница «намертво зависает», поэтому
+ * любой сбой отвечает пустым продолжением.
  */
 function listenHeaders(ses: Electron.Session): void {
-  const blocking = !!blocker?.isBlockingEnabled(ses)
-  ses.webRequest.onHeadersReceived({ urls: blocking ? ['<all_urls>'] : YOUCLOUD_MEDIA_URLS }, (details, callback) => {
-    const responseHeaders = readableMedia(details)
-    if (responseHeaders) callback({ responseHeaders })
-    else if (blocker?.isBlockingEnabled(ses)) blocker.onHeadersReceived(details, callback)
-    else callback({})
+  const blocking = (): boolean => !!blocker?.isBlockingEnabled(ses)
+  ses.webRequest.onHeadersReceived({ urls: blocking() ? ['<all_urls>'] : YOUCLOUD_MEDIA_URLS }, (details, callback) => {
+    try {
+      const responseHeaders = readableMedia(details)
+      if (responseHeaders) return callback({ responseHeaders })
+      if (blocker && blocking()) {
+        try {
+          return blocker.onHeadersReceived(details, callback)
+        } catch {
+          return callback({})
+        }
+      }
+      callback({})
+    } catch {
+      callback({})
+    }
   })
 }
 
@@ -702,18 +714,24 @@ function setupBrowsingSession(): void {
   listenHeaders(ses)
   // Слушатель у сессии один на всё: вход в Google, заголовки запросов моста YouCloud и токен,
   // с которым soundcloud.com ходит в свой API (им YouCloud продлевает истёкшую сессию).
+  // Исключение до callback зависило бы запрос навсегда — сайт не грузился бы вовсе, поэтому любой
+  // сбой отвечает неизменёнными заголовками.
   ses.webRequest.onBeforeSendHeaders({ urls: ['https://accounts.google.com/*', ...YOUCLOUD_HEADER_URLS, ...SOUNDCLOUD_API_URLS] }, (details, callback) => {
     const headers = details.requestHeaders
-    noteSoundCloudRequest(headers)
-    if (!GOOGLE_LOGIN.test(details.url)) {
-      callback({ requestHeaders: overrideHeaders(details.url, headers) ?? headers })
-      return
+    try {
+      noteSoundCloudRequest(headers)
+      if (!GOOGLE_LOGIN.test(details.url)) {
+        callback({ requestHeaders: overrideHeaders(details.url, headers) ?? headers })
+        return
+      }
+      headers['User-Agent'] = FIREFOX_UA
+      for (const name of Object.keys(headers)) if (/^sec-ch-ua/i.test(name)) delete headers[name]
+      // Список аккаунтов Google отдаёт только запросу «со страницы google.com».
+      if (details.url.includes('/ListAccounts')) headers['Origin'] = 'https://www.google.com'
+      callback({ requestHeaders: headers })
+    } catch {
+      callback({ requestHeaders: headers })
     }
-    headers['User-Agent'] = FIREFOX_UA
-    for (const name of Object.keys(headers)) if (/^sec-ch-ua/i.test(name)) delete headers[name]
-    // Список аккаунтов Google отдаёт только запросу «со страницы google.com».
-    if (details.url.includes('/ListAccounts')) headers['Origin'] = 'https://www.google.com'
-    callback({ requestHeaders: headers })
   })
   try {
     ses.setSpellCheckerLanguages(['ru', 'en-US'])
@@ -883,6 +901,10 @@ function createWindow(saved: { bounds: Electron.Rectangle; maximized: boolean } 
 
   const ui = win.webContents
   attachShortcuts(ui, false)
+  // Перезагрузка или краш интерфейса: он забыл про ждущие вопросы сайтов — снимаем их (иначе вкладка с
+  // открытым alert осталась бы заблокированной навсегда). На первом старте ожидающих нет — не помешает.
+  ui.on('did-finish-load', dropUiPending)
+  ui.on('render-process-gone', dropUiPending)
   // Сам интерфейс никуда не уходит: ссылки и перетащенные файлы открываются вкладками.
   ui.on('will-navigate', (e, url) => {
     e.preventDefault()
@@ -945,6 +967,23 @@ type JsAnswer = { ok: boolean; value?: string }
 const jsDialogs = new Map<string, { wcId: number; reply: (a: JsAnswer) => void }>()
 /** Вкладки, которым запретили окна («больше не показывать»), — до следующего перехода, как в Chrome. */
 const mutedDialogs = new Set<number>()
+
+/**
+ * Интерфейс перезагрузился или его процесс упал: он забыл про ждущие вопросы, и повторных ответов на них
+ * не придёт. Страница с открытым alert/confirm стоит (её поток ждёт returnValue) и осталась бы заблокированной
+ * навсегда — снимаем все вопросы с ответом «отмена».
+ */
+function dropUiPending(): void {
+  for (const d of [...jsDialogs.values()]) d.reply({ ok: false })
+  for (const [id, done] of [...pendingPermissions]) {
+    pendingPermissions.delete(id)
+    done(false, false)
+  }
+  for (const [id, resolve] of [...installPrompts]) {
+    installPrompts.delete(id)
+    resolve(false)
+  }
+}
 
 function askJsDialog(e: Electron.IpcMainEvent, d: unknown): void {
   const wc = e.sender
@@ -1461,8 +1500,9 @@ function registerIpc(): void {
     const wc = webContents.fromId(Number(wcId))
     if (!wc || wc.isDestroyed() || wc.getType() !== 'webview') return null
     try {
-      const img = await wc.capturePage()
-      return img.isEmpty() ? null : img.resize({ width: 480 }).toDataURL()
+      // Скрытая/заторможенная вкладка иногда не рисует кадр: без лимита превью ждало бы вечно.
+      const img = await Promise.race([wc.capturePage(), new Promise<null>((r) => setTimeout(() => r(null), 3000))])
+      return img && !img.isEmpty() ? img.resize({ width: 480 }).toDataURL() : null
     } catch {
       return null
     }
@@ -1656,7 +1696,7 @@ function registerIpc(): void {
       const url =
         'https://suggestqueries.google.com/complete/search?client=chrome&hl=ru&ie=utf-8&oe=utf-8&q=' +
         encodeURIComponent(q)
-      const res = await net.fetch(url)
+      const res = await net.fetch(url, { signal: AbortSignal.timeout(6000) })
       const data = (await res.json()) as [string, string[]]
       return Array.isArray(data[1]) ? data[1].slice(0, 5) : []
     } catch {
@@ -1736,7 +1776,8 @@ function iconHost(url: string): string | null {
 
 async function fetchAsDataUrl(url: string, maxBytes = 200_000): Promise<string | null> {
   try {
-    const res = await session.fromPartition(PARTITION).fetch(url)
+    // Лимит: зависший сервер не должен держать значок вкладки (и обещание интерфейса) навсегда.
+    const res = await session.fromPartition(PARTITION).fetch(url, { signal: AbortSignal.timeout(20_000) })
     if (!res.ok) return null
     const type = (res.headers.get('content-type') ?? 'image/png').split(';')[0]
     if (!type.startsWith('image/')) return null

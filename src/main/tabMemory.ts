@@ -74,11 +74,12 @@ export function initTabMemory(window: () => BrowserWindow | null): void {
     const url = contents.getURL()
     // Служебные страницы автоматически не перезагружаем.
     if (!/^https?:\/\//i.test(url)) return null
-    try {
-      // Проверяем все фреймы: заполненная форма внутри iframe тоже должна остаться в памяти.
-      // defaultSelected/defaultValue не учитывают выбор первого option и начальные значения range/color.
-      // Сбрасываем только отсоединённую копию: Chromium сам вычислит исходное состояние поля.
-      const states = await Promise.all(contents.mainFrame.framesInSubtree.map((frame) => frame.executeJavaScript(`(() => {
+    // Фрейм с зацикленным скриптом или остановленным потоком не ответит никогда: без лимита вкладка
+    // переставала бы выгружаться навсегда. Молчание считаем «вкладку не трогать».
+    const FRAME_TIMEOUT = 3000
+    const ask = (frame: Electron.WebFrameMain): Promise<{ blocked: boolean; scroll: [number, number] } | null> =>
+      Promise.race([
+        frame.executeJavaScript(`(() => {
         const form = document.createElement('form')
         const changed = el => {
           const initial = el.cloneNode(true)
@@ -93,13 +94,22 @@ export function initTabMemory(window: () => BrowserWindow | null): void {
           blocked: !!document.pictureInPictureElement || [...document.querySelectorAll('input, textarea, select')].some(changed),
           scroll: [scrollX, scrollY]
         }
-      })()`) as Promise<{ blocked: boolean; scroll: [number, number] }>))
+      })()`) as Promise<{ blocked: boolean; scroll: [number, number] }>,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), FRAME_TIMEOUT))
+      ]).catch(() => null)
+    try {
+      // Проверяем все фреймы: заполненная форма внутри iframe тоже должна остаться в памяти.
+      // defaultSelected/defaultValue не учитывают выбор первого option и начальные значения range/color.
+      // Сбрасываем только отсоединённую копию: Chromium сам вычислит исходное состояние поля.
+      const states = await Promise.all(contents.mainFrame.framesInSubtree.map(ask))
+      if (states.some((s) => s === null || s.blocked)) return null
+      const ok = states as { blocked: boolean; scroll: [number, number] }[]
       if (contents.isDestroyed() || contents.getURL() !== url || contents.isLoading() ||
-          contents.isCurrentlyAudible() || tabHasDownload(contents.id) || isProtected(contents) || states.some((s) => s.blocked)) return null
+          contents.isCurrentlyAudible() || tabHasDownload(contents.id) || isProtected(contents) || ok.some((s) => s.blocked)) return null
       const entries = contents.navigationHistory.getAllEntries()
       if (!entries.length || entries.some((entry) => !/^https?:\/\//i.test(entry.url))) return null
       const key = randomUUID()
-      saved.set(key, { entries, index: contents.navigationHistory.getActiveIndex(), scroll: states[0].scroll })
+      saved.set(key, { entries, index: contents.navigationHistory.getActiveIndex(), scroll: ok[0].scroll })
       return key
     } catch {
       // Смена документа или недоступный фрейм: пропускаем вкладку до следующей проверки.

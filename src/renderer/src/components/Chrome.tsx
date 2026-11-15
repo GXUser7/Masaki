@@ -23,7 +23,7 @@ import { openGoogleAccount } from '../lib/googleAccount'
 import { siteCookieDomain } from '../../../shared/site'
 import type { DownloadInfo, ExtAction, ExtensionInfo, TabGroup, UpdateState } from '../../../shared/types'
 import { actionFor, actionIcon, badgeColor, pressAction, STORE_URL, togglePin, useExtensions } from '../lib/extensions'
-import { useStore, wv, type Tab } from '../store'
+import { tabIdOfWebContents, useStore, wv, type Tab } from '../store'
 import { Icon } from './Icon'
 import { SearchDropHint } from './SearchDropHint'
 import { AddressLabel, Grain, ProgressRing, ShapeTile, TabFav, useHoverOverPage } from './parts'
@@ -432,8 +432,12 @@ function TabList(): React.JSX.Element {
   const activeId = useStore((s) => s.activeId)
   const groups = useStore((s) => s.groups)
   const split = useStore((s) => s.split)
+  const dialogs = useStore((s) => s.jsDialogs)
   const s = useStore.getState
   const hover = useRef<number | undefined>(undefined)
+  // Вкладки с открытым окном страницы (alert/confirm): страница стоит, пока не ответят — фоновую
+  // вкладку помечаем точкой, иначе «зависший» сайт не объяснить.
+  const dialogTabs = useMemo(() => new Set(dialogs.map((d) => tabIdOfWebContents(d.wcId)).filter((x): x is string => !!x)), [dialogs])
 
   const rows: React.JSX.Element[] = []
   let prev: string | undefined
@@ -453,7 +457,8 @@ function TabList(): React.JSX.Element {
           (inSplit ? ' in-split' : '') +
           (drag?.id === tab.id ? ' dragging' : '') +
           (drag && drag.over === idx && drag.id !== tab.id ? ' drop-above' : '') +
-          (drag && drag.over === tabs.length && idx === tabs.length - 1 ? ' drop-below' : '')
+          (drag && drag.over === tabs.length && idx === tabs.length - 1 ? ' drop-below' : '') +
+          (dialogTabs.has(tab.id) ? ' has-dialog' : '')
         }
         style={g ? ({ '--gc': g.color } as React.CSSProperties) : undefined}
         draggable
@@ -500,6 +505,7 @@ function TabList(): React.JSX.Element {
         <button className="tab-main" title={tab.title} onClick={() => s().activate(tab.id)}>
           <TabFav tab={tab} />
           <span className="tt">{tab.title || hostOf(tab.url)}</span>
+          {dialogTabs.has(tab.id) && <i className="dlg-dot" title="Страница ждёт ответа в окне" />}
         </button>
         {(tab.audible || tab.muted) && (
           <button className="ib aud" aria-label={tab.muted ? 'Включить звук' : 'Выключить звук'} onClick={() => toggleMute(tab.id)}>
@@ -660,6 +666,7 @@ function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Ele
   const tabs = useStore((s) => s.tabs)
   const activeId = useStore((s) => s.activeId)
   const groups = useStore((s) => s.groups)
+  const dialogs = useStore((s) => s.jsDialogs)
   const listOpen = useStore((s) => s.popover === 'tabs')
   const s = useStore.getState
   const box = useRef<HTMLDivElement>(null)
@@ -896,6 +903,7 @@ function DockTabs({ tiny, hot }: { tiny: boolean; hot: boolean }): React.JSX.Ele
                 onClick={() => s().activate(tab.id)}
               >
                 <TabFav tab={tab} />
+                {dialogs.some((d) => tabIdOfWebContents(d.wcId) === tab.id) && <i className="dlg-dot" title="Страница ждёт ответа в окне" />}
                 {titled && <span className="dk-tt">{name}</span>}
               </button>
               {titled && (

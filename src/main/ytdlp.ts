@@ -190,7 +190,23 @@ function relayFor(ses: Session): Promise<string> {
         return
       }
       try {
-        const up = await upstream(ses, host, port)
+        // Пока подключаемся к апстриму, yt-dlp мог бросить свой сокет: без этой проверки обещание
+        // висело бы вечно и копило утечку при каждом обрыве.
+        let opened: Socket | null = null
+        let dead = false
+        client.once('close', () => {
+          dead = true
+          opened?.destroy()
+        })
+        const gone = new Promise<never>((_, reject) => client.once('close', () => reject(new Error('клиент ушёл'))))
+        const up = await Promise.race([
+          upstream(ses, host, port).then((sock) => {
+            opened = sock
+            if (dead) sock.destroy()
+            return sock
+          }),
+          gone
+        ])
         up.on('error', () => client.destroy())
         client.on('close', () => up.destroy())
         up.on('close', () => client.destroy())

@@ -7005,3 +7005,16 @@ svg[data-ic='history'] > path {
   .search-drop-hint.on .sdh-badge > svg[data-ic] { animation: none; }
 }
 .external-url { max-width: 60vw; overflow-wrap: anywhere; }
+
+/* Точка «страница ждёт ответа» на вкладке: alert/confirm блокирует страницу, фоновую вкладку
+   с висящим окном надо видеть в панели и в доке. */
+.dlg-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-left: 4px;
+  background: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+.tab.has-dialog .tt { color: var(--primary); }
