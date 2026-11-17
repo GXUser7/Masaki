@@ -78,8 +78,9 @@ try {
   await page.click('.fvt-more')
   await page.waitForTimeout(500)
   const after = await page.$$eval('.favs .fvt:not(.fvt-more)', (b) => b.length)
-  console.log(`плиток: свёрнуто ${before} (${moreLabel?.trim()}), раскрыто ${after}`)
-  if (before !== 8 || after !== 13) throw new Error('Раскрытие избранного работает не так')
+  const totalFavs = await page.evaluate(() => window.masaki.settings.get().then((s) => s.favorites.length))
+  console.log(`плиток: свёрнуто ${before} (${moreLabel?.trim()}), раскрыто ${after}, закладок ${totalFavs}`)
+  if (before !== 8 || after !== 12 || totalFavs !== 13) throw new Error('Раскрытие избранного работает не так')
   await shot('31-import-favorites')
 
   console.log('шаг палитра')

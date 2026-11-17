@@ -7,6 +7,13 @@ import { aiModeUrl, hostOf, searchUrl } from './lib/url'
 import { toggleGlassForSite } from './lib/glass'
 import { isYouCloud } from './lib/youcloud'
 import { togglePin } from './lib/extensions'
+import {
+  assignFavoriteFolder,
+  deleteFavoriteFolder,
+  folderNames,
+  nextFolderName,
+  ungroupFavoriteFolder
+} from './lib/favoriteFolders'
 import { groupColors, useStore } from './store'
 
 const S = useStore.getState
@@ -316,8 +323,14 @@ export function openGroupMenu(x: number, y: number, id: string, rename: () => vo
   ])
 }
 
-/** Меню плитки избранного или ярлыка: форма, цвет, открыть, убрать. */
-export function openTileMenu(x: number, y: number, list: 'favorites' | 'shortcuts', index: number): void {
+/** Меню плитки избранного или ярлыка: форма, цвет, открыть, группы, убрать. */
+export function openTileMenu(
+  x: number,
+  y: number,
+  list: 'favorites' | 'shortcuts',
+  index: number,
+  opts?: { onFolder?: (name: string, edit?: boolean) => void }
+): void {
   const items = S().settings[list]
   const item = items[index]
   if (!item) return
@@ -341,6 +354,50 @@ export function openTileMenu(x: number, y: number, list: 'favorites' | 'shortcut
     )
     refresh((e) => (e.kind === 'colors' ? { ...e, current: color } : e))
   }
+  const folderEntries: MenuEntry[] = []
+  if (list === 'favorites') {
+    const others = folderNames(items).filter((g) => g !== item.folder)
+    folderEntries.push({
+      kind: 'item',
+      icon: 'folder',
+      label: 'Новая группа',
+      run: () => {
+        const cur = S().settings.favorites
+        const name = nextFolderName(cur)
+        save(assignFavoriteFolder(cur, index, name))
+        opts?.onFolder?.(name, true)
+      }
+    })
+    if (others.length > 0 && others.length <= 3) {
+      for (const g of others) {
+        folderEntries.push({
+          kind: 'item',
+          icon: 'folderOpen',
+          label: `В группу «${g}»`,
+          run: () => save(assignFavoriteFolder(S().settings.favorites, index, g))
+        })
+      }
+    } else if (others.length > 3) {
+      folderEntries.push({
+        kind: 'sub',
+        icon: 'folderOpen',
+        label: 'Перенести в группу',
+        items: others.map((g) => ({
+          icon: 'folderOpen',
+          label: g,
+          run: () => save(assignFavoriteFolder(S().settings.favorites, index, g))
+        }))
+      })
+    }
+    if (item.folder) {
+      folderEntries.push({
+        kind: 'item',
+        icon: 'close',
+        label: 'Убрать из группы',
+        run: () => save(assignFavoriteFolder(S().settings.favorites, index, undefined))
+      })
+    }
+  }
   S().openMenu(x, y, [
     { kind: 'header', label: item.title, sub: hostOf(item.url) },
     { kind: 'shapes', current, pick },
@@ -353,6 +410,7 @@ export function openTileMenu(x: number, y: number, list: 'favorites' | 'shortcut
     { kind: 'sep' },
     { kind: 'item', icon: 'add', label: 'Открыть в новой вкладке', run: () => S().newTab(item.url) },
     { kind: 'item', icon: 'link', label: 'Копировать адрес', run: () => window.masaki.copyText(item.url, 'Адрес скопирован') },
+    ...(folderEntries.length ? [{ kind: 'sep' as const }, ...folderEntries] : []),
     { kind: 'sep' },
     {
       kind: 'item',
@@ -361,6 +419,32 @@ export function openTileMenu(x: number, y: number, list: 'favorites' | 'shortcut
       label: list === 'favorites' ? 'Убрать из избранного' : 'Удалить ярлык',
       run: () => save(S().settings[list].filter((_, j) => j !== index))
     }
+  ])
+}
+
+/** Меню группы избранного: открыть, открыть все во вкладках, переименовать, расформировать, удалить. */
+export function openFavFolderMenu(x: number, y: number, name: string, opts: { open: () => void; rename: () => void }): void {
+  const entries = S().settings.favorites.filter((f) => f.folder === name)
+  if (!entries.length) return
+  const save = (next: Shortcut[]): void => S().setSettings({ favorites: next })
+  S().openMenu(x, y, [
+    { kind: 'header', label: name, sub: `Группа избранного · ${entries.length}` },
+    { kind: 'item', icon: 'folderOpen', label: 'Открыть группу', run: opts.open },
+    {
+      kind: 'item',
+      icon: 'openInNew',
+      label: 'Открыть все во вкладках',
+      run: () => {
+        const s = S()
+        if (s.active().kind === 'newtab') s.navigate(entries[0].url, { raw: true })
+        else s.newTab(entries[0].url)
+        for (const f of entries.slice(1).reverse()) s.newTab(f.url, { background: true })
+      }
+    },
+    { kind: 'item', icon: 'edit', label: 'Переименовать', run: opts.rename },
+    { kind: 'sep' },
+    { kind: 'item', icon: 'tab', label: 'Расформировать группу', run: () => save(ungroupFavoriteFolder(S().settings.favorites, name)) },
+    { kind: 'item', icon: 'delete', danger: true, label: 'Удалить группу', run: () => save(deleteFavoriteFolder(S().settings.favorites, name)) }
   ])
 }
 

@@ -576,9 +576,12 @@ input {
 .fvt:active {
   transform: scale(0.9);
 }
-/* Всё избранное раскрыто: не больше четырёх рядов, дальше прокрутка, чтобы вкладкам осталось место. */
+/* Всё избранное раскрыто: не больше четырёх рядов (4×54 + 3×6 = 234 px) и 12 px запаса сверху/снизу на поворот/пружину форм при наведении. */
 .favs.all {
-  max-height: 250px;
+  max-height: 258px;
+  margin: -12px -8px;
+  padding: 12px 8px;
+  scroll-padding-block: 12px;
   overflow-y: auto;
   scrollbar-width: none;
 }
@@ -2427,6 +2430,24 @@ input {
   background: #8c1d18;
   color: #ffdad6;
 }
+.cm-sub-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cm-sub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 14px;
+}
+.cm-item.cm-sub {
+  height: 34px;
+  font-size: 13px;
+}
+.cm-chev {
+  flex: none;
+}
 .cm-sep {
   height: 1px;
   flex: none;
@@ -4133,6 +4154,24 @@ input {
   border-radius: 20px;
   transform: none;
 }
+.abar .a-lock {
+  width: 30px;
+  height: 32px;
+  border-radius: 16px;
+  color: var(--on-sv);
+  opacity: 0.85;
+}
+.abar .a-lock svg {
+  width: 16px;
+  height: 16px;
+}
+.abar .a-lock:not(:disabled):hover {
+  color: var(--on-surface);
+  opacity: 1;
+}
+.abar .a-lock + .addr {
+  padding-left: 2px;
+}
 .abar .addr {
   flex: 1;
   width: auto;
@@ -5135,11 +5174,24 @@ input {
 .capz.small .abar {
   width: 240px;
   height: 30px;
-  padding: 0;
+  padding: 0 8px;
+  justify-content: center;
   background: transparent;
 }
-.capz.small .addr {
+.capz.small .abar .a-lock {
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+}
+.capz.small .abar .a-lock svg {
+  width: 14px;
+  height: 14px;
+}
+.capz.small .abar .addr {
+  flex: 0 1 auto;
   height: 30px;
+  padding: 0 4px 0 0;
+  gap: 6px;
   font-size: 12.5px;
   justify-content: center;
 }
@@ -5232,8 +5284,20 @@ input {
 .capz.morph .addr {
   transition:
     height 0.45s var(--spring),
+    padding 0.45s var(--spring),
+    gap 0.45s var(--spring),
     background-color 0.3s,
     border-radius 0.45s var(--spring);
+}
+.capz.morph .a-lock,
+.capz.morph .a-lock svg {
+  transition:
+    width 0.45s var(--spring),
+    height 0.45s var(--spring),
+    border-radius 0.45s var(--spring),
+    background-color 0.2s,
+    color 0.2s,
+    opacity 0.2s;
 }
 .capz.morph .dk-t {
   transition:
@@ -6388,14 +6452,26 @@ input {
   margin: 0 4px;
   background: var(--glass-line);
 }
-.dlp-group {
+.dlp-feed {
+  position: relative;
   margin-top: 22px;
+}
+.dlp-group {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin-top: 0;
 }
 .dlp-day {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  height: 20px;
+  line-height: 20px;
   margin: 0 0 8px 14px;
+  transition:
+    opacity 0.16s ease-out,
+    transform 0.2s var(--spring);
 }
 .dlp-day b {
   font-size: 15px;
@@ -6417,14 +6493,66 @@ input {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 64px;
+  height: 64px;
+  flex: none;
   padding: 0 6px 0 0;
   border-radius: 22px;
   transition:
     background-color 0.2s,
     border-radius 0.45s var(--spring),
     translate 0.45s var(--spring),
-    box-shadow 0.3s;
+    box-shadow 0.3s,
+    opacity 0.16s ease-out,
+    transform 0.2s var(--spring);
+}
+.dlp-off {
+  opacity: 0;
+}
+.dlp-off-bot {
+  transform: translate3d(0, 12px, 0);
+}
+.dlp-off-top {
+  transform: translate3d(0, -12px, 0);
+}
+.dlp-enter-down,
+.dlp-enter-up {
+  will-change: opacity, transform;
+}
+.dlp-enter-down {
+  animation: dlp-in-down 0.18s var(--spring) both;
+}
+.dlp-enter-up {
+  animation: dlp-in-up 0.18s var(--spring) both;
+}
+@keyframes dlp-in-down {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+}
+@keyframes dlp-in-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -12px, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dlp-off,
+  .dlp-off-top,
+  .dlp-off-bot {
+    opacity: 1;
+    transform: none;
+  }
+  .dlp-enter-down,
+  .dlp-enter-up {
+    animation: none;
+  }
+  .dlp-day {
+    transition: none;
+  }
+  .dlp-row {
+    transition-property: background-color, border-radius, translate, box-shadow;
+  }
 }
 .dlp-row:hover,
 .dlp-row:focus-within {
@@ -7142,24 +7270,45 @@ svg[data-ic='history'] > path {
 .site-info {
   width: min(380px, calc(100vw - 24px));
   max-height: min(72vh, calc(100vh - 150px));
+  padding: 10px;
   overflow-x: hidden;
   overflow-y: auto;
   flex-shrink: 0;
 }
 .site-info > :not(.grain) { flex-shrink: 0; min-width: 0; }
+.site-info .pop-h { padding: 6px 12px 4px; }
 .site-info .sy-mi-t { white-space: normal; }
 .site-info .sy-mi-t small { white-space: normal; overflow-wrap: anywhere; }
-.si-head { display: flex; align-items: center; gap: 8px; font-size: 15px; }
-.si-head svg { width: 18px; height: 18px; flex: none; fill: currentColor; }
+.si-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; padding: 6px 12px 8px; }
+.si-head svg { width: 17px; height: 17px; flex: none; fill: currentColor; }
 .si-host { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.si-note { margin: 4px 0 10px; }
+.si-status {
+  margin: 2px 2px 6px;
+  padding: 10px;
+  border-radius: var(--r-m);
+  background: var(--hov);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.si-status.insecure { background: var(--bad-c); color: var(--on-bad-c); }
+.si-security { padding: 0; font-size: 13.5px; }
+.si-note { margin: 0; font-size: 12.5px; line-height: 1.4; color: var(--on-sv); }
+.si-status.insecure .si-note { color: inherit; opacity: 0.9; }
 .si-acts { display: flex; flex-direction: column; gap: 2px; }
-.si-sep { height: 1px; background: var(--sc); margin: 12px 0; }
-.a-lock { color: var(--on-sc-var, var(--on-sc)); }
+.site-info .mi { height: auto; min-height: 44px; padding: 8px 12px; }
+.si-sep { height: 1px; background: var(--glass-line); margin: 8px 12px; }
+.si-empty { margin: 0; padding: 4px 12px 8px; font-size: 13px; line-height: 1.45; color: var(--on-sv); }
+.site-info .sc-edit { padding: 2px 4px 4px; }
+.abar .a-lock.insecure,
+.abar .a-lock.insecure:not(:disabled):hover,
 .a-lock.insecure,
-.si-security.insecure { background: var(--bad-c); color: var(--on-bad-c); }
+.a-lock.insecure:not(:disabled):hover {
+  background: var(--bad-c);
+  color: var(--on-bad-c);
+  opacity: 1;
+}
 .si-head.insecure { color: var(--on-bad-c); }
-.si-security { padding: 8px 12px; border-radius: var(--r-s); font-size: 13px; }
 
 .sc-ic { width: 20px; height: 20px; border-radius: 6px; object-fit: contain; flex: none; }
 /* Незавершённый файл ещё нельзя открыть, но прогресс и состояние паузы должны читаться полностью. */
@@ -7170,8 +7319,10 @@ svg[data-ic='history'] > path {
 .fvt .fav-folder-cover b { font-size: 10px; }
 .fav-folder-tile:hover .fav-folder-cover { border-radius: var(--r-s); transform: scale(1.06); }
 .fav-folder-pop { width: min(300px, calc(100vw - 24px)); bottom: auto; max-height: min(60vh, 480px); overflow-x: hidden; }
-.fav-folder-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 10px; }
-.fav-folder-heading b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fav-folder-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-left: 10px; min-height: 36px; }
+.fav-folder-heading b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fav-folder-heading-acts { display: flex; align-items: center; gap: 2px; flex: none; }
+.fav-folder-in { flex: 1; min-width: 0; height: 32px; border: 0; border-radius: 10px; padding: 0 10px; background: var(--glass-hi); color: var(--on-surface); font: inherit; font-size: 14px; font-weight: 700; outline: 2px solid var(--primary); }
 .app-mode .side-wrap, .app-mode .capz { display: none; }
 .app.app-mode .lay { padding: 0; gap: 0; }
 .app-mode .stage > .card { border: 0; border-radius: 0; }

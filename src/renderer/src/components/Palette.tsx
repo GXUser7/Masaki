@@ -277,18 +277,20 @@ export function Palette(): React.JSX.Element {
     }
     const norm = (u: string): string => u.replace(/#.*$/, '').replace(/\/$/, '').replace(/^https?:\/\/(www\.)?/, '')
     const seen = new Set<string>(tabs.filter((t) => t.kind === 'web').map((t) => norm(t.url)))
-    const recent = [...history].reverse().filter((h) => {
-      const key = norm(h.url)
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
     if (!q) {
       out.push({ kind: 'ai', title: 'Спросить AI Mode', sub: 'Начните печатать вопрос' })
       for (const t of tabs.filter((t) => t.kind === 'web' && t.id !== activeId).slice(0, 3)) {
         out.push({ kind: 'tab', title: t.title, sub: 'Открытая вкладка · ' + hostOf(t.url), id: t.id, url: t.url, favicon: t.favicon })
       }
-      for (const h of recent.slice(0, 5)) out.push({ kind: 'hist', title: h.title || h.url, sub: hostOf(h.url), url: h.url })
+      let added = 0
+      for (let i = history.length - 1; i >= 0 && added < 5; i--) {
+        const h = history[i]
+        const key = norm(h.url)
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({ kind: 'hist', title: h.title || h.url, sub: hostOf(h.url), url: h.url })
+        added++
+      }
       return out
     }
     if (looksLikeAddress(q)) out.push({ kind: 'url', title: q, sub: 'Открыть сайт', url: resolveInput(q, false) })
@@ -321,8 +323,15 @@ export function Palette(): React.JSX.Element {
       favKeys.add(norm(t.url))
       out.push({ kind: 'remote', title: t.title || t.url, sub: `На устройстве «${t.device}» · ${hostOf(t.url)}`, url: t.url, favicon: t.favicon })
     }
-    for (const h of recent.filter((h) => !favKeys.has(norm(h.url)) && (match(h.title) || match(h.url))).slice(0, 3)) {
+    let histCount = 0
+    for (let i = history.length - 1; i >= 0 && histCount < 3; i--) {
+      const h = history[i]
+      if (!match(h.title) && !match(h.url)) continue
+      const key = norm(h.url)
+      if (seen.has(key) || favKeys.has(key)) continue
+      seen.add(key)
       out.push({ kind: 'hist', title: h.title || h.url, sub: hostOf(h.url), url: h.url })
+      histCount++
     }
     for (const a of archive.filter((a) => match(a.title) || match(a.url)).slice(0, 2)) {
       out.push({ kind: 'arch', title: a.title || hostOf(a.url), sub: 'Из архива · ' + hostOf(a.url), url: a.url, favicon: a.favicon })

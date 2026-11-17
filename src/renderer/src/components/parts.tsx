@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import type { Shortcut } from '../../../shared/types'
 import { isTileColor, useLightGlyph, useSiteIcon } from '../lib/iconColor'
 import { isShape, shapeCycle, shapes } from '../lib/shapes'
@@ -11,8 +11,41 @@ import { Icon } from './Icon'
 const internalIcon = { settings: 'settings', addons: 'extension', passwords: 'key', downloads: 'download', history: 'history' } as const
 
 export function Grain(): React.JSX.Element {
+  const ref = useRef<SVGSVGElement>(null)
+  useLayoutEffect(() => {
+    const svg = ref.current
+    const p = svg?.parentElement
+    if (!svg || !p) return
+    let last = -1
+    const sync = (): void => {
+      const ov = getComputedStyle(p).overflowY
+      if (ov !== 'auto' && ov !== 'scroll') {
+        if (last !== 0) {
+          last = 0
+          svg.style.bottom = ''
+          svg.style.height = ''
+        }
+        return
+      }
+      svg.style.height = '0px'
+      const sh = p.scrollHeight
+      const h = sh > p.clientHeight ? sh : 0
+      last = h
+      svg.style.bottom = h ? 'auto' : ''
+      svg.style.height = h ? `${h}px` : ''
+    }
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(p)
+    const mo = new MutationObserver(sync)
+    mo.observe(p, { childList: true, subtree: true })
+    return () => {
+      ro.disconnect()
+      mo.disconnect()
+    }
+  }, [])
   return (
-    <svg className="grain" aria-hidden="true">
+    <svg ref={ref} className="grain" aria-hidden="true">
       <rect width="100%" height="100%" filter="url(#masaki-grain)" />
     </svg>
   )

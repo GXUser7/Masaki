@@ -908,7 +908,7 @@ function historySig(h: HistoryEntry[], clearedAt: number, removed: string[] = []
   return crypto.createHash('sha256').update(JSON.stringify([h, clearedAt, [...removed].sort()])).digest('hex')
 }
 
-export function mergeHistory(lists: HistoryEntry[][], clearedAt: number, removed: string[] = [], limit = 5000): HistoryEntry[] {
+export function mergeHistory(lists: HistoryEntry[][], clearedAt: number, removed: string[] = [], limit = 50_000): HistoryEntry[] {
   const map = new Map<string, HistoryEntry>()
   const deleted = new Set(removed)
   for (const list of lists) {

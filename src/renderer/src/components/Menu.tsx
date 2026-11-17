@@ -7,6 +7,7 @@ import { Grain } from './parts'
 
 export type MenuEntry =
   | { kind: 'item'; label: string; icon?: IconName; kbd?: string; disabled?: boolean; danger?: boolean; run: () => void }
+  | { kind: 'sub'; label: string; icon?: IconName; items: { label: string; icon?: IconName; run: () => void }[] }
   | { kind: 'sep' }
   | { kind: 'header'; label: string; sub?: string }
   | { kind: 'shapes'; current: ShapeName; pick: (s: ShapeName) => void }
@@ -72,27 +73,46 @@ function ColorRow({ entry, onPicker }: { entry: ColorsEntry; onPicker: () => voi
   )
 }
 
+const menuWidth = (el: HTMLElement): number =>
+  Math.max(el.offsetWidth, Math.ceil(parseFloat(getComputedStyle(el).width) || 0))
+
+const menuHeight = (el: HTMLElement): number =>
+  Math.min(Math.max(el.offsetHeight, Math.ceil(parseFloat(getComputedStyle(el).height) || 0)), window.innerHeight - 16)
+
 /** Стеклянное контекстное меню Masaki: и для страниц, и для вкладок, плиток и полей ввода. */
 export function ContextMenu(): React.JSX.Element | null {
   const menu = useStore((s) => s.menu)
   const close = useStore((s) => s.closeMenu)
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  const [openSub, setOpenSub] = useState<number | null>(null)
   // Окно выбора цвета отбирает у окна фокус; меню при этом закрываться не должно, иначе выбор уйдёт в пустоту.
   const picking = useRef(false)
 
   useLayoutEffect(() => {
     setPos(null)
+    setOpenSub(null)
     if (!menu) return
     const el = ref.current
     if (!el) return
-    const r = el.getBoundingClientRect()
-    const left = Math.max(8, Math.min(menu.x, window.innerWidth - r.width - 8))
-    const top = menu.y + r.height > window.innerHeight - 8 ? Math.max(8, menu.y - r.height) : menu.y
+    // Не берём getBoundingClientRect(): во время анимации cmIn (scale(0.92)) она занижает размер меню.
+    const w = menuWidth(el)
+    const h = menuHeight(el)
+    const left = Math.max(8, Math.min(menu.x, window.innerWidth - w - 8))
+    const top =
+      menu.y + h > window.innerHeight - 8 ? Math.max(8, Math.min(menu.y - h, window.innerHeight - h - 8)) : menu.y
     setPos({ left, top })
     // Пересчитываем место только при новом открытии, а не при смене формы в том же меню.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menu?.x, menu?.y, !!menu])
+
+  useLayoutEffect(() => {
+    if (openSub === null || !menu) return
+    const el = ref.current
+    if (!el) return
+    const h = menuHeight(el)
+    setPos((p) => (p && p.top + h > window.innerHeight - 8 ? { ...p, top: Math.max(8, window.innerHeight - h - 8) } : p))
+  }, [openSub, menu])
 
   useEffect(() => {
     if (!menu) return
@@ -188,6 +208,33 @@ export function ContextMenu(): React.JSX.Element | null {
                 }}
               />
             )
+          if (e.kind === 'sub') {
+            const open = openSub === i
+            return (
+              <div key={i} className="cm-sub-wrap">
+                <button
+                  role="menuitem"
+                  className={'cm-item cm-sub-toggle' + (open ? ' open' : '')}
+                  aria-expanded={open}
+                  onClick={() => setOpenSub(open ? null : i)}
+                >
+                  {e.icon ? <Icon name={e.icon} /> : <span className="cm-noic" />}
+                  <span className="cm-l">{e.label}</span>
+                  <Icon name={open ? 'up' : 'down'} className="cm-chev" />
+                </button>
+                {open && (
+                  <div className="cm-sub-list" role="group" aria-label={e.label}>
+                    {e.items.map((sub, j) => (
+                      <button key={j} role="menuitem" className="cm-item cm-sub" onClick={run(sub.run)}>
+                        {sub.icon ? <Icon name={sub.icon} /> : <span className="cm-noic" />}
+                        <span className="cm-l">{sub.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          }
           return (
             <button
               key={i}

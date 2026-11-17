@@ -18,7 +18,7 @@ import QRCode from 'qrcode'
 import { hostOf } from '../lib/url'
 import { formatBytes } from '../lib/format'
 import { useReorder } from '../lib/reorder'
-import { favoriteGroups, moveFavoriteGroup } from '../lib/favoriteFolders'
+import { favoriteGroups, moveFavoriteGroup, renameFavoriteFolder } from '../lib/favoriteFolders'
 import { useSiteIcon } from '../lib/iconColor'
 import { useSearchDrop } from '../lib/searchDrop'
 import { openGoogleAccount } from '../lib/googleAccount'
@@ -33,7 +33,7 @@ import { LoadFill, MiniPlayer, WinButtons } from './Extras'
 import { openYouCloud } from '../lib/youcloud'
 import { syncHint, syncStatusText } from './SyncSection'
 import { ProfilesBlock } from './Profiles'
-import { openExtMenu, openGroupMenu, openTabMenu, openTileMenu } from '../menus'
+import { openExtMenu, openFavFolderMenu, openGroupMenu, openTabMenu, openTileMenu } from '../menus'
 
 /** Есть что сказать об обновлении: скачано и ждёт перезапуска, или вышла версия, которую предлагаем скачать. */
 const updateNews = (u: UpdateState | null): boolean => u?.status === 'ready' || u?.status === 'available'
@@ -269,8 +269,7 @@ function progressOf(d: DownloadInfo): number {
 }
 
 function DownloadsButton({ dock = false }: { dock?: boolean }): React.JSX.Element {
-  const downloads = useStore((s) => s.downloads)
-  const busy = downloads.filter((d) => d.state === 'progressing')
+  const busy = useStore((s) => s.liveDownloads)
   const progress = busy.length ? busy.reduce((a, d) => a + progressOf(d), 0) / busy.length : 0
   return (
     <button
@@ -295,8 +294,7 @@ function DownloadsButton({ dock = false }: { dock?: boolean }): React.JSX.Elemen
  * Щелчок — список загрузок над островом. Идёт несколько — при наведении (или фокусе) выезжают все.
  */
 function DockDownloads(): React.JSX.Element | null {
-  const downloads = useStore((s) => s.downloads)
-  const busy = downloads.filter((d) => d.state === 'progressing')
+  const busy = useStore((s) => s.liveDownloads)
   const [open, setOpen] = useState(false)
   const island = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLDivElement>(null)
@@ -554,15 +552,30 @@ export function Sidebar(): React.JSX.Element {
   const groups = favoriteGroups(favorites)
   const more = groups.length > FAV_SHOWN
   const shownFavs = more && !allFavs ? groups.slice(0, FAV_SHOWN - 1) : groups
-  const [folder, setFolder] = useState<{ name: string; left: number; top: number } | null>(null)
+  const [folder, setFolder] = useState<{ name: string; left: number; top: number; editing?: boolean } | null>(null)
+  const folderPos = (r: DOMRect): { left: number; top: number } => ({
+    left: Math.min(r.right + 10, innerWidth - 310),
+    top: Math.max(12, Math.min(r.top, innerHeight - 320))
+  })
+  const commitFolderRename = (raw: string): void => {
+    if (!folder) return
+    const next = raw.trim()
+    if (next && next !== folder.name) {
+      s().setSettings({ favorites: renameFavoriteFolder(s().settings.favorites, folder.name, next) })
+    }
+    setFolder((cur) => (cur ? { ...cur, name: next || cur.name, editing: false } : null))
+  }
   const s = useStore.getState
   const rd = useReorder(shownFavs.map((g) => g.key), (from, to) => {
     s().setSettings({ favorites: moveFavoriteGroup(s().settings.favorites, from, to) })
   })
   useEffect(() => {
+    if (folder && !favorites.some((f) => f.folder === folder.name)) setFolder(null)
+  }, [folder, favorites])
+  useEffect(() => {
     if (!folder) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && !s().menu) setFolder(null)
+      if (e.key === 'Escape' && !s().menu && !folder.editing) setFolder(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -611,12 +624,22 @@ export function Sidebar(): React.JSX.Element {
                 aria-expanded={g.folder ? folder?.name === g.folder : undefined}
                 onClick={(e) => {
                   if (!g.folder) return openFavorite(f.item.url)
-                  const r = e.currentTarget.getBoundingClientRect()
-                  setFolder(folder?.name === g.folder ? null : { name: g.folder, left: Math.min(r.right + 10, innerWidth - 310), top: Math.max(12, Math.min(r.top, innerHeight - 320)) })
+                  setFolder(folder?.name === g.folder ? null : { name: g.folder, ...folderPos(e.currentTarget.getBoundingClientRect()) })
                 }}
                 onContextMenu={(e) => {
                   e.preventDefault()
-                  if (!g.folder) openTileMenu(e.clientX, e.clientY, 'favorites', f.index)
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  if (g.folder) {
+                    const pos = folderPos(rect)
+                    openFavFolderMenu(e.clientX, e.clientY, g.folder, {
+                      open: () => setFolder({ name: g.folder!, ...pos }),
+                      rename: () => setFolder({ name: g.folder!, ...pos, editing: true })
+                    })
+                  } else {
+                    openTileMenu(e.clientX, e.clientY, 'favorites', f.index, {
+                      onFolder: (name, edit) => setFolder({ name, ...folderPos(rect), editing: edit })
+                    })
+                  }
                 }}
               >
                 {g.folder ? <span className="fav-folder-cover">
@@ -643,11 +666,68 @@ export function Sidebar(): React.JSX.Element {
         <button className="pop-scrim" aria-label="Закрыть папку" onClick={() => setFolder(null)} />
         <div className="glass pop fav-folder-pop" style={{ left: folder.left, top: folder.top }} role="dialog" aria-label={`Папка ${folder.name}`}>
           <Grain />
-          <div className="fav-folder-heading"><b>{folder.name}</b><button className="ib" aria-label="Закрыть папку" onClick={() => setFolder(null)}><Icon name="close" /></button></div>
+          <div
+            className="fav-folder-heading"
+            onContextMenu={(e) => {
+              e.preventDefault()
+              openFavFolderMenu(e.clientX, e.clientY, folder.name, {
+                open: () => setFolder((cur) => (cur ? { ...cur, editing: false } : null)),
+                rename: () => setFolder((cur) => (cur ? { ...cur, editing: true } : null))
+              })
+            }}
+          >
+            {folder.editing ? (
+              <input
+                className="fav-folder-in"
+                defaultValue={folder.name}
+                maxLength={48}
+                autoFocus
+                aria-label="Название группы"
+                onFocus={(e) => e.currentTarget.select()}
+                onBlur={(e) => {
+                  if (e.currentTarget.dataset.done) return
+                  e.currentTarget.dataset.done = '1'
+                  commitFolderRename(e.currentTarget.value)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    if (e.currentTarget.dataset.done) return
+                    e.currentTarget.dataset.done = '1'
+                    commitFolderRename(e.currentTarget.value)
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    e.currentTarget.dataset.done = '1'
+                    setFolder((cur) => (cur ? { ...cur, editing: false } : null))
+                  }
+                }}
+              />
+            ) : (
+              <>
+                <b onDoubleClick={() => setFolder({ ...folder, editing: true })} title="Двойной щелчок — переименовать">
+                  {folder.name}
+                </b>
+                <div className="fav-folder-heading-acts">
+                  <button className="ib" aria-label="Переименовать группу" title="Переименовать" onClick={() => setFolder({ ...folder, editing: true })}>
+                    <Icon name="edit" />
+                  </button>
+                  <button className="ib" aria-label="Закрыть папку" onClick={() => setFolder(null)}>
+                    <Icon name="close" />
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
           <div className="favs">
             {favorites.map((f, index) => f.folder === folder.name && <button key={f.url + index} className="fvt" title={f.title} aria-label={f.title}
               onClick={() => { setFolder(null); openFavorite(f.url) }}
-              onContextMenu={(e) => { e.preventDefault(); openTileMenu(e.clientX, e.clientY, 'favorites', index) }}>
+              onContextMenu={(e) => {
+                e.preventDefault()
+                openTileMenu(e.clientX, e.clientY, 'favorites', index, {
+                  onFolder: (name, edit) => setFolder((cur) => (cur ? { ...cur, name, editing: edit } : null))
+                })
+              }}>
               <ShapeTile item={f} index={index} themed={themed} />
             </button>)}
           </div>
@@ -1187,10 +1267,11 @@ function SiteCookiesButton({ tab }: { tab: Tab }): React.JSX.Element | null {
 
 /** Во всплывающем списке — только свежие; остальное на странице загрузок. */
 const POP_DOWNLOADS = 6
+const NO_DOWNLOADS: DownloadInfo[] = []
 
 export function Popover(): React.JSX.Element | null {
   const popover = useStore((s) => s.popover)
-  const downloads = useStore((s) => s.downloads)
+  const downloads = useStore((s) => (s.popover === 'downloads' ? s.downloads : NO_DOWNLOADS))
   const accounts = useStore((s) => s.accounts)
   const syncSt = useStore((s) => s.sync)
   const qrUrl = useStore((s) => s.qrUrl)

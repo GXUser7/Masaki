@@ -1,21 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import type { DownloadInfo } from '../../../shared/types'
+import { dayLabel, PERIODS, periodRange, startOfDay, timeOf, type Period } from '../lib/feed'
 import { formatBytes } from '../lib/format'
 import { shapes, type ShapeName } from '../lib/shapes'
 import { useStore } from '../store'
-import type { MenuEntry } from './Menu'
+import { VirtualDayFeed, type FeedGroup } from './FeedList'
 import { Icon, type IconName } from './Icon'
+import type { MenuEntry } from './Menu'
 import { ProgressRing } from './parts'
 
-// Страница загрузок (masaki://downloads, вариант A с холста): лента по дням, поиск по названию и сайту,
-// период, «на диске / удалённые / с ошибкой», типы файлов. Файлы, которых уже нет, не прячутся —
-// их можно скачать снова.
+// Страница загрузок (masaki://downloads, вариант A с холста): виртуализованная лента по дням,
+// поиск по названию и сайту, период, «на диске / удалённые / с ошибкой», типы файлов.
+// Файлы, которых уже нет, не прячутся — их можно скачать снова.
 
 type Kind = 'doc' | 'pdf' | 'image' | 'app' | 'archive' | 'video' | 'audio' | 'other'
 type Status = 'live' | 'ok' | 'gone' | 'failed'
 type StatusFilter = 'all' | Exclude<Status, 'live'>
 type KindFilter = 'docs' | 'images' | 'apps' | 'archives' | 'media'
-type Period = 'all' | 'today' | 'yesterday' | 'week' | 'month'
 
 const EXT: [RegExp, Kind][] = [
   [/\.pdf$/i, 'pdf'],
@@ -55,55 +56,11 @@ const KIND_FILTERS: { id: KindFilter; label: string; icon: IconName; kinds: Kind
   { id: 'media', label: 'Видео и звук', icon: 'movie', kinds: ['video', 'audio'] }
 ]
 
-const PERIODS: { id: Period; label: string }[] = [
-  { id: 'all', label: 'За всё время' },
-  { id: 'today', label: 'Сегодня' },
-  { id: 'yesterday', label: 'Вчера' },
-  { id: 'week', label: 'За неделю' },
-  { id: 'month', label: 'За месяц' }
-]
-
 function statusOf(d: DownloadInfo): Status {
   if (d.state === 'progressing') return 'live'
   if (d.state === 'completed') return d.exists === false ? 'gone' : 'ok'
   return 'failed'
 }
-
-const DAY = 24 * 60 * 60 * 1000
-const startOfDay = (t: number): number => {
-  const d = new Date(t)
-  d.setHours(0, 0, 0, 0)
-  return d.getTime()
-}
-
-function inPeriod(t: number, p: Period): boolean {
-  const today = startOfDay(Date.now())
-  switch (p) {
-    case 'today':
-      return t >= today
-    case 'yesterday':
-      return t >= today - DAY && t < today
-    case 'week':
-      return t >= today - 6 * DAY
-    case 'month':
-      return t >= today - 29 * DAY
-    default:
-      return true
-  }
-}
-
-function dayLabel(day: number): [string, string] {
-  const today = startOfDay(Date.now())
-  const d = new Date(day)
-  const sameYear = d.getFullYear() === new Date().getFullYear()
-  const date = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', ...(sameYear ? {} : { year: 'numeric' }) })
-  if (day === today) return ['Сегодня', date]
-  if (day === today - DAY) return ['Вчера', date]
-  const wd = d.toLocaleDateString('ru-RU', { weekday: 'long' })
-  return [wd.charAt(0).toUpperCase() + wd.slice(1), date]
-}
-
-const timeOf = (t: number): string => new Date(t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 
 function hostOfUrl(url: string): string {
   try {
@@ -121,17 +78,97 @@ function plural(n: number, one: string, few: string, many: string): string {
   return n + ' ' + (a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many)
 }
 
+interface IndexedDownload {
+  kind: Kind
+  status: Status
+  site: string
+  day: number
+  sizeBytes: number
+  retryable: boolean
+  search: string
+}
+
+const downloadIndex = new WeakMap<DownloadInfo, IndexedDownload>()
+
+function indexDownload(d: DownloadInfo): IndexedDownload {
+  let info = downloadIndex.get(d)
+  if (!info) {
+    const kind = kindOf(d)
+    const status = statusOf(d)
+    const site = d.page || hostOfUrl(d.url)
+    const sizeBytes = d.total || d.received
+    info = {
+      kind,
+      status,
+      site,
+      day: startOfDay(d.startedAt),
+      sizeBytes,
+      retryable: canRetry(d),
+      search: `${d.filename}\0${site}`.toLowerCase()
+    }
+    downloadIndex.set(d, info)
+  }
+  return info
+}
+
+// Миниатюры картинок: ограниченный LRU-кэш + LIFO-очередь до 4 одновременных IPC,
+// чтобы при быстрой прокрутке сотен картинок система не извлекала миниатюры для пропущенных строк.
+const MAX_THUMBS = 200
+const MAX_THUMB_JOBS = 4
+const thumbCache = new Map<string, string | null>()
+const thumbListeners = new Map<string, Set<() => void>>()
+const thumbQueue: string[] = []
+const queuedThumbs = new Set<string>()
+let activeThumbJobs = 0
+
+function rememberThumb(id: string, url: string | null): void {
+  if (thumbCache.has(id)) thumbCache.delete(id)
+  else if (thumbCache.size >= MAX_THUMBS) thumbCache.delete(thumbCache.keys().next().value!)
+  thumbCache.set(id, url)
+}
+
+function pumpThumbs(): void {
+  while (activeThumbJobs < MAX_THUMB_JOBS && thumbQueue.length > 0) {
+    const id = thumbQueue.pop()!
+    queuedThumbs.delete(id)
+    if (thumbCache.has(id) || !thumbListeners.get(id)?.size) continue
+    activeThumbJobs++
+    void window.masaki.downloads
+      .thumb(id)
+      .then((url) => {
+        rememberThumb(id, url)
+        thumbListeners.get(id)?.forEach((fn) => fn())
+      })
+      .catch(() => {
+        rememberThumb(id, null)
+      })
+      .finally(() => {
+        activeThumbJobs--
+        pumpThumbs()
+      })
+  }
+}
+
+function requestThumb(id: string): void {
+  if (thumbCache.has(id) || queuedThumbs.has(id)) return
+  queuedThumbs.add(id)
+  thumbQueue.push(id)
+  pumpThumbs()
+}
+
 /** Скорость и сколько осталось — по разнице между обновлениями (сглаженно, чтобы цифры не прыгали). */
 function useSpeeds(list: DownloadInfo[]): Map<string, number> {
   const last = useRef(new Map<string, { t: number; got: number; speed: number }>())
   return useMemo(() => {
     const now = performance.now()
     const out = new Map<string, number>()
+    const liveIds = new Set<string>()
     for (const d of list) {
       if (d.state !== 'progressing' || d.paused) {
         last.current.delete(d.id)
         continue
       }
+      liveIds.add(d.id)
       const prev = last.current.get(d.id)
       let speed = prev?.speed ?? 0
       if (prev && now > prev.t && d.received >= prev.got) {
@@ -141,44 +178,69 @@ function useSpeeds(list: DownloadInfo[]): Map<string, number> {
       last.current.set(d.id, { t: now, got: d.received, speed })
       out.set(d.id, speed)
     }
+    if (last.current.size > liveIds.size) {
+      for (const id of last.current.keys()) {
+        if (!liveIds.has(id)) last.current.delete(id)
+      }
+    }
     return out
   }, [list])
 }
 
-function metaOf(d: DownloadInfo, status: Status, speed: number): string {
-  const site = d.page || hostOfUrl(d.url)
-  const size = d.total || d.received
-  if (status === 'live') {
-    const parts = [d.total ? `${Math.round((d.received / d.total) * 100)} % · ${formatBytes(d.received)} из ${formatBytes(d.total)}` : formatBytes(d.received)]
-    if (d.paused) parts.unshift('На паузе')
-    if (!d.paused && speed > 1024) {
-      parts.push(formatBytes(speed) + '/с')
-      if (d.total) {
-        const left = Math.max(0, Math.round((d.total - d.received) / speed))
-        parts.push(left < 60 ? `ещё ${left} с` : `ещё ${Math.ceil(left / 60)} мин`)
-      }
+function liveMetaOf(d: DownloadInfo, site: string, speed: number): string {
+  const parts = [d.total ? `${Math.round((d.received / d.total) * 100)} % · ${formatBytes(d.received)} из ${formatBytes(d.total)}` : formatBytes(d.received)]
+  if (d.paused) parts.unshift('На паузе')
+  if (!d.paused && speed > 1024) {
+    parts.push(formatBytes(speed) + '/с')
+    if (d.total) {
+      const left = Math.max(0, Math.round((d.total - d.received) / speed))
+      parts.push(left < 60 ? `ещё ${left} с` : `ещё ${Math.ceil(left / 60)} мин`)
     }
-    if (site) parts.push(site)
-    return parts.join(' · ')
   }
-  return [size ? formatBytes(size) : '', site, timeOf(d.startedAt)].filter(Boolean).join(' · ')
+  if (site) parts.push(site)
+  return parts.join(' · ')
 }
 
-function Tile({ d, kind, status }: { d: DownloadInfo; kind: Kind; status: Status }): React.JSX.Element {
-  const [thumb, setThumb] = useState<string | null>(null)
+const Tile = memo(function Tile({
+  id,
+  received,
+  total,
+  paused,
+  kind,
+  status
+}: {
+  id: string
+  received: number
+  total: number
+  paused?: boolean
+  kind: Kind
+  status: Status
+}): React.JSX.Element {
+  const [, force] = useState(0)
+  const needThumb = kind === 'image' && status === 'ok'
+  const thumb = needThumb ? (thumbCache.get(id) ?? null) : null
+
   useEffect(() => {
-    if (kind !== 'image' || status !== 'ok') return
-    let alive = true
-    void window.masaki.downloads.thumb(d.id).then((t) => alive && setThumb(t))
-    return () => {
-      alive = false
+    if (!needThumb) return
+    let set = thumbListeners.get(id)
+    if (!set) {
+      set = new Set()
+      thumbListeners.set(id, set)
     }
-  }, [d.id, kind, status])
+    const fn = (): void => force((n) => n + 1)
+    set.add(fn)
+    if (!thumbCache.has(id)) requestThumb(id)
+    return () => {
+      set!.delete(fn)
+      if (set!.size === 0) thumbListeners.delete(id)
+    }
+  }, [id, needThumb])
+
   const look = LOOK[kind]
   if (status === 'live') {
     return (
-      <ProgressRing value={d.total ? d.received / d.total : 0} spin={!d.total && !d.paused} className="dlp-ring">
-        <Icon name={d.paused ? 'pause' : look.icon} />
+      <ProgressRing value={total ? received / total : 0} spin={!total && !paused} className="dlp-ring">
+        <Icon name={paused ? 'pause' : look.icon} />
       </ProgressRing>
     )
   }
@@ -191,29 +253,53 @@ function Tile({ d, kind, status }: { d: DownloadInfo; kind: Kind; status: Status
       <Icon name={look.icon} />
     </span>
   )
+})
+
+const removeDownload = async (id: string): Promise<void> => {
+  if (await window.masaki.downloads.remove(id)) useStore.getState().dropDownload(id)
 }
 
-function Row({ d, speed }: { d: DownloadInfo; speed: number }): React.JSX.Element {
-  const kind = kindOf(d)
-  const status = statusOf(d)
+const retryDownload = async (id: string): Promise<void> => {
+  if (await window.masaki.downloads.retry(id)) useStore.getState().dropDownload(id)
+}
+
+const Row = memo(function Row({
+  d,
+  meta,
+  speed,
+  animCls,
+  animDelay
+}: {
+  d: DownloadInfo
+  meta: IndexedDownload
+  speed: number
+  animCls: string
+  animDelay: number
+}): React.JSX.Element {
+  const { kind, status, retryable } = meta
   const ok = status === 'ok'
   const [copied, setCopied] = useState(false)
-  const remove = async (): Promise<void> => {
-    if (await window.masaki.downloads.remove(d.id)) useStore.getState().dropDownload(d.id)
-  }
-  const retry = async (): Promise<void> => {
-    if (await window.masaki.downloads.retry(d.id)) useStore.getState().dropDownload(d.id)
-  }
+  const timerRef = useRef(0)
+
+  useEffect(() => () => window.clearTimeout(timerRef.current), [])
+
   const copy = (): void => {
     void navigator.clipboard.writeText(d.url).then(() => {
       useStore.getState().showCopied({ title: 'Ссылка на файл скопирована', text: d.url })
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 1400)
+      window.clearTimeout(timerRef.current)
+      timerRef.current = window.setTimeout(() => setCopied(false), 1400)
     })
   }
+
   return (
     <div
-      className={'dlp-row lift' + (status === 'live' ? ' live' : status === 'gone' ? ' gone' : status === 'failed' ? ' failed' : '')}
+      className={
+        'dlp-row lift' +
+        (status === 'live' ? ' live' : status === 'gone' ? ' gone' : status === 'failed' ? ' failed' : '') +
+        (animCls ? ' ' + animCls : '')
+      }
+      style={animDelay ? { animationDelay: `${animDelay}ms` } : undefined}
       draggable={ok}
       onDragStart={(e) => {
         // Файл перетаскивает сама система — в проводник, мессенджер или на сайт.
@@ -227,10 +313,14 @@ function Row({ d, speed }: { d: DownloadInfo; speed: number }): React.JSX.Elemen
         title={ok ? 'Открыть · можно перетащить в папку или на сайт' : d.filename}
         onClick={() => window.masaki.downloads.open(d.path)}
       >
-        <Tile d={d} kind={kind} status={status} />
+        <Tile id={d.id} received={d.received} total={d.total} paused={d.paused} kind={kind} status={status} />
         <span className="dlp-text">
           <b className="dlp-name">{d.filename}</b>
-          <span className="dlp-meta">{metaOf(d, status, speed)}</span>
+          <span className="dlp-meta">
+            {status === 'live'
+              ? liveMetaOf(d, meta.site, speed)
+              : [meta.sizeBytes ? formatBytes(meta.sizeBytes) : '', meta.site, timeOf(d.startedAt)].filter(Boolean).join(' · ')}
+          </span>
         </span>
       </button>
       {status === 'gone' && (
@@ -246,13 +336,13 @@ function Row({ d, speed }: { d: DownloadInfo; speed: number }): React.JSX.Elemen
           {d.state === 'cancelled' ? 'Отменено' : 'Прервано'}
         </span>
       )}
-      {(status === 'gone' || status === 'failed') && canRetry(d) && !d.canCancel && (
-        <button className="tonal dlp-again" onClick={() => void retry()}>
+      {(status === 'gone' || status === 'failed') && retryable && !d.canCancel && (
+        <button className="tonal dlp-again" onClick={() => void retryDownload(d.id)}>
           <Icon name={status === 'gone' ? 'download' : 'reload'} />
           {status === 'gone' ? 'Скачать снова' : 'Повторить'}
         </button>
       )}
-      {d.canCancel && (d.state === 'progressing' && !d.paused || d.canResume) && (
+      {d.canCancel && ((d.state === 'progressing' && !d.paused) || d.canResume) && (
         <button
           className="ib"
           aria-label={d.canResume ? 'Возобновить загрузку' : 'Приостановить загрузку'}
@@ -274,28 +364,64 @@ function Row({ d, speed }: { d: DownloadInfo; speed: number }): React.JSX.Elemen
               <Icon name="folder" />
             </button>
           )}
-          {canRetry(d) && (
+          {retryable && (
             <button className="ib" aria-label="Копировать ссылку" title={copied ? 'Ссылка скопирована' : 'Копировать ссылку'} onClick={copy}>
               <Icon name={copied ? 'check' : 'link'} />
             </button>
           )}
-          <button className="ib" aria-label="Убрать из списка" title="Убрать из списка (файл останется)" onClick={() => void remove()}>
+          <button className="ib" aria-label="Убрать из списка" title="Убрать из списка (файл останется)" onClick={() => void removeDownload(d.id)}>
             <Icon name="close" />
           </button>
         </span>
       )}
     </div>
   )
+})
+
+interface DownloadRowItem {
+  d: DownloadInfo
+  meta: IndexedDownload
 }
+
+const itemKey = (item: DownloadRowItem): string => item.d.id
 
 export function DownloadsPage(): React.JSX.Element {
   const downloads = useStore((s) => s.downloads)
   const [q, setQ] = useState('')
+  const deferredQ = useDeferredValue(q)
   const [status, setStatus] = useState<StatusFilter>('all')
   const [kinds, setKinds] = useState<KindFilter | null>(null)
   const [period, setPeriod] = useState<Period>('all')
-  const speeds = useSpeeds(downloads)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const prevPastRef = useRef<DownloadInfo[]>([])
   const s = useStore.getState
+
+  // Отделяем активные загрузки от завершённых: частые тики прогресса не пересчитывают прошлые 20k+ записей.
+  const { liveRaw, pastRaw } = useMemo(() => {
+    const live: DownloadInfo[] = []
+    const past: DownloadInfo[] = []
+    for (let i = 0; i < downloads.length; i++) {
+      const d = downloads[i]
+      if (d.state === 'progressing') live.push(d)
+      else past.push(d)
+    }
+    const prev = prevPastRef.current
+    let same = past.length === prev.length
+    if (same) {
+      for (let i = 0; i < past.length; i++) {
+        if (past[i] !== prev[i]) {
+          same = false
+          break
+        }
+      }
+    }
+    if (!same) prevPastRef.current = past
+    return { liveRaw: live, pastRaw: prevPastRef.current }
+  }, [downloads])
+
+  const speeds = useSpeeds(liveRaw)
+  const speedsRef = useRef(speeds)
+  speedsRef.current = speeds
 
   // Удалили файл в проводнике и вернулись — отметка «удалён с диска» должна это увидеть.
   useEffect(() => {
@@ -305,44 +431,100 @@ export function DownloadsPage(): React.JSX.Element {
     return () => window.removeEventListener('focus', onFocus)
   }, [s])
 
-  const counts = useMemo(() => {
+  const pastIndexed = useMemo(
+    () => pastRaw.map((d) => ({ d, meta: indexDownload(d) })),
+    [pastRaw]
+  )
+
+  const pastCounts = useMemo(() => {
     const c = { all: 0, ok: 0, gone: 0, failed: 0, bytes: 0 }
-    for (const d of downloads) {
-      const st = statusOf(d)
+    for (const { meta } of pastIndexed) {
       c.all++
-      if (st === 'ok') {
+      if (meta.status === 'ok') {
         c.ok++
-        c.bytes += d.total || d.received
-      } else if (st !== 'live') c[st]++
+        c.bytes += meta.sizeBytes
+      } else if (meta.status === 'gone') {
+        c.gone++
+      } else if (meta.status === 'failed') {
+        c.failed++
+      }
     }
     return c
-  }, [downloads])
+  }, [pastIndexed])
 
-  const needle = q.trim().toLowerCase()
-  const shown = useMemo(() => {
+  const counts = useMemo(
+    () => ({ ...pastCounts, all: pastCounts.all + liveRaw.length, live: liveRaw.length }),
+    [pastCounts, liveRaw.length]
+  )
+
+  const needle = deferredQ.trim().toLowerCase()
+  const pastGroups = useMemo<FeedGroup<DownloadRowItem>[]>(() => {
     const kf = KIND_FILTERS.find((k) => k.id === kinds)
-    return downloads.filter((d) => {
-      const st = statusOf(d)
-      if (status !== 'all' && st !== status) return false
-      if (kf && !kf.kinds.includes(kindOf(d))) return false
-      if (!inPeriod(d.startedAt, period)) return false
-      if (needle && !(d.filename + ' ' + (d.page ?? '') + ' ' + hostOfUrl(d.url)).toLowerCase().includes(needle)) return false
-      return true
-    })
-  }, [downloads, status, kinds, period, needle])
+    const now = Date.now()
+    const [from, to] = periodRange(period, now)
+    const today = startOfDay(now)
+    const currentYear = new Date(today).getFullYear()
+    const byDay = new Map<number, DownloadRowItem[]>()
 
-  const live = shown.filter((d) => statusOf(d) === 'live')
-  const groups = useMemo(() => {
-    const out: { day: number; items: DownloadInfo[] }[] = []
-    for (const d of shown) {
-      if (statusOf(d) === 'live') continue
-      const day = startOfDay(d.startedAt)
-      const g = out[out.length - 1]
-      if (g && g.day === day) g.items.push(d)
-      else out.push({ day, items: [d] })
+    for (let i = 0; i < pastIndexed.length; i++) {
+      const item = pastIndexed[i]
+      const { d, meta } = item
+      if (status !== 'all' && meta.status !== status) continue
+      if (kf && !kf.kinds.includes(meta.kind)) continue
+      if (d.startedAt < from || d.startedAt >= to) continue
+      if (needle && !meta.search.includes(needle)) continue
+
+      let list = byDay.get(meta.day)
+      if (!list) {
+        list = []
+        byDay.set(meta.day, list)
+      }
+      list.push(item)
     }
-    return out
-  }, [shown])
+
+    return [...byDay.entries()]
+      .sort((a, b) => b[0] - a[0])
+      .map(([day, items]) => {
+        const [name, date] = dayLabel(day, today, currentYear)
+        return { key: day, name, meta: `${date} · ${items.length}`, items }
+      })
+  }, [pastIndexed, status, kinds, period, needle])
+
+  const liveGroup = useMemo<FeedGroup<DownloadRowItem> | null>(() => {
+    if (!liveRaw.length || status !== 'all') return null
+    const kf = KIND_FILTERS.find((k) => k.id === kinds)
+    const [from, to] = periodRange(period)
+    const live: DownloadRowItem[] = []
+    for (let i = 0; i < liveRaw.length; i++) {
+      const d = liveRaw[i]
+      const meta = indexDownload(d)
+      if (kf && !kf.kinds.includes(meta.kind)) continue
+      if (d.startedAt < from || d.startedAt >= to) continue
+      if (needle && !meta.search.includes(needle)) continue
+      live.push({ d, meta })
+    }
+    if (!live.length) return null
+    return { key: 'live', name: 'Сейчас', meta: plural(live.length, 'загрузка', 'загрузки', 'загрузок'), items: live }
+  }, [liveRaw, status, kinds, period, needle])
+
+  const groups = useMemo<FeedGroup<DownloadRowItem>[]>(
+    () => (liveGroup ? [liveGroup, ...pastGroups] : pastGroups),
+    [liveGroup, pastGroups]
+  )
+
+  const renderRow = useCallback(
+    (item: DownloadRowItem, _i: number, anim: { cls: string; delay: number }) => (
+      <Row
+        key={item.d.id}
+        d={item.d}
+        meta={item.meta}
+        speed={item.meta.status === 'live' ? (speedsRef.current.get(item.d.id) ?? 0) : 0}
+        animCls={anim.cls}
+        animDelay={anim.delay}
+      />
+    ),
+    []
+  )
 
   const pickPeriod = (e: React.MouseEvent): void => {
     const r = e.currentTarget.getBoundingClientRect()
@@ -362,10 +544,9 @@ export function DownloadsPage(): React.JSX.Element {
         label: 'Очистить список',
         icon: 'delete',
         danger: true,
-        disabled: counts.all === live.length,
+        disabled: counts.all === counts.live,
         run: () => {
-          window.masaki.downloads.clear()
-          useStore.setState((st) => ({ downloads: st.downloads.filter((d) => d.canCancel) }))
+          s().clearDownloads()
         }
       }
     ]
@@ -375,7 +556,7 @@ export function DownloadsPage(): React.JSX.Element {
   const filtered = needle || status !== 'all' || kinds || period !== 'all'
   const periodLabel = PERIODS.find((p) => p.id === period)?.label ?? ''
   return (
-    <div className="settings dlp">
+    <div className="settings dlp" ref={scrollRef}>
       <div className="set-inner">
         <div className="dlp-head">
           <div className="dlp-title">
@@ -436,40 +617,9 @@ export function DownloadsPage(): React.JSX.Element {
           ))}
         </div>
 
-        {live.length > 0 && (
-          <div className="dlp-group">
-            <div className="dlp-day">
-              <b>Сейчас</b>
-              <span>{plural(live.length, 'загрузка', 'загрузки', 'загрузок')}</span>
-            </div>
-            <div className="dlp-card">
-              {live.map((d) => (
-                <Row key={d.id} d={d} speed={speeds.get(d.id) ?? 0} />
-              ))}
-            </div>
-          </div>
-        )}
+        <VirtualDayFeed scrollRef={scrollRef} groups={groups} itemKey={itemKey} renderRow={renderRow} />
 
-        {groups.map((g) => {
-          const [name, date] = dayLabel(g.day)
-          return (
-            <div key={g.day} className="dlp-group">
-              <div className="dlp-day">
-                <b>{name}</b>
-                <span>
-                  {date} · {g.items.length}
-                </span>
-              </div>
-              <div className="dlp-card">
-                {g.items.map((d) => (
-                  <Row key={d.id} d={d} speed={0} />
-                ))}
-              </div>
-            </div>
-          )
-        })}
-
-        {shown.length === 0 && (
+        {groups.length === 0 && (
           <div className="dlp-empty">
             <span className="dlp-empty-art">
               <svg viewBox="0 0 200 200" aria-hidden="true">

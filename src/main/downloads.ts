@@ -8,7 +8,10 @@ import { JsonFile } from './store'
 // Сами файлы Masaki не трогает: «убрать из списка» стирает только запись.
 
 /** Сколько записей помнить; старые уходят из списка, файлы остаются в папке. */
-const KEEP = 1000
+const KEEP = 50_000
+const PROGRESS_THROTTLE_MS = 150
+const PROGRESS_SAVE_MS = 5000
+const EXIST_CONCURRENCY = 32
 const file = new JsonFile<DownloadInfo[]>('downloads.json')
 const STATES = new Set(['progressing', 'completed', 'cancelled', 'interrupted'])
 const IMAGE = /\.(png|jpe?g|gif|webp|bmp|avif|heic|ico|tiff?)$/i
@@ -17,11 +20,15 @@ let list: DownloadInfo[] = []
 /** Живые DownloadItem: interrupted бывает и до done — пока объект жив, загрузку ещё можно отменить. */
 const items = new Map<string, { item: DownloadItem; info(): DownloadInfo }>()
 const sourceTabs = new Map<string, number>()
+let saveTimer: NodeJS.Timeout | undefined
+let dirty = false
 
 export function tabHasDownload(wcId: number): boolean {
   return [...sourceTabs.values()].includes(wcId)
 }
+const MAX_THUMBS = 200
 const thumbs = new Map<string, string | null>()
+const pendingThumbs = new Map<string, Promise<string | null>>()
 let send: (d: DownloadInfo) => void = () => {}
 let completed: (p: string) => void = () => {}
 
@@ -47,26 +54,43 @@ export async function initDownloads(hooks: { send(d: DownloadInfo): void; comple
   // Masaki закрылся посреди загрузки: она прервана, а объекта, который можно отменить, больше нет.
   list = (Array.isArray(saved) ? saved : [])
     .filter(valid)
+    .slice(0, KEEP)
     .map((d) => ({ ...d, state: d.state === 'progressing' ? 'interrupted' : d.state, canCancel: false, paused: false, canResume: false, exists: undefined }))
 }
 
-export function flushDownloads(): void {
-  file.flushSync()
-}
-
-function save(): void {
+function commitSave(): void {
+  clearTimeout(saveTimer)
+  saveTimer = undefined
+  dirty = false
   file.write(
     list.slice(0, KEEP).map(({ exists: _, ...d }) => d),
-    1000
+    0
   )
 }
 
-function put(d: DownloadInfo): void {
+export function flushDownloads(): void {
+  if (dirty) commitSave()
+  file.flushSync()
+}
+
+function scheduleSave(delay: number, keepExisting = false): void {
+  dirty = true
+  if (keepExisting && saveTimer) return
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(commitSave, delay)
+}
+
+function put(d: DownloadInfo, persist: 'now' | 'lifecycle' | 'progress' = 'lifecycle'): void {
   const i = list.findIndex((x) => x.id === d.id)
-  if (i < 0) list.unshift(d)
-  else list[i] = d
+  if (i < 0) {
+    list.unshift(d)
+    if (list.length > KEEP) list.length = KEEP
+  } else {
+    list[i] = d
+  }
   send(d)
-  save()
+  if (persist === 'progress') scheduleSave(PROGRESS_SAVE_MS, true)
+  else scheduleSave(persist === 'now' ? 150 : 1000)
 }
 
 function uniquePath(dir: string, name: string): string {
@@ -112,29 +136,78 @@ export function trackDownload(item: DownloadItem, wc: WebContents | undefined): 
     exists: state === 'completed' ? true : undefined
   })
   items.set(id, { item, info })
-  put(info())
-  item.on('updated', (_ev, state) => put(info(state)))
+  const initial = info()
+  let lastSentAt = Date.now()
+  let lastReceived = initial.received
+  let lastState = initial.state
+  let lastPaused = !!initial.paused
+  let lastCanResume = !!initial.canResume
+  put(initial, 'lifecycle')
+  item.on('updated', (_ev, state) => {
+    const received = item.getReceivedBytes()
+    const paused = item.isPaused()
+    const canResume = paused || (state === 'interrupted' && item.canResume())
+    const now = Date.now()
+    const changed = state !== lastState || paused !== lastPaused || canResume !== lastCanResume || (lastReceived === 0 && received > 0)
+    if (!changed && now - lastSentAt < PROGRESS_THROTTLE_MS) return
+    lastSentAt = now
+    lastReceived = received
+    lastState = state
+    lastPaused = paused
+    lastCanResume = canResume
+    put(info(state), changed ? 'lifecycle' : 'progress')
+  })
   item.once('done', (_ev, state) => {
     items.delete(id)
     sourceTabs.delete(id)
     endedAt = Date.now()
-    put(info(state))
+    put(info(state), 'now')
     if (state === 'completed') completed(item.getSavePath() || target)
   })
 }
 
+const pathKey = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p)
+
 /** Вся история, свежие сверху; у завершённых — лежит ли файл на месте сейчас. */
 export async function listDownloads(): Promise<DownloadInfo[]> {
-  return Promise.all(
-    list.map(async (d) => {
-      if (d.state !== 'completed') return d
-      const exists = await fs.promises.access(d.path).then(
-        () => true,
-        () => false
-      )
-      return { ...d, exists }
+  const dlDir = app.getPath('downloads')
+  const resolvedDir = pathKey(path.resolve(dlDir))
+  const names = await fs.promises.readdir(dlDir).catch(() => null)
+  const dirSet = names ? new Set(names.map((n) => pathKey(n))) : null
+
+  const out: DownloadInfo[] = new Array(list.length)
+  const external: number[] = []
+  for (let i = 0; i < list.length; i++) {
+    const d = list[i]
+    if (d.state !== 'completed') {
+      out[i] = d
+      continue
+    }
+    if (dirSet && pathKey(path.resolve(path.dirname(d.path))) === resolvedDir) {
+      out[i] = { ...d, exists: dirSet.has(pathKey(path.basename(d.path))) }
+    } else {
+      out[i] = d
+      external.push(i)
+    }
+  }
+
+  if (external.length > 0) {
+    let cursor = 0
+    const workers = Array.from({ length: Math.min(EXIST_CONCURRENCY, external.length) }, async () => {
+      while (cursor < external.length) {
+        const idx = external[cursor++]
+        const d = list[idx]
+        const exists = await fs.promises.access(d.path).then(
+          () => true,
+          () => false
+        )
+        out[idx] = { ...d, exists }
+      }
     })
-  )
+    await Promise.all(workers)
+  }
+
+  return out
 }
 
 /** Завершённая загрузка из своего списка: только такие файлы можно открыть, показать или перетащить. */
@@ -177,7 +250,7 @@ export function removeDownload(id: string): boolean {
   list = list.filter((d) => d.id !== id)
   thumbs.delete(id)
   if (list.length === before) return false
-  save()
+  scheduleSave(500)
   return true
 }
 
@@ -185,7 +258,7 @@ export function removeDownload(id: string): boolean {
 export function clearDownloads(): void {
   list = list.filter((d) => items.has(d.id))
   thumbs.clear()
-  save()
+  scheduleSave(500)
 }
 
 /** Скачать снова (файл удалили, загрузку отменили или она оборвалась): прежняя запись уступает место новой. */
@@ -197,18 +270,41 @@ export function retryDownload(id: string, ses: Session): boolean {
   return true
 }
 
+function rememberThumb(id: string, url: string | null): void {
+  if (thumbs.has(id)) thumbs.delete(id)
+  else if (thumbs.size >= MAX_THUMBS) thumbs.delete(thumbs.keys().next().value!)
+  thumbs.set(id, url)
+}
+
 /** Миниатюра картинки из папки загрузок (средствами системы) — для строки на странице загрузок. */
 export async function downloadThumb(id: string): Promise<string | null> {
-  if (thumbs.has(id)) return thumbs.get(id) ?? null
-  const d = list.find((x) => x.id === id)
-  if (!d || d.state !== 'completed' || !IMAGE.test(d.path) || !fs.existsSync(d.path)) return null
-  let url: string | null = null
-  try {
-    const img = await nativeImage.createThumbnailFromPath(d.path, { width: 96, height: 96 })
-    url = img.isEmpty() ? null : img.toDataURL()
-  } catch {
-    url = null
+  if (thumbs.has(id)) {
+    const cached = thumbs.get(id) ?? null
+    rememberThumb(id, cached)
+    return cached
   }
-  thumbs.set(id, url)
-  return url
+  const existing = pendingThumbs.get(id)
+  if (existing) return existing
+  const d = list.find((x) => x.id === id)
+  if (!d || d.state !== 'completed' || !IMAGE.test(d.path)) return null
+  const job = (async () => {
+    const exists = await fs.promises.access(d.path).then(
+      () => true,
+      () => false
+    )
+    if (!exists) return null
+    let url: string | null = null
+    try {
+      const img = await nativeImage.createThumbnailFromPath(d.path, { width: 96, height: 96 })
+      url = img.isEmpty() ? null : img.toDataURL()
+    } catch {
+      url = null
+    }
+    rememberThumb(id, url)
+    return url
+  })().finally(() => {
+    if (pendingThumbs.get(id) === job) pendingThumbs.delete(id)
+  })
+  pendingThumbs.set(id, job)
+  return job
 }

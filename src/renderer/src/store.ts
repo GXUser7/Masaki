@@ -220,6 +220,7 @@ interface Store {
   htmlFullscreen: boolean
   history: HistoryEntry[]
   downloads: DownloadInfo[]
+  liveDownloads: DownloadInfo[]
   /** tabs — список всех вкладок дока («ещё N»), extensions — кнопки расширений. */
   popover: null | 'downloads' | 'menu' | 'accounts' | 'qr' | 'tabs' | 'extensions'
   /** Адрес для QR-кода страницы. */
@@ -322,6 +323,7 @@ interface Store {
   /** История загрузок из главного процесса (с отметкой, лежит ли файл на диске). */
   loadDownloads(): Promise<void>
   dropDownload(id: string): void
+  clearDownloads(): void
   setPopover(p: Store['popover']): void
   openMenu(x: number, y: number, entries: MenuEntry[], restore?: () => void): void
   closeMenu(): void
@@ -348,6 +350,9 @@ function retainedTabState(s: Store, tabs: Tab[]): Pick<Store, 'tabs' | 'groups' 
   }
 }
 
+let dlLoading: Promise<void> | null = null
+let dlReload = false
+
 export const useStore = create<Store>((set, get) => ({
   booted: false,
   settings: defaultSettings,
@@ -360,6 +365,7 @@ export const useStore = create<Store>((set, get) => ({
   htmlFullscreen: false,
   history: [],
   downloads: [],
+  liveDownloads: [],
   popover: null,
   qrUrl: '',
   winMaximized: false,
@@ -691,7 +697,7 @@ export const useStore = create<Store>((set, get) => ({
       const h = s.history
       const last = h[h.length - 1]
       if (last && last.url === url) return { history: [...h.slice(0, -1), { ...last, title: title || last.title }] }
-      return { history: [...h, entry].slice(-5000) }
+      return { history: [...h, entry].slice(-50_000) }
     })
   },
 
@@ -699,29 +705,72 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => {
       const i = s.downloads.findIndex((x) => x.id === d.id)
       // Окно загрузок само не выскакивает (мешало, просьба пользователя): прогресс видно на кнопке и в доке.
-      if (i < 0) return { downloads: [d, ...s.downloads].slice(0, 1000) }
-      const downloads = s.downloads.slice()
-      downloads[i] = d
-      return { downloads }
+      const downloads = i < 0 ? [d, ...s.downloads].slice(0, 50_000) : s.downloads.slice()
+      if (i >= 0) downloads[i] = d
+      const li = s.liveDownloads.findIndex((x) => x.id === d.id)
+      let liveDownloads = s.liveDownloads
+      if (d.state === 'progressing') {
+        liveDownloads = li < 0 ? [d, ...s.liveDownloads] : s.liveDownloads.slice()
+        if (li >= 0) liveDownloads[li] = d
+      } else if (li >= 0) {
+        liveDownloads = s.liveDownloads.filter((x) => x.id !== d.id)
+      }
+      return { downloads, liveDownloads }
     })
   },
 
-  async loadDownloads() {
-    const list = await window.masaki.downloads.list()
-    set((s) => {
-      // Пока шёл запрос, события загрузок могли обогнать снимок: идущие и новые берём из состояния.
-      const live = new Map(s.downloads.map((d) => [d.id, d]))
-      const ids = new Set(list.map((d) => d.id))
-      const merged = list.map((d) => {
-        const l = live.get(d.id)
-        return l && (l.state === 'progressing' || l.canCancel) ? l : d
-      })
-      return { downloads: [...s.downloads.filter((d) => !ids.has(d.id)), ...merged] }
+  loadDownloads() {
+    if (dlLoading) {
+      dlReload = true
+      return dlLoading
+    }
+    dlLoading = (async () => {
+      do {
+        dlReload = false
+        const list = await window.masaki.downloads.list()
+        set((s) => {
+          // Пока шёл запрос, события загрузок могли обогнать снимок: идущие и новые берём из состояния.
+          const live = new Map<string, DownloadInfo>()
+          for (const d of s.downloads) {
+            if (d.state === 'progressing' || d.canCancel) live.set(d.id, d)
+          }
+          const ids = new Set(list.map((d) => d.id))
+          const merged = list.map((d) => {
+            const l = live.get(d.id)
+            if (l) return l
+            if (d.state === 'progressing' || d.canCancel) {
+              const cur = s.downloads.find((x) => x.id === d.id)
+              if (cur) return cur
+            }
+            return d
+          })
+          const extra: DownloadInfo[] = []
+          for (const d of s.downloads) {
+            if (!ids.has(d.id)) extra.push(d)
+          }
+          const downloads = (extra.length ? [...extra, ...merged] : merged).slice(0, 50_000)
+          return { downloads, liveDownloads: downloads.filter((d) => d.state === 'progressing') }
+        })
+      } while (dlReload)
+    })().finally(() => {
+      dlLoading = null
     })
+    return dlLoading
   },
 
   dropDownload(id) {
-    set((s) => ({ downloads: s.downloads.filter((d) => d.id !== id) }))
+    set((s) => ({
+      downloads: s.downloads.filter((d) => d.id !== id),
+      liveDownloads: s.liveDownloads.some((d) => d.id === id) ? s.liveDownloads.filter((d) => d.id !== id) : s.liveDownloads
+    }))
+  },
+
+  clearDownloads() {
+    window.masaki.downloads.clear()
+    set((s) => ({
+      downloads: s.downloads.filter((d) => d.canCancel),
+      liveDownloads: s.liveDownloads.filter((d) => d.canCancel && d.state === 'progressing')
+    }))
   },
 
   setPopover(p) {

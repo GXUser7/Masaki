@@ -82,10 +82,12 @@ export function SiteInfoSheet(): React.JSX.Element | null {
           <Icon name={https ? 'lock' : 'warn'} />
           <span className="si-host">{host}</span>
         </div>
-        <b className={'si-security' + (https ? '' : ' insecure')}>{https ? 'Соединение защищено' : 'Соединение не защищено'}</b>
-        <p className="hint si-note">
-          {https ? 'Данные между Masaki и сайтом шифруются.' : 'Без шифрования: не вводите пароли на этом сайте.'}
-        </p>
+        <div className={'si-status' + (https ? '' : ' insecure')}>
+          <b className={'si-security' + (https ? '' : ' insecure')}>{https ? 'Соединение защищено' : 'Соединение не защищено'}</b>
+          <p className="si-note">
+            {https ? 'Данные между Masaki и сайтом шифруются.' : 'Без шифрования: не вводите пароли на этом сайте.'}
+          </p>
+        </div>
         <div className="si-acts">
           <button className="mi" onClick={() => (close(), useStore.getState().navigate(t.url, { raw: true, target: 'new' }))}>
             <Icon name="openInNew" /> Открыть адрес в новой вкладке
@@ -107,9 +109,9 @@ export function SiteInfoSheet(): React.JSX.Element | null {
         <div className="si-sep" />
         <div className="pop-h">Разрешения</div>
         {perms === null ? (
-          <p className="hint">Читаю решения…</p>
+          <p className="si-empty">Читаю решения…</p>
         ) : perms.length === 0 ? (
-          <p className="hint">Вы ещё ничего не разрешали и не запрещали этому сайту.</p>
+          <p className="si-empty">Вы ещё ничего не разрешали и не запрещали этому сайту.</p>
         ) : (
           <div className="sc-edit">
             {perms.map((p) => (
@@ -138,26 +140,28 @@ export function SiteInfoSheet(): React.JSX.Element | null {
           <>
             <div className="si-sep" />
             <div className="pop-h">Данные</div>
-            <button className="mi sy-mi" onClick={() => void clearCookies()} disabled={cookies === 'cleaning'}>
-              <Icon name={cookies === 'done' ? 'check' : cookies === 'error' ? 'warn' : 'delete'} />
-              <span className="sy-mi-t" aria-live="polite">
-                {cookies === 'cleaning' ? 'Очистка кук…' : cookies === 'done' ? 'Куки очищены' : cookies === 'error' ? 'Не удалось очистить куки' : 'Очистить куки сайта'}
-                <small>{cookies === 'done' ? 'потребуется войти заново' : `${site} и его поддомены`}</small>
-              </span>
-            </button>
-            <button
-              className="mi"
-              onClick={() => {
-                void window.masaki.site.clearData(origin)
-                setCookies('data-done')
-              }}
-            >
-              <Icon name={cookies === 'data-done' ? 'check' : 'delete'} />
-              <span className="sy-mi-t">
-                Очистить данные сайта
-                <small>хранилища, IndexedDB, Service Worker — куки останутся</small>
-              </span>
-            </button>
+            <div className="si-acts">
+              <button className="mi sy-mi" onClick={() => void clearCookies()} disabled={cookies === 'cleaning'}>
+                <Icon name={cookies === 'done' ? 'check' : cookies === 'error' ? 'warn' : 'delete'} />
+                <span className="sy-mi-t" aria-live="polite">
+                  {cookies === 'cleaning' ? 'Очистка кук…' : cookies === 'done' ? 'Куки очищены' : cookies === 'error' ? 'Не удалось очистить куки' : 'Очистить куки сайта'}
+                  <small>{cookies === 'done' ? 'потребуется войти заново' : `${site} и его поддомены`}</small>
+                </span>
+              </button>
+              <button
+                className="mi sy-mi"
+                onClick={() => {
+                  void window.masaki.site.clearData(origin)
+                  setCookies('data-done')
+                }}
+              >
+                <Icon name={cookies === 'data-done' ? 'check' : 'delete'} />
+                <span className="sy-mi-t">
+                  Очистить данные сайта
+                  <small>хранилища, IndexedDB, Service Worker — куки останутся</small>
+                </span>
+              </button>
+            </div>
           </>
         )}
       </div>

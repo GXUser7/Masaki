@@ -75,7 +75,7 @@ import {
 
 // Имя сессии осталось от старого названия (Frost): в ней куки и входы пользователя, не менять.
 const PARTITION = 'persist:frost'
-const HISTORY_LIMIT = 5000
+const HISTORY_LIMIT = 50_000
 
 const settingsFile = new JsonFile<Settings>('settings.json')
 const sessionFile = new JsonFile<SavedSession>('session.json')
@@ -1703,13 +1703,24 @@ function registerIpc(): void {
       return null
     }
   })
-  ipcMain.handle('favicon', async (_e, url: string) => {
+  const pendingFavicons = new Map<string, Promise<string | null>>()
+  ipcMain.handle('favicon', (_e, url: string) => {
     const host = iconHost(url)
     if (!host) return null
     if (favicons[host]) return favicons[host]
-    const data = await fetchAsDataUrl(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`)
-    if (data) rememberFavicon(host, data)
-    return data
+    let pending = pendingFavicons.get(host)
+    if (!pending) {
+      pending = fetchAsDataUrl(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`)
+        .then((data) => {
+          if (data) rememberFavicon(host, data)
+          return data
+        })
+        .finally(() => {
+          if (pendingFavicons.get(host) === pending) pendingFavicons.delete(host)
+        })
+      pendingFavicons.set(host, pending)
+    }
+    return pending
   })
   // Значок вкладки копией data: — интерфейсу нужно разобрать его пиксели (светлый глиф на белом кружке).
   // Только окну интерфейса и только http(s); ответы держим в памяти, адреса значков повторяются.
