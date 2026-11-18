@@ -136,7 +136,7 @@ function ExtActionButton({ action, tabId, info }: { action: ExtAction; tabId: nu
     >
       <img src={actionIcon(action.id, tabId, a.iconModified)} alt="" draggable={false} />
       {a.text && (
-        <b className="ext-badge" style={{ background: badgeColor(a.color) }}>
+        <b className="ext-badge" style={{ background: badgeColor(a.color), color: badgeColor(a.textColor) }}>
           {a.text}
         </b>
       )}
@@ -202,7 +202,7 @@ function ExtensionsMenu({ close }: { close: () => void }): React.JSX.Element {
               <span className="ext-row-ic">
                 <img src={actionIcon(action.id, tabId, a.iconModified)} alt="" draggable={false} />
                 {a.text && (
-                  <b className="ext-badge" style={{ background: badgeColor(a.color) }}>
+                  <b className="ext-badge" style={{ background: badgeColor(a.color), color: badgeColor(a.textColor) }}>
                     {a.text}
                   </b>
                 )}

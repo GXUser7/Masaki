@@ -17,6 +17,7 @@
     "pack:mac": "electron-vite build && electron-builder --mac dir",
     "dist:mac": "electron-vite build && electron-builder --mac",
     "test:addons": "electron-vite build && node scripts/addons-test.mjs",
+    "test:extensions": "electron-vite build && node scripts/extensions-full-test.mjs",
     "test:import": "electron-vite build && node scripts/import-test.mjs",
     "test:downloads": "electron-vite build && node scripts/downloads-test.mjs",
     "test:site-data": "electron-vite build && node scripts/site-data-test.mjs",
@@ -83,6 +84,9 @@
     "files": [
       "out/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "out/preload/extension.js"
     ],
     "win": {
       "icon": "build/icon.png",

@@ -6,6 +6,7 @@ import { installPasskeys } from './passkey-page'
 // Ставится на всю сессию, поэтому работает и в iframe: там нужны пароли и ключи доступа, а служебные
 // события интерфейса (цвет фона, «взгляд», док, свайпы, плеер) идут только из главного фрейма.
 const TOP = window.top === window
+const IS_EXTENSION_PAGE = location.protocol === 'chrome-extension:'
 
 // Прозрачный документ опирается на Canvas браузера, а не на тему интерфейса Masaki.
 // Сообщаем цвет подложки отдельно: фоны html/body не переписываем, чтобы сохранить CSS сайта.
@@ -30,19 +31,29 @@ const scheduleCanvas = (): void => {
 window.addEventListener('DOMContentLoaded', () => {
   if (!TOP) return
   sendCanvas()
-  new MutationObserver(scheduleCanvas).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
+  // Расширения тем (Dark Reader и др.) меняют color-scheme и data-darkreader-*, поэтому следим за ними тоже.
+  new MutationObserver(scheduleCanvas).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['class', 'style', 'color-scheme', 'data-theme', 'data-color-scheme', 'data-darkreader-scheme', 'data-darkreader-mode']
+  })
   // meta color-scheme и поздно загруженные стили тоже могут менять системный Canvas.
   if (document.head) new MutationObserver(scheduleCanvas).observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['content', 'media', 'disabled'] })
 })
 if (TOP) {
   window.addEventListener('load', scheduleCanvas, true)
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', scheduleCanvas)
+  // Аддон «Прозрачные сайты» сообщает обновлённый базовый фон после смены темы сайтом или расширением (Dark Reader).
+  window.addEventListener('masaki-glass-base', (ev: Event) => {
+    const bg = (ev as CustomEvent<string>).detail
+    if (typeof bg === 'string') ipcRenderer.sendToHost('page:glass-bg', bg)
+  })
 }
 
 // 1. Вход Google настраивает сессионный preload popup.ts до первого скрипта документа.
 
 // 2. Ключи доступа (passkey): WebAuthn страницы обслуживает менеджер ключей Masaki в главном процессе.
 // В мир страницы уходит только функция-мост: какие запросы пропускать, решает главный процесс.
+if (!IS_EXTENSION_PAGE) {
 contextBridge.executeInMainWorld({
   func: installPasskeys,
   args: [
@@ -584,6 +595,7 @@ window.addEventListener(
 // Если страница отменила событие (preventDefault), кнопка ей нужна (карты, редакторы) — не трогаем, как Chrome.
 // Предзагрузка идёт только в главном фрейме вкладки: нажатие над iframe сюда не попадёт.
 // Наш слушатель поставлен раньше страничных, поэтому об отмене узнаём, когда событие обойдёт всех.
+}
 window.addEventListener('mouseup', (e) => {
   if (!TOP || !e.isTrusted || (e.button !== 3 && e.button !== 4)) return
   const dir = e.button === 3 ? 'back' : 'forward'
@@ -592,6 +604,7 @@ window.addEventListener('mouseup', (e) => {
   })
 })
 
+if (!IS_EXTENSION_PAGE) {
 // 6б. Окна страницы — alert / confirm / prompt — окном Masaki, а не системным окном Windows. Как и настоящие,
 // они останавливают код страницы до ответа: вопрос уходит в main синхронно (sendSync). Ответ null — main
 // отказался (не главный фрейм и т. п.): тогда обычное окно браузера.
@@ -756,4 +769,5 @@ if (YOUCLOUD.includes(location.origin)) {
     reply({ kind: 'event', event: 'theme', ...theme })
   })
   hello()
+}
 }

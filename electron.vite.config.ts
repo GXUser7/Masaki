@@ -35,7 +35,8 @@ export default defineConfig({
           index: resolve(__dirname, 'src/preload/index.ts'),
           guest: resolve(__dirname, 'src/preload/guest.ts'),
           popup: resolve(__dirname, 'src/preload/popup.ts'),
-          'tab-lifecycle': resolve(__dirname, 'src/preload/tab-lifecycle.ts')
+          'tab-lifecycle': resolve(__dirname, 'src/preload/tab-lifecycle.ts'),
+          extension: resolve(__dirname, 'src/preload/extension.ts')
         }
       }
     }

@@ -113,6 +113,8 @@ const api: MasakiApi = {
   extensions: {
     list: () => ipcRenderer.invoke('ext:list'),
     add: () => ipcRenderer.invoke('ext:add'),
+    addFile: (filePath) => ipcRenderer.invoke('ext:add-file', filePath),
+    installStore: (id) => ipcRenderer.invoke('ext:install-store', id),
     remove: (id) => ipcRenderer.invoke('ext:remove', id),
     setEnabled: (id, on) => ipcRenderer.invoke('ext:enable', id, !!on),
     onChanged: (cb) => listen<void>('ext:changed', cb),

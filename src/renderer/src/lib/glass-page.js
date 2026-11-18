@@ -280,10 +280,10 @@
     return { bar, tinted: isTinted }
   }
 
-  // Тему сайта задают только такие атрибуты html/body. Считать «сменой темы» ЛЮБОЙ атрибут нельзя:
-  // сайты пишут в html служебное каждый кадр (data-scroll, классы состояния), и мы зацикливались бы
-  // на полных ресканах — страница занималась одним нашим пересчётом.
-  const THEME_ATTR = /^(class|color-scheme|data-mode|data-dark|data-light|data-(?:[\w-]*theme[\w-]*|color-[\w-]+))$/
+  // Тему сайта задают только такие атрибуты html/body (включая тёмные темы расширений вроде Dark Reader).
+  // Считать «сменой темы» ЛЮБОЙ атрибут нельзя: сайты пишут в html служебное каждый кадр (data-scroll,
+  // классы состояния), и мы зацикливались бы на полных ресканах.
+  const THEME_ATTR = /^(class|color-scheme|data-mode|data-dark|data-light|data-darkreader-[\w-]+|data-(?:[\w-]*theme[\w-]*|color-[\w-]+))$/
   const sign = () => {
     const h = document.documentElement
     return [...h.attributes, ...(document.body ? document.body.attributes : [])]
@@ -315,12 +315,13 @@
     queue = new Set()
     // Элементы, которые сайт уже вынул из DOM, наши стили больше не держат — не копим память.
     for (const el of [...saved.keys()]) if (!el.isConnected) saved.delete(el)
-    // Сменилась тема сайта (атрибуты html/body) — фон другой, пересчитываем всё.
+    // Сменилась тема сайта или расширения (атрибуты html/body) — фон другой, пересчитываем всё и сообщаем интерфейсу.
     if (sign() !== rootSign) {
       const s = strong
       const p = panel
       api.remove()
-      api.apply(s, p)
+      const nextBg = api.apply(s, p)
+      window.dispatchEvent(new CustomEvent('masaki-glass-base', { detail: nextBg }))
       return
     }
     putRoot() // сайт мог переписать атрибут style у html/body

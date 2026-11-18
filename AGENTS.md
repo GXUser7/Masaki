@@ -14,6 +14,7 @@ npm run dev          # разработка: интерфейс перезагр
 npm run typecheck    # tsc без сборки
 npm run smoke        # сборка + основной автотест, снимки окна в test-output/
 npm run test:addons  # сборка + тест аддонов и меню Chrome (видео, QR, блокировщик, расширение)
+npm run test:extensions # сборка + полный тест расширений CWS (DNR, Dark Reader, uBOL, Stylus, SponsorBlock, .crx/.zip)
 npm run test:site-data # сборка + очистка кук текущего сайта (домены, CHIPS, сохранность хранилищ)
 npm run test:downloads # сборка + отмена загрузки, целостность соседнего файла, страница загрузок и история после перезапуска
 npm run test:permissions # сборка + разрешения: камера и микрофон отдельно, http/https, перенос старого permissions.json
@@ -368,13 +369,27 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
 - Палитра: команда «YouCloud», пауза/следующий/предыдущий трек, строка «Найти в YouCloud» (если YouCloud
   открывали) → `#/search/<запрос>`.
 
-### Расширения Chrome (src/main/extensions.ts, lib/extensions.ts)
+### Расширения Chrome (src/main/extensions.ts, src/main/extNet.ts, src/preload/extension.ts, lib/extensions.ts)
 
 - Electron умеет только загрузить расширение. Вкладки, кнопки (chrome.action), их всплывающие окна,
   contextMenus, cookies, windows даёт **electron-chrome-extensions** (лицензия на выбор GPL-3 или платная —
   у Masaki GPL-3, `license: 'GPL-3.0'`), установку и автообновление из Chrome Web Store —
-  **electron-chrome-web-store** (MIT). Обе — runtime-зависимости (`dependencies`): свои preload ищут в
-  node_modules и ставят сессии вкладок (`registerPreloadScript`); webRequest сессии не трогают.
+  **electron-chrome-web-store** (MIT). Встроенный preload библиотеки снимаем и ставим свой
+  `src/preload/extension.ts` (и в `frame`, и в `service-worker`), а в `asarUnpack` распаковываем `out/preload/extension.js`.
+- **Почему ломались расширения в Electron 44 и как это исправлено:**
+  - Нативный `globalThis.browser !== globalThis.chrome` (появился в Chromium 146) не содержит патченных API
+    (`tabs.create`, `permissions`, `windows`, `contextMenus`) — `extension.ts` зеркалирует все API `chrome.*`
+    на `globalThis.browser` и не вызывает `Object.freeze(chrome)` (что ломало полифиллы вроде SponsorBlock).
+  - `chrome.storage.managed` не проксируется в `storage.local` (чистое пустое read-only хранилище),
+    `chrome.storage.sync` падает с ошибкой на Electron → мапится на `local`.
+  - MV3 `action.setIcon({ imageData })` конвертируется в `data:image/png` через `OffscreenCanvas` / `canvas`.
+  - `extNet.ts` реализует индексированный движок `declarativeNetRequest` (статические, динамические, сессионные правила,
+    `block`, `redirect` с суррогатами `extensionPath` и `queryTransform`, `upgradeScheme`, `modifyHeaders`,
+    `allow`, `allowAllRequests` и счётчик на бейдже) и маршрутизацию `chrome.webRequest` в едином конвейере
+    сессии вкладок (`syncSessionWebRequest`, не задевая вход Google и мост YouCloud).
+  - Поддержаны `runtime.onInstalled`/`onStartup` (сохраняется `extensions-state.json`), `chrome.commands` (хоткеи),
+    `chrome.fontSettings`, `chrome.userScripts`, `chrome.identity.launchWebAuthFlow`, `chrome.sidePanel`,
+    `tabs.captureVisibleTab`/`insertCSS`/`removeCSS`/`update`, `contextMenus.update`, установка `.crx`/`.zip` и MV2.
 - Вкладки (webview) библиотека видит как вкладки окна Masaki: `trackTab` в `web-contents-created`, активную
   интерфейс сообщает сам (`ext:active-tab`). Создать/выбрать/закрыть вкладку по просьбе расширения может только
   интерфейс — main шлёт команды (`open-url`, `activate-wc`, `close-wc`) и ждёт webview. Своё «выбрать вкладку»
@@ -389,15 +404,11 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
   (снизу в панели, сверху в доке).
 - Установка из магазина: кнопка «Установить» на chromewebstore.google.com → `beforeInstall` → окно Masaki
   `ExtInstallSheet` (разрешения человеческими словами из manifest) → да/нет. Магазин при этом показывает
-  плашку «перейдите на Chrome» — косметика, установка работает. MV2 магазин не ставит.
-- Не работают: declarativeNetRequest (блокировщики вроде uBO Lite — у Masaki свой), `chrome.webRequest`
-  (Electron отдаёт события только одному обработчику, а webRequest сессии занят входом Google, YouCloud и
-  Ghostery), расширения, которым нужен вход в Chrome или nativeMessaging.
+  плашку «перейдите на Chrome» — косметика, установка работает. Также поддержаны MV2 и локальные `.crx`/`.zip`.
+- Не работают только расширения, требующие проприетарного входа в Chrome Sync или сторонних нативных хостов, которых нет у пользователя.
 - **Под Playwright Chromium не шлёт `preferred-size-changed`** — окно расширения оставалось бы невидимым
   25×25. Поэтому, если события нет за 0,5 с, main меряет страницу окна сам и подаёт это событие.
-- Тест — шаги «кнопка расширения», «меню расширения», «отключение» в `test:addons` (расширение
-  `scripts/fixtures/ext-action`). Магазин — это сайт Google: только самопроверкой без автоматизации
-  (`MASAKI_SELFTEST_PRE` — выражение во вкладке до снимка, например нажать «Установить»), и редко.
+- Тесты — `scripts/addons-test.mjs` и `scripts/extensions-full-test.mjs` (синтетика + реальные uBOL/Dark Reader/Stylus/SponsorBlock). Магазин — это сайт Google: только самопроверкой без автоматизации.
 
 ## Решения, утверждённые пользователем (не менять без просьбы)
 
@@ -802,8 +813,7 @@ Extensions/ (расширения из Chrome Web Store, `<id>/<версия>_0`
 
 ## Чего пока нет
 
-- У расширений Chrome: declarativeNetRequest и chrome.webRequest, горячих клавиш расширений (chrome.commands)
-  в настройках Masaki, страницы chrome://extensions — управление на странице «Аддоны».
+- У расширений Chrome: проприетарного Chrome Sync и страницы chrome://extensions — управление на странице «Аддоны».
 - У ключей доступа: входа по QR с телефона (hybrid), ключей в iframe (там встроенный WebAuthn), «тихого»
   создания ключа после входа паролем (`mediation: 'conditional'` у create), своего PIN перед входом.
 - Автозаполнения в iframe; экспорта паролей.

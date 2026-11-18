@@ -47,6 +47,7 @@ import {
   YOUCLOUD_MEDIA_URLS
 } from './youcloud'
 import * as extensions from './extensions'
+import * as extNet from './extNet'
 import { defaultBrowserState, makeDefault, refreshRegistration } from './defaultBrowser'
 import { parseTrack, setDiscordEnabled, setDiscordTrack } from './discord'
 import * as profiles from './profiles'
@@ -265,6 +266,14 @@ function attachShortcuts(contents: WebContents, isGuest: boolean): void {
     if (isGuest && input.code === 'Escape') {
       ;(contents.hostWebContents ?? contents).send('command', { type: 'escape' })
       return
+    }
+    // Горячие клавиши расширений (chrome.commands): проверяем до общих клавиш только когда
+    // клавиша действительно забиндена за активным расширением, чтобы не ломать хоткеи Masaki.
+    if (isGuest || contents === win?.webContents) {
+      if (extensions.handleCommandShortcut({ code: input.code, key: input.key, ctrl: input.control, shift: input.shift, alt: input.alt, meta: input.meta })) {
+        event.preventDefault()
+        return
+      }
     }
     const c = commandFor({ code: input.code, ctrl: input.control, shift: input.shift, alt: input.alt, meta: input.meta })
     if (c) {
@@ -533,8 +542,9 @@ async function applyAdblockNow(on: boolean): Promise<{ ok: boolean; error?: stri
     } else if (blocker?.isBlockingEnabled(ses)) {
       blocker.disableBlockingInSession(ses)
     }
-    // Блокировщик ставит свой onHeadersReceived и, выключаясь, снимает любой: общий — обратно.
-    listenHeaders(ses)
+    // Блокировщик ставит свой onHeadersReceived/onBeforeRequest и, выключаясь, снимает любой:
+    // восстанавливаем общий сетевой конвейер (YouCloud, DNR и webRequest расширений).
+    syncSessionWebRequest(ses)
     return { ok: true }
   } catch (e) {
     return { ok: false, error: String(e) }
@@ -573,13 +583,24 @@ function startExtensions(): Promise<void> {
     send,
     disabled: () => settings.addons.disabledExtensions.map((d) => d.id),
     changed: extChanged,
-    confirmInstall: (p) =>
-      new Promise((resolve) => {
+    onWebRequestTopologyChanged: () => syncSessionWebRequest(session.fromPartition(PARTITION)),
+    historyList: () => history,
+    clearHistory: () => {
+      history = []
+      historyFile.write(history, 0)
+      sync.onHistoryCleared()
+    },
+    favoritesList: () => settings.favorites,
+    setFavorites: (favorites) => applySettings({ ...settings, favorites }, true),
+    downloadsList: () => listDownloads(),
+    searchQuery: (url) => send({ type: 'open-url', url }),
+    confirmInstall: async (p) => {
+      const ok = await new Promise<boolean>((resolve) => {
         // Без ответа магазин ждёт вечно («навсегда устанавливает»): окно перезагрузилось, ответ утерян.
         // Через три минуты считаем отказом — кнопку «Установить» на сайте можно нажать снова.
-        const done = (ok: boolean): void => {
+        const done = (allow: boolean): void => {
           clearTimeout(timer)
-          resolve(ok)
+          resolve(allow)
         }
         const timer = setTimeout(() => done(false), 3 * 60_000)
         if (!win) return done(false)
@@ -588,6 +609,11 @@ function startExtensions(): Promise<void> {
         if (win.isMinimized()) win.restore()
         win.webContents.send('ext:install-prompt', p)
       })
+      if (ok && settings.addons.disabledExtensions.some((d) => d.id === p.id)) {
+        setAddons({ disabledExtensions: settings.addons.disabledExtensions.filter((d) => d.id !== p.id) })
+      }
+      return ok
+    }
   })
 }
 
@@ -716,24 +742,110 @@ function describePermission(permission: string, asked: string[]): Omit<Permissio
  * Исключение до callback оставило бы запрос висеть навсегда — страница «намертво зависает», поэтому
  * любой сбой отвечает пустым продолжением.
  */
-function listenHeaders(ses: Electron.Session): void {
+function syncSessionWebRequest(ses: Electron.Session): void {
   const blocking = (): boolean => !!blocker?.isBlockingEnabled(ses)
-  ses.webRequest.onHeadersReceived({ urls: blocking() ? ['<all_urls>'] : YOUCLOUD_MEDIA_URLS }, (details, callback) => {
-    try {
-      const responseHeaders = readableMedia(details)
-      if (responseHeaders) return callback({ responseHeaders })
-      if (blocker && blocking()) {
-        try {
-          return blocker.onHeadersReceived(details, callback)
-        } catch {
-          return callback({})
+  const uiId = (): number | undefined => (win && !win.isDestroyed() ? win.webContents.id : undefined)
+
+  // 1. onBeforeRequest: встроенный блокировщик + DNR/webRequest расширений.
+  const needBeforeReq = blocking() || extNet.hasAnyDnrRules() || extNet.hasListenersFor('onBeforeRequest')
+  if (needBeforeReq) {
+    ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
+      try {
+        if (blocking() && blocker) {
+          let handledByGhostery = false
+          blocker.onBeforeRequest(details, (res) => {
+            if (res && (res.cancel || res.redirectURL)) {
+              handledByGhostery = true
+              callback(res)
+            }
+          })
+          if (handledByGhostery) return
         }
+        void extNet
+          .handleBeforeRequest(details, uiId())
+          .then((res) => callback(res ?? {}))
+          .catch(() => callback({}))
+      } catch {
+        callback({})
       }
-      callback({})
+    })
+  } else {
+    ses.webRequest.onBeforeRequest(null)
+  }
+
+  // 2. onBeforeSendHeaders: вход Google (Firefox UA), YouCloud (ycr=), SoundCloud, плюс DNR modifyHeaders / webRequest.
+  const needHeadersIn = extNet.hasAnyDnrHeaderRules() || extNet.hasListenersFor('onBeforeSendHeaders')
+  const sendHeaderUrls = needHeadersIn
+    ? ['<all_urls>']
+    : ['https://accounts.google.com/*', ...YOUCLOUD_HEADER_URLS, ...SOUNDCLOUD_API_URLS]
+  ses.webRequest.onBeforeSendHeaders({ urls: sendHeaderUrls }, (details, callback) => {
+    const headers = details.requestHeaders
+    try {
+      noteSoundCloudRequest(headers)
+      if (GOOGLE_LOGIN.test(details.url)) {
+        headers['User-Agent'] = FIREFOX_UA
+        for (const name of Object.keys(headers)) if (/^sec-ch-ua/i.test(name)) delete headers[name]
+        // Список аккаунтов Google отдаёт только запросу «со страницы google.com».
+        if (details.url.includes('/ListAccounts')) headers['Origin'] = 'https://www.google.com'
+        callback({ requestHeaders: headers })
+        return
+      }
+      const yc = overrideHeaders(details.url, headers)
+      if (yc) {
+        callback({ requestHeaders: yc })
+        return
+      }
+      if (!extNet.hasAnyDnrHeaderRules() && !extNet.hasListenersFor('onBeforeSendHeaders')) {
+        callback({ requestHeaders: headers })
+        return
+      }
+      void extNet
+        .handleBeforeSendHeaders(details, headers, uiId())
+        .then((next) => callback({ requestHeaders: next ?? headers }))
+        .catch(() => callback({ requestHeaders: headers }))
     } catch {
-      callback({})
+      callback({ requestHeaders: headers })
     }
   })
+
+  // 3. onHeadersReceived: YouCloud (звук YouTube), встроенный Ghostery CSP и DNR/webRequest расширений.
+  const needHeadersOut = blocking() || extNet.hasAnyDnrHeaderRules() || extNet.hasListenersFor('onHeadersReceived')
+  ses.webRequest.onHeadersReceived(
+    { urls: needHeadersOut ? ['<all_urls>'] : YOUCLOUD_MEDIA_URLS },
+    (details, callback) => {
+      try {
+        const ycMedia = readableMedia(details)
+        if (ycMedia) return callback({ responseHeaders: ycMedia })
+
+        const afterGhostery = (res: Electron.HeadersReceivedResponse): void => {
+          const mergedDetails: Electron.OnHeadersReceivedListenerDetails = res?.responseHeaders
+            ? { ...details, responseHeaders: res.responseHeaders as Record<string, string[]> }
+            : details
+          if (!extNet.hasAnyDnrHeaderRules() && !extNet.hasListenersFor('onHeadersReceived')) {
+            return callback(res ?? {})
+          }
+          void extNet
+            .handleHeadersReceived(mergedDetails, uiId())
+            .then((next) => callback(next ? { responseHeaders: next } : (res ?? {})))
+            .catch(() => callback(res ?? {}))
+        }
+
+        if (blocker && blocking()) {
+          try {
+            return blocker.onHeadersReceived(details, afterGhostery)
+          } catch {
+            return afterGhostery({})
+          }
+        }
+        afterGhostery({})
+      } catch {
+        callback({})
+      }
+    }
+  )
+
+  // 4. Остальные наблюдательные события chrome.webRequest (onSendHeaders, onResponseStarted, onBeforeRedirect, onCompleted, onErrorOccurred).
+  extNet.attachWebRequestObservers(ses, () => win?.webContents)
 }
 
 function setupBrowsingSession(): void {
@@ -747,28 +859,7 @@ function setupBrowsingSession(): void {
   // guest.js тоже сессионный: он должен работать в iframe — там живут формы входа и запросы ключей
   // доступа (пароль подставляется по origin самого фрейма, не сайта сверху).
   ses.registerPreloadScript({ type: 'frame', id: 'masaki-tab-guest', filePath: path.join(__dirname, '../preload/guest.js') })
-  listenHeaders(ses)
-  // Слушатель у сессии один на всё: вход в Google, заголовки запросов моста YouCloud и токен,
-  // с которым soundcloud.com ходит в свой API (им YouCloud продлевает истёкшую сессию).
-  // Исключение до callback зависило бы запрос навсегда — сайт не грузился бы вовсе, поэтому любой
-  // сбой отвечает неизменёнными заголовками.
-  ses.webRequest.onBeforeSendHeaders({ urls: ['https://accounts.google.com/*', ...YOUCLOUD_HEADER_URLS, ...SOUNDCLOUD_API_URLS] }, (details, callback) => {
-    const headers = details.requestHeaders
-    try {
-      noteSoundCloudRequest(headers)
-      if (!GOOGLE_LOGIN.test(details.url)) {
-        callback({ requestHeaders: overrideHeaders(details.url, headers) ?? headers })
-        return
-      }
-      headers['User-Agent'] = FIREFOX_UA
-      for (const name of Object.keys(headers)) if (/^sec-ch-ua/i.test(name)) delete headers[name]
-      // Список аккаунтов Google отдаёт только запросу «со страницы google.com».
-      if (details.url.includes('/ListAccounts')) headers['Origin'] = 'https://www.google.com'
-      callback({ requestHeaders: headers })
-    } catch {
-      callback({ requestHeaders: headers })
-    }
-  })
+  syncSessionWebRequest(ses)
   try {
     ses.setSpellCheckerLanguages(['ru', 'en-US'])
   } catch {
@@ -1218,10 +1309,24 @@ function askLens(contents: WebContents, query: string, image: string): boolean {
 
 app.on('web-contents-created', (_e, contents) => {
   // Всплывающее окно сайта (вход через Google, оплата) живёт в сессии вкладок, но это не webview.
+  // А если ссылку с target="_blank" / window.open открывает страница расширения (например, попап),
+  // открываем её вкладкой Masaki и закрываем лишнее окно, если оно не попап авторизации.
   if (contents.getType() === 'window' && contents.session === session.fromPartition(PARTITION)) {
     watchExternalProtocols(contents)
     watchUnload(contents)
-    contents.setWindowOpenHandler(({ url }) => ({ action: requestExternal(contents, url) ? 'deny' : 'allow' }))
+    contents.setWindowOpenHandler(({ url, disposition, features }) => {
+      if (requestExternal(contents, url)) return { action: 'deny' }
+      const openerUrl = contents.getURL()
+      if (openerUrl.startsWith('chrome-extension://') && !features && disposition !== 'new-window') {
+        send({ type: 'open-url', url })
+        const owner = BrowserWindow.fromWebContents(contents)
+        if (owner && owner !== win && !owner.isDestroyed() && owner.getParentWindow() === win) {
+          setTimeout(() => !owner.isDestroyed() && owner.close(), 50)
+        }
+        return { action: 'deny' }
+      }
+      return { action: 'allow' }
+    })
   }
   if (contents.getType() !== 'webview') return
   noteTabCreation(contents)
@@ -1834,10 +1939,37 @@ function registerIpc(): void {
     if (isYouCloudExtension(filePaths[0])) return { ok: false, error: 'YouCloud уже встроен в Masaki — это расширение ставить не нужно.' }
     try {
       const e = await session.fromPartition(PARTITION).extensions.loadExtension(filePaths[0], { allowFileAccess: true })
+      setAddons({ disabledExtensions: settings.addons.disabledExtensions.filter((d) => d.id !== e.id) })
       return { ok: true, ext: extInfo(e) }
     } catch (err) {
       return { ok: false, error: String(err) }
     }
+  })
+  ipcMain.handle('ext:add-file', async (e, directPath?: unknown) => {
+    let filePath = e.sender === win?.webContents && typeof directPath === 'string' && directPath.length > 0 ? directPath : ''
+    if (!filePath) {
+      if (!win) return null
+      const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+        title: 'Файл расширения Chrome (.crx или .zip)',
+        properties: ['openFile'],
+        filters: [{ name: 'Расширения Chrome', extensions: ['crx', 'zip'] }]
+      })
+      if (canceled || !filePaths[0]) return null
+      filePath = filePaths[0]
+    }
+    const res = await extensions.installPackageFile(filePath)
+    if (res.ok && res.ext) {
+      setAddons({ disabledExtensions: settings.addons.disabledExtensions.filter((d) => d.id !== res.ext!.id) })
+      extChanged()
+    }
+    return res
+  })
+  ipcMain.handle('ext:install-store', async (e, id: unknown) => {
+    if (e.sender !== win?.webContents || typeof id !== 'string' || !/^[a-p]{32}$/.test(id)) return null
+    const loaded = await extensions.installStoreById(id)
+    setAddons({ disabledExtensions: settings.addons.disabledExtensions.filter((d) => d.id !== loaded.id) })
+    extChanged()
+    return loaded
   })
   ipcMain.handle('ext:remove', async (_e, id: string) => {
     const ext = session.fromPartition(PARTITION).extensions
@@ -1845,6 +1977,7 @@ function registerIpc(): void {
     const dir = ext.getExtension(id)?.path ?? off?.path ?? extensions.storeExtensionPath(id)
     if (dir && extensions.infoOfDisabled({ id, name: '', path: dir }).store) await extensions.removeStoreExtension(id)
     else if (ext.getExtension(id)) ext.removeExtension(id)
+    extNet.clearExtensionRuntime(id, true)
     setAddons({
       extensions: settings.addons.extensions.filter((p) => p !== dir),
       pinnedExtensions: settings.addons.pinnedExtensions.filter((x) => x !== id),
@@ -1859,6 +1992,7 @@ function registerIpc(): void {
       const e = ext.getExtension(id)
       if (!e) return
       ext.removeExtension(id)
+      extNet.clearExtensionRuntime(id, false)
       setAddons({ disabledExtensions: [...settings.addons.disabledExtensions.filter((d) => d.id !== id), { id, name: e.name, path: e.path }] })
     } else {
       const d = settings.addons.disabledExtensions.find((x) => x.id === id)
@@ -2121,7 +2255,8 @@ if (!app.requestSingleInstanceLock()) {
     })
     // До окна: вкладки должны сразу попадать к расширениям, а установленные из магазина — быть загружены.
     await startExtensions().catch((e) => console.error('Расширения не запустились', e))
-    void loadSavedExtensions()
+    await loadSavedExtensions()
+    syncSessionWebRequest(session.fromPartition(PARTITION))
     if (settings.addons.adblock.enabled) void applyAdblock(true)
     const appUrl = appFromArgv(process.argv)
     if (appUrl && !profiles.isIncognito()) {
@@ -2163,6 +2298,7 @@ if (!app.requestSingleInstanceLock()) {
     passkeys.flushPasskeys()
     flushDownloads()
     flushApps()
+    extNet.flushExtNet()
   })
 
   app.on('window-all-closed', () => app.quit())

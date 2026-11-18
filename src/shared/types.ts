@@ -276,6 +276,8 @@ export interface ExtensionInfo {
   icon?: string
   /** Страница параметров расширения (chrome-extension://…). */
   options?: string
+  /** Горячие клавиши из manifest.commands (для показа на странице «Аддоны»). */
+  commands?: { name: string; description?: string; shortcut?: string }[]
 }
 
 /** Запрос «добавить расширение?» — из Chrome Web Store, перед установкой. */
@@ -301,9 +303,10 @@ export interface ExtMenuItem {
 export interface ExtActionInfo {
   title?: string
   popup?: string
-  /** Текст значка-бейджа и его цвет. */
+  /** Текст значка-бейджа, цвет фона и цвет текста. */
   text?: string
   color?: string
+  textColor?: string
   /** Меняется, когда расширение сменило картинку кнопки. */
   iconModified?: number
 }
@@ -808,6 +811,10 @@ export interface MasakiApi {
     list(): Promise<ExtensionInfo[]>
     /** Выбрать папку распакованного расширения и загрузить его. */
     add(): Promise<{ ok: boolean; ext?: ExtensionInfo; error?: string } | null>
+    /** Выбрать файл .crx или .zip с расширением (или передать путь напрямую), распаковать в профиль и загрузить. */
+    addFile(filePath?: string): Promise<{ ok: boolean; ext?: ExtensionInfo; error?: string } | null>
+    /** Установить расширение из Chrome Web Store по его 32-буквенному id. */
+    installStore(id: string): Promise<ExtensionInfo | null>
     /** Удалить: из магазина — вместе с файлами, распакованное — только из Masaki. */
     remove(id: string): Promise<void>
     setEnabled(id: string, on: boolean): Promise<void>

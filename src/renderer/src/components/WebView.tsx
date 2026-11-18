@@ -102,6 +102,11 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
               if (typeof color === 'string' && /^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$/.test(color)) setCanvas(color)
               break
             }
+            case 'page:glass-bg': {
+              const bg = e.args[0]
+              if (typeof bg === 'string' && /^\d{1,3},\d{1,3},\d{1,3}$/.test(bg)) up({ glassBg: bg })
+              break
+            }
             case 'pw:show':
               if (st.activeId === id) useStore.setState({ autofill: { tabId: id, wcId: el.getWebContentsId(), req: e.args[0] as AutofillRequest } })
               break

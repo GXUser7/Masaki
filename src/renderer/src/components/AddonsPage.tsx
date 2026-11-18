@@ -245,7 +245,10 @@ export function AddonsPage(): React.JSX.Element {
                         {x.name}
                         <span className="ext-src">{x.store ? 'Web Store' : 'папка'}</span>
                       </b>
-                      <small>{x.description ?? (x.store ? `версия ${x.version}` : `${x.version} · ${x.path}`)}</small>
+                      <small>
+                        {x.description ?? (x.store ? `версия ${x.version}` : `${x.version} · ${x.path}`)}
+                        {x.commands?.length ? ` · клавиши: ${x.commands.map((c) => `${c.shortcut}`).join(', ')}` : ''}
+                      </small>
                     </span>
                     {x.options && x.enabled && (
                       <button className="ib" aria-label={`Параметры ${x.name}`} title="Параметры" onClick={() => useStore.getState().newTab(x.options)}>
@@ -294,12 +297,25 @@ export function AddonsPage(): React.JSX.Element {
                 <Icon name="add" />
                 Распакованное…
               </button>
+              <button
+                className="tonal"
+                onClick={async () => {
+                  setExtError('')
+                  const r = await window.masaki.extensions.addFile()
+                  if (!r) return
+                  if (!r.ok || !r.ext) return setExtError(r.error ?? 'Не удалось загрузить архив')
+                  setExts(await window.masaki.extensions.list())
+                }}
+              >
+                <Icon name="download" />
+                Из файла .crx / .zip…
+              </button>
               {extError && <span className="hint err-text">{extError}</span>}
             </div>
             <p className="hint">
-              Работает большинство расширений: страницы и стили, кнопки и их окна, меню, вкладки. Не работают блокировщики
-              на declarativeNetRequest (у Masaki свой — «Блокировщик рекламы» выше) и расширения, которым нужен вход в
-              Chrome или системные программы.
+              Работают расширения из Chrome Web Store (MV3 и MV2): блокировщики рекламы (uBlock Origin Lite, AdGuard),
+              тёмные темы (Dark Reader, Stylus), менеджеры юзерскриптов и паролей, кнопки, меню и горячие клавиши.
+              Могут не работать лишь расширения, которым нужен вход в аккаунт Chrome Sync или сторонние нативные программы.
             </p>
           </div>
         </AddonCard>

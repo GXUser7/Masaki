@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 // Сессионный preload работает и в iframe. Не импортировать в guest: sandbox не умеет общие chunks.
+// На страницах расширений (chrome-extension://) защита от выгрузки страниц не нужна.
+if (location.protocol !== 'chrome-extension:') {
 function installTabLifecycle(report: (protectedFromSleep: boolean) => void): void {
   let dirty = false
   const streams = new Set<MediaStream>()
@@ -46,3 +48,4 @@ contextBridge.executeInMainWorld({
   func: installTabLifecycle,
   args: [(protectedFromSleep: boolean): void => ipcRenderer.send('tab-memory:protect', protectedFromSleep)]
 })
+}
