@@ -731,14 +731,15 @@ if (YOUCLOUD.includes(location.origin)) {
   }).observe(document, { childList: true })
   type Theme = { seed: string; dark: boolean; transparent?: boolean }
   let theme: Theme | null = null
-  type Hello = { version: string; capabilities?: string[]; tokens?: { kind: string; token: string; expiresIn?: number }[] } | null
+  type HelloToken = { kind: string; token: string; expiresIn?: number; clientToken?: string; expiresAt?: number }
+  type Hello = { version: string; capabilities?: string[]; tokens?: HelloToken[] } | null
   const reply = (data: Record<string, unknown>): void => window.postMessage({ yc: 'ext', ...data }, location.origin)
   const hello = (): void => {
     void ipcRenderer.invoke('yc:hello').then((h: Hello) => {
       if (!h) return
       reply({ kind: 'hello', version: h.version, host: 'masaki', capabilities: h.capabilities ?? [] })
       if (theme) reply({ kind: 'event', event: 'theme', ...theme })
-      for (const t of h.tokens ?? []) reply({ kind: t.kind, token: t.token, expiresIn: t.expiresIn })
+      for (const t of h.tokens ?? []) reply({ kind: t.kind, token: t.token, expiresIn: t.expiresIn, clientToken: t.clientToken, expiresAt: t.expiresAt })
     })
   }
   const answer = (id: unknown, ask: Promise<Record<string, unknown>>): void => {
