@@ -759,7 +759,9 @@ if (YOUCLOUD.includes(location.origin)) {
     else if (d.kind === 'call') answer(d.id, ipcRenderer.invoke('yc:call', String(d.name), d.args && typeof d.args === 'object' ? { ...d.args } : undefined))
     else if (d.kind === 'yt-stream') answer(d.id, ipcRenderer.invoke('yc:yt-stream', String(d.videoId), !!d.fresh, !!d.live))
   })
-  ipcRenderer.on('yc:token', (_e, t: { kind: string; token: string; expiresIn?: number }) => reply({ kind: t.kind, token: t.token, expiresIn: t.expiresIn }))
+  ipcRenderer.on('yc:token', (_e, t: { kind: string; token: string; expiresIn?: number; clientToken?: string; expiresAt?: number }) =>
+    reply({ kind: t.kind, token: t.token, expiresIn: t.expiresIn, clientToken: t.clientToken, expiresAt: t.expiresAt })
+  )
   ipcRenderer.on('yc:event', (_e, ev: Record<string, unknown>) => reply({ ...ev, event: ev.kind, kind: 'event' }))
   // Тема браузера: сайт берёт её цвет и светлоту (шлёт интерфейс Masaki).
   ipcRenderer.on('yc:theme', (_e, t: Theme) => {

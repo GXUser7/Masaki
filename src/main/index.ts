@@ -39,6 +39,7 @@ import {
   initYouCloud,
   isYouCloudExtension,
   noteSoundCloudRequest,
+  noteSpotifyRequest,
   overrideHeaders,
   readableMedia,
   SOUNDCLOUD_API_URLS,
@@ -782,6 +783,7 @@ function syncSessionWebRequest(ses: Electron.Session): void {
     const headers = details.requestHeaders
     try {
       noteSoundCloudRequest(headers)
+      noteSpotifyRequest(details)
       if (GOOGLE_LOGIN.test(details.url)) {
         headers['User-Agent'] = FIREFOX_UA
         for (const name of Object.keys(headers)) if (/^sec-ch-ua/i.test(name)) delete headers[name]

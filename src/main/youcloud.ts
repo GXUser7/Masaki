@@ -9,7 +9,7 @@
 // сервисов. Куки YouTube и токены не попадают на страницу: запрос подписывает главный процесс.
 
 import { app, BrowserWindow, ipcMain, session, webContents, type WebContents } from 'electron'
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import * as ytdlp from './ytdlp'
@@ -20,9 +20,9 @@ export const YOUCLOUD_URL = 'https://youcloud.inkerror67.workers.dev/'
 export const YOUCLOUD_ORIGINS = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
 /** Какой версии расширения YouCloud равен мост (сайт сверяет, что он умеет): 0.7 — звук YouTube от yt-dlp,
  *  0.8 — и прямых трансляций (их плейлист HLS), 0.9 — продлевает истёкшую сессию SoundCloud,
- *  0.10 — даёт сайту читать звук YouTube, 0.11 — лайки и капча SoundCloud в одной браузерной странице. */
-const BRIDGE_VERSION = '0.11.0'
-const BRIDGE_CAPABILITIES = ['sc-page-writes']
+ *  0.10 — чтение звука YouTube, 0.11 — лайки и проверка SoundCloud, 0.12 — Spotify. */
+const BRIDGE_VERSION = '0.12.0'
+const BRIDGE_CAPABILITIES = ['sc-page-writes', 'sp-login']
 let soundCloudPages: SoundCloudPageWrites
 
 type Ops = Record<string, string | null>
@@ -38,8 +38,14 @@ const PROFILES: { domains: string[]; headers: Ops }[] = [
 const MEDIA = ['googlevideo.com']
 const ALLOWED = [...PROFILES.flatMap((p) => p.domains), ...MEDIA]
 const YOUTUBE_HOSTS = ['music.youtube.com', 'www.youtube.com', 'youtubei.googleapis.com']
+const SPOTIFY_SITE = 'https://open.spotify.com/'
+const SPOTIFY_ORIGIN = new URL(SPOTIFY_SITE).origin
+const SPOTIFY_LOGIN = 'https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F'
+const SPOTIFY_API = ['api-partner.spotify.com', 'spclient.wg.spotify.com', 'api.spotify.com']
+const SPOTIFY_HOSTS = ['open.spotify.com', 'open.spotifycdn.com', 'clienttoken.spotify.com', ...SPOTIFY_API]
+const SPOTIFY_PROFILE = { origin: SPOTIFY_ORIGIN, referer: SPOTIFY_SITE }
 /** Адреса, у которых главный процесс правит заголовки (onBeforeSendHeaders сессии вкладок). */
-export const YOUCLOUD_HEADER_URLS = ['https://*.yandex.net/*', 'https://music.youtube.com/*', 'https://www.youtube.com/*', 'https://youtubei.googleapis.com/*']
+export const YOUCLOUD_HEADER_URLS = ['https://*.yandex.net/*', 'https://music.youtube.com/*', 'https://www.youtube.com/*', 'https://youtubei.googleapis.com/*', ...SPOTIFY_HOSTS.map((host) => `https://${host}/*`)]
 /** API SoundCloud: в запросах soundcloud.com к нему — его текущий токен (Authorization: OAuth …). */
 export const SOUNDCLOUD_API_URLS = ['https://api-v2.soundcloud.com/*']
 
@@ -63,14 +69,14 @@ let host: Host
 // ---------- Заголовки ----------
 
 /** Заголовки для запросов моста: метка ycr=<id> в адресе — свои правила на один запрос. */
-const pending = new Map<string, Ops>()
-let seq = 0
+const pending = new Map<string, { url: string; ops: Ops }>()
 
 /** Вызывается из единственного onBeforeSendHeaders сессии; null — запрос не наш. */
 export function overrideHeaders(url: string, headers: Record<string, string>): Record<string, string> | null {
-  const id = /[?&]ycr=(\d+)/.exec(url)?.[1]
-  const ops = id ? pending.get(id) : undefined
-  if (!ops) return null
+  const id = /[?&]ycr=([a-f0-9-]{36})(?:&|$)/.exec(url)?.[1]
+  const entry = id ? pending.get(id) : undefined
+  if (entry?.url !== url) return null
+  const { ops } = entry
   for (const [name, value] of Object.entries(ops)) {
     for (const k of Object.keys(headers)) if (k.toLowerCase() === name) delete headers[k]
     if (value != null) headers[name] = value
@@ -106,7 +112,7 @@ export function readableMedia(details: Electron.OnHeadersReceivedListenerDetails
   return headers
 }
 
-const allowedHost = (h: string): boolean => ALLOWED.some((d) => h === d || h.endsWith('.' + d))
+const allowedHost = (h: string): boolean => SPOTIFY_HOSTS.includes(h) || ALLOWED.some((d) => h === d || h.endsWith('.' + d))
 const profileOf = (h: string): Ops => PROFILES.find((p) => p.domains.some((d) => h === d || h.endsWith('.' + d)))?.headers ?? {}
 
 // ---------- Сессия YouTube ----------
@@ -165,14 +171,17 @@ interface Answer {
   error?: string
 }
 
-async function relay(req: FetchRequest): Promise<Answer> {
+async function relay(req: FetchRequest, from: WebContents, redirectsLeft = 3): Promise<Answer> {
   let url: URL
   try {
     url = new URL(String(req.url))
   } catch {
     return { error: 'bad url' }
   }
-  if (url.protocol !== 'https:' || !allowedHost(url.hostname)) return { error: `host not allowed: ${url.hostname}` }
+  if (url.protocol !== 'https:' || url.port || url.username || url.password || !allowedHost(url.hostname)) {
+    return { error: `host not allowed: ${url.hostname}` }
+  }
+  const spotify = SPOTIFY_HOSTS.includes(url.hostname)
   const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET'
   // Плейлист и куски трансляции: браузеру их не взять самому — googlevideo через границу сайтов отвечает
   // только страницам YouTube, а свой HLS Chromium не берёт куски с другого хоста, чем плейлист, без CORS.
@@ -188,9 +197,32 @@ async function relay(req: FetchRequest): Promise<Answer> {
     }
   }
   const headers: Record<string, string> = {}
-  for (const [k, v] of Object.entries(req.headers ?? {})) if (typeof v === 'string') headers[k] = v
-  const ops: Ops = { ...profileOf(url.hostname) }
-  for (const [k, v] of Object.entries(req.overrides ?? {})) if (v === null || typeof v === 'string') ops[k.toLowerCase()] = v
+  for (const [k, v] of Object.entries(req.headers ?? {})) if (typeof v === 'string') headers[k.toLowerCase()] = v
+  const ops: Ops = { ...(spotify ? SPOTIFY_PROFILE : profileOf(url.hostname)) }
+  if (spotify) {
+    const requestedToken = headers.authorization?.match(/^Bearer (masaki-sp-[a-f0-9-]+)$/)?.[1]
+    if (requestedToken) {
+      const entry = spotifySessions.get(from.id)
+      if (!SPOTIFY_API.includes(url.hostname) || entry?.handle !== requestedToken || entry.expiresAt <= Date.now()) {
+        return { status: 401, body: '{"error":"Spotify session expired"}' }
+      }
+      headers.authorization = `Bearer ${entry.token}`
+      headers['client-token'] = entry.clientToken
+    } else if (!SPOTIFY_API.includes(url.hostname)) {
+      delete headers.authorization
+      delete headers['client-token']
+    }
+    delete headers.cookie
+    // При ручном вводе на сайте пользователь может передать только собственную cookie и только
+    // конечной точке входа Spotify. Для встроенного входа эту cookie не передаём даже сайту.
+    const suppliedCookie = req.overrides?.cookie
+    if (url.origin === SPOTIFY_ORIGIN && url.pathname === '/api/token' &&
+        typeof suppliedCookie === 'string' && /^sp_dc=[^;\r\n]{1,4096}$/.test(suppliedCookie)) {
+      ops.cookie = suppliedCookie
+    }
+  } else {
+    for (const [k, v] of Object.entries(req.overrides ?? {})) if (v === null || typeof v === 'string') ops[k.toLowerCase()] = v
+  }
 
   // YouTube как этот браузер в него вошёл: куки вкладок и подпись SAPISIDHASH.
   if (req.session && YOUTUBE_HOSTS.includes(url.hostname)) {
@@ -207,18 +239,31 @@ async function relay(req: FetchRequest): Promise<Answer> {
     }
   }
 
-  const id = String(++seq % 1_000_000)
+  const id = randomUUID()
+  url.hash = ''
   url.searchParams.set('ycr', id)
-  pending.set(id, ops)
+  pending.set(id, { url: url.href, ops })
   try {
     const res = await ses().fetch(url.href, {
       method,
       headers,
       body: method === 'GET' || method === 'HEAD' ? undefined : (req.body ?? undefined),
       credentials: 'omit',
+      redirect: spotify ? 'manual' : 'follow',
       signal: AbortSignal.timeout(45_000)
     })
-    return { status: res.status, statusText: res.statusText, headers: [...res.headers], body: await res.text() }
+    const location = res.headers.get('location')
+    if (spotify && redirectsLeft > 0 && (method === 'GET' || method === 'HEAD') &&
+        !headers.authorization && !ops.cookie && res.status >= 300 && res.status < 400 && location) {
+      const next = new URL(location, url)
+      if (next.origin === url.origin) {
+        await res.body?.cancel()
+        next.searchParams.delete('ycr')
+        return relay({ ...req, url: next.href }, from, redirectsLeft - 1)
+      }
+    }
+    const responseHeaders = [...res.headers].filter(([name]) => !spotify || name !== 'set-cookie')
+    return { status: res.status, statusText: res.statusText, headers: responseHeaders, body: await res.text() }
   } catch (e) {
     return { error: String((e as Error)?.message ?? e) }
   } finally {
@@ -229,9 +274,10 @@ async function relay(req: FetchRequest): Promise<Answer> {
 // ---------- Входы ----------
 
 type TokenKind = 'sc-token' | 'ya-token'
+type LoginService = 'sc' | 'ya' | 'yt' | 'sp'
 /** Токен, который поймал вход, пока вкладки YouCloud не было: отдаём при её «ping». */
 const waitingTokens: { kind: TokenKind; token: string; expiresIn?: number }[] = []
-const logins: Partial<Record<'sc' | 'ya' | 'yt', { at: number; url: string; wcId?: number; from?: number }>> = {}
+const logins: Partial<Record<LoginService, { at: number; url: string; wcId?: number; from?: number }>> = {}
 
 function youcloudTabs(): WebContents[] {
   return webContents.getAllWebContents().filter((wc) => {
@@ -254,18 +300,18 @@ function handOver(kind: TokenKind, token: string, expiresIn?: number): void {
 }
 
 /** Вкладка входа своё отработала: закрыть и вернуться туда, откуда просили войти. */
-function finishLogin(service: 'sc' | 'ya' | 'yt'): void {
+function finishLogin(service: LoginService): void {
   const login = logins[service]
   delete logins[service]
   if (login?.wcId != null) host.closeTab(login.wcId, login.from)
 }
 
-function openLogin(service: 'sc' | 'ya' | 'yt', url: string, from: WebContents): void {
+function openLogin(service: LoginService, url: string, from: WebContents): void {
   logins[service] = { at: Date.now(), url, from: from.id }
   host.openUrl(url)
 }
 
-const fresh = (service: 'sc' | 'ya' | 'yt'): boolean => {
+const fresh = (service: LoginService): boolean => {
   const l = logins[service]
   return !!l && Date.now() - l.at < LOGIN_WINDOW_MS
 }
@@ -273,7 +319,7 @@ const fresh = (service: 'sc' | 'ya' | 'yt'): boolean => {
 /** Каждая вкладка-webview: узнаём вкладку входа и ловим токен Яндекса в её адресе. */
 export function watchWebview(contents: WebContents): void {
   const seen = (url: string): void => {
-    for (const service of ['sc', 'ya', 'yt'] as const) {
+    for (const service of ['sc', 'ya', 'yt', 'sp'] as const) {
       const l = logins[service]
       if (l && l.wcId == null && fresh(service) && url === l.url) l.wcId = contents.id
     }
@@ -360,10 +406,107 @@ export function noteSoundCloudRequest(headers: Record<string, string>): void {
   if (auth?.startsWith('OAuth ')) renewedSoundCloud(auth.slice('OAuth '.length).trim())
 }
 
+// ---------- Сессия Spotify ----------
+
+type SpotifySession = { handle: string; token: string; clientToken: string; expiresAt: number }
+const spotifySessions = new Map<number, SpotifySession>()
+type SpotifyWaiter = { from: number; done: (session: SpotifySession | null) => void }
+const spotifyWaiters = new Map<number, SpotifyWaiter>()
+const spotifyRenewals = new Map<number, Promise<SpotifySession | null>>()
+
+async function hasSpotifySession(): Promise<boolean> {
+  return (await ses().cookies.get({ url: SPOTIFY_SITE, name: 'sp_dc' })).length > 0
+}
+
+function spotifyAnswer(entry: SpotifySession) {
+  // Сайт использует поле token как идентификатор сессии. Подлинные заголовки остаются в main.
+  return { token: entry.handle, clientToken: 'masaki', expiresAt: entry.expiresAt }
+}
+
+function rememberSpotify(from: WebContents, token: string, clientToken: string): SpotifySession {
+  if (!spotifySessions.has(from.id)) from.once('destroyed', () => spotifySessions.delete(from.id))
+  let expiresAt = Date.now() + 45 * 60_000
+  try {
+    const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as { exp?: number }
+    if (typeof claims.exp === 'number') expiresAt = Math.min(expiresAt, claims.exp * 1000)
+  } catch {
+    // Токены без открытого срока всё равно обновляются после отказа Spotify.
+  }
+  const entry = { handle: `masaki-sp-${randomUUID()}`, token, clientToken, expiresAt }
+  spotifySessions.set(from.id, entry)
+  return entry
+}
+
+/** Сессию замечаем только в окне Spotify, которое открыли ради этого входа или продления. */
+export function noteSpotifyRequest(details: Electron.OnBeforeSendHeadersListenerDetails): void {
+  const wc = details.webContents
+  if (!wc || wc.isDestroyed() || details.resourceType !== 'xhr') return
+  const waiter = spotifyWaiters.get(wc.id)
+  const login = logins.sp
+  const loginFrom = login?.wcId === wc.id && fresh('sp') ? login.from : undefined
+  const fromId = waiter?.from ?? loginFrom
+  if (fromId == null || !SPOTIFY_API.includes(new URL(details.url).hostname) ||
+      new URL(wc.getURL()).origin !== SPOTIFY_ORIGIN) return
+  const headers = new Map(Object.entries(details.requestHeaders).map(([name, value]) => [name.toLowerCase(), value]))
+  const token = headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1]
+  const clientToken = headers.get('client-token')
+  if (!token || !clientToken) return
+  void hasSpotifySession().then((signedIn) => {
+    if (!signedIn || wc.isDestroyed()) return
+    if (waiter ? spotifyWaiters.get(wc.id) !== waiter : logins.sp !== login || !fresh('sp')) return
+    const from = youcloudTabs().find((tab) => tab.id === fromId)
+    if (!from) {
+      waiter?.done(null)
+      return
+    }
+    const entry = rememberSpotify(from, token, clientToken)
+    if (waiter) waiter.done(entry)
+    else {
+      from.send('yc:token', { kind: 'sp-token', ...spotifyAnswer(entry) })
+      finishLogin('sp')
+    }
+  }).catch(() => undefined)
+}
+
+function renewSpotify(from: WebContents, stale: unknown): Promise<SpotifySession | null> {
+  const current = spotifySessions.get(from.id)
+  if (current && current.handle !== stale && current.expiresAt > Date.now() + 60_000) return Promise.resolve(current)
+  const pending = spotifyRenewals.get(from.id)
+  if (pending) return pending
+  const renewal = (async () => {
+    if (!(await hasSpotifySession()) || from.isDestroyed()) return null
+    return new Promise<SpotifySession | null>((resolve) => {
+      const window = new BrowserWindow({
+        show: false, skipTaskbar: true,
+        webPreferences: { partition, sandbox: true, backgroundThrottling: false }
+      })
+      window.webContents.setAudioMuted(true)
+      window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+      const id = window.webContents.id
+      const done = (entry: SpotifySession | null): void => {
+        if (!spotifyWaiters.delete(id)) return
+        clearTimeout(timer)
+        from.removeListener('destroyed', cancel)
+        if (!window.isDestroyed()) window.destroy()
+        resolve(entry)
+      }
+      const cancel = (): void => done(null)
+      const timer = setTimeout(cancel, RENEW_TIMEOUT_MS)
+      spotifyWaiters.set(id, { from: from.id, done })
+      from.once('destroyed', cancel)
+      window.once('closed', cancel)
+      window.loadURL(SPOTIFY_SITE).catch(cancel)
+    })
+  })().finally(() => spotifyRenewals.delete(from.id))
+  spotifyRenewals.set(from.id, renewal)
+  return renewal
+}
+
 function watchCookies(): void {
   ses().cookies.on('changed', (_e, c, _cause, removed) => {
-    if (removed) return
     const domain = c.domain ?? ''
+    if (c.name === 'sp_dc' && /(^|\.)spotify\.com$/.test(domain)) spotifySessions.clear()
+    if (removed) return
     // SoundCloud после входа кладёт сессию в cookie oauth_token, туда же — продлённую.
     if (c.name === 'oauth_token' && /(^|\.)soundcloud\.com$/.test(domain.replace(/^\./, ''))) {
       renewedSoundCloud(decodeURIComponent(c.value))
@@ -397,6 +540,15 @@ async function call(name: string, from: WebContents, args?: unknown): Promise<An
       return { value: true }
     case 'ya-login':
       openLogin('ya', YANDEX_LOGIN, from)
+      return { value: true }
+    case 'sp-token':
+      return { value: await hasSpotifySession() }
+    case 'sp-renew': {
+      const entry = await renewSpotify(from, (args as { stale?: unknown } | undefined)?.stale)
+      return { value: entry ? spotifyAnswer(entry) : null }
+    }
+    case 'sp-login':
+      openLogin('sp', SPOTIFY_LOGIN, from)
       return { value: true }
     case 'yt-login':
       openLogin('yt', YOUTUBE_LOGIN, from)
@@ -433,7 +585,10 @@ export function initYouCloud(partitionName: string, h: Host): void {
   partition = partitionName
   host = h
   soundCloudPages = new SoundCloudPageWrites(partition)
-  app.once('before-quit', () => soundCloudPages.dispose())
+  app.once('before-quit', () => {
+    soundCloudPages.dispose()
+    spotifyWaiters.forEach((waiter) => waiter.done(null))
+  })
   watchCookies()
   ipcMain.handle('yc:hello', (e) => {
     if (!fromYouCloud(e)) return null
@@ -452,7 +607,7 @@ export function initYouCloud(partitionName: string, h: Host): void {
       return { error: String((err as Error)?.message ?? err) }
     }
   })
-  ipcMain.handle('yc:fetch', (e, req: FetchRequest) => (fromYouCloud(e) && req && typeof req === 'object' ? relay(req) : { error: 'not allowed' }))
+  ipcMain.handle('yc:fetch', (e, req: FetchRequest) => (fromYouCloud(e) && req && typeof req === 'object' ? relay(req, e.sender) : { error: 'not allowed' }))
   ipcMain.handle('yc:call', (e, name: string, args?: unknown) =>
     fromYouCloud(e) ? call(String(name), e.sender, args).catch((err) => ({ error: String(err?.message ?? err) })) : { error: 'not allowed' }
   )

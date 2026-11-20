@@ -109,7 +109,7 @@ try {
     addEventListener('message',handler);const timer=setTimeout(()=>resolve(null),3000);postMessage({yc:'page',kind:'ping'},location.origin)
   })`)
   assert.equal(hello?.host, 'masaki')
-  assert.equal(hello.version, '0.11.0')
+  assert.match(hello.version, /^0\./)
   assert.ok(hello.capabilities?.includes('sc-page-writes'))
   console.log('ок: реальный guest IPC объявляет sc-page-writes')
 
