@@ -104,8 +104,141 @@ app.userAgentFallback = chromeUserAgent()
 
 // Google не пускает во «встроенные» браузеры на Chromium. Как и другие браузеры на Electron,
 // на странице входа представляемся Firefox ESR — его Google поддерживает. Остальные сайты видят Chrome.
-const GOOGLE_LOGIN = /^https:\/\/accounts\.google\.com\//i
+const GOOGLE_LOGIN = /^https:\/\/accounts\.google\.com(?::\d+)?\//i
 const FIREFOX_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0'
+
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const lower = name.toLowerCase()
+  return Object.keys(headers).some((k) => k.toLowerCase() === lower)
+}
+
+function setHeader(headers: Record<string, string>, name: string, value: string): void {
+  const lower = name.toLowerCase()
+  for (const k of Object.keys(headers)) if (k.toLowerCase() === lower) delete headers[k]
+  headers[name] = value
+}
+
+function isGoogleAccountTopLevel(details: Electron.OnBeforeSendHeadersListenerDetails): boolean {
+  if (details.resourceType === 'mainFrame') return true
+  try {
+    return GOOGLE_LOGIN.test(details.webContents?.getURL() ?? '')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * При смене аккаунта Google часть сервисов открывает ссылки с пустым query-параметром `&pageId`
+ * (без `=none` и без ID Brand Account), на который сервер отвечает 400. Удаляем только его, не
+ * перекодируя остальные параметры (включая `continue` и `gar`).
+ */
+function stripEmptyGooglePageId(rawUrl: string): string | null {
+  let u: URL
+  try {
+    u = new URL(rawUrl)
+  } catch {
+    return null
+  }
+  if (u.protocol !== 'https:' || !/(^|\.)google\.com$/i.test(u.hostname) || !u.search) return null
+  const qIdx = rawUrl.indexOf('?')
+  if (qIdx < 0) return null
+  const hIdx = rawUrl.indexOf('#', qIdx)
+  const base = rawUrl.slice(0, qIdx)
+  const rawQuery = hIdx >= 0 ? rawUrl.slice(qIdx + 1, hIdx) : rawUrl.slice(qIdx + 1)
+  const hash = hIdx >= 0 ? rawUrl.slice(hIdx) : ''
+  const parts = rawQuery.split('&')
+  const kept = parts.filter((part) => !/^pageId=?$/i.test(part))
+  if (kept.length === parts.length) return null
+  const nextQuery = kept.join('&')
+  const next = nextQuery ? `${base}?${nextQuery}${hash}` : `${base}${hash}`
+  return next !== rawUrl ? next : null
+}
+
+function effectiveReferrer(targetUrl: string, ref?: Electron.Referrer): string | undefined {
+  if (!ref?.url || !/^https?:\/\//i.test(ref.url)) return undefined
+  let src: URL
+  let dst: URL
+  try {
+    src = new URL(ref.url)
+    dst = new URL(targetUrl)
+  } catch {
+    return undefined
+  }
+  const policy: string = !ref.policy || ref.policy === 'default' ? 'strict-origin-when-cross-origin' : ref.policy
+  if (policy === 'no-referrer') return undefined
+  const sameOrigin = src.origin === dst.origin
+  const downgrade = src.protocol === 'https:' && dst.protocol === 'http:'
+  const full = src.origin + src.pathname + src.search
+  const originOnly = src.origin + '/'
+  switch (policy) {
+    case 'unsafe-url':
+      return full
+    case 'origin':
+      return originOnly
+    case 'strict-origin':
+      return downgrade ? undefined : originOnly
+    case 'no-referrer-when-downgrade':
+      return downgrade ? undefined : full
+    case 'same-origin':
+      return sameOrigin ? full : undefined
+    case 'origin-when-cross-origin':
+      return sameOrigin ? full : originOnly
+    case 'strict-origin-when-cross-origin':
+    default:
+      return sameOrigin ? full : downgrade ? undefined : originOnly
+  }
+}
+
+const OPEN_MARKER = 'about:blank#masaki-open='
+const pendingOpens = new Map<string, { url: string; referrer?: Electron.Referrer; postBody: Electron.PostBody; timer: NodeJS.Timeout }>()
+let attachingOpenKey: string | undefined
+const pendingOpenForWc = new WeakMap<WebContents, string>()
+
+function queuePendingOpen(url: string, referrer: Electron.Referrer | undefined, postBody: Electron.PostBody): string {
+  const key = randomUUID()
+  const timer = setTimeout(() => pendingOpens.delete(key), 30_000)
+  timer.unref()
+  pendingOpens.set(key, { url, referrer, postBody, timer })
+  return key
+}
+
+function preparePendingOpen(params: Record<string, string>): void {
+  attachingOpenKey = undefined
+  if (!params.src?.startsWith(OPEN_MARKER)) return
+  attachingOpenKey = params.src.slice(OPEN_MARKER.length)
+  params.src = ''
+}
+
+function notePendingOpen(contents: WebContents): void {
+  if (attachingOpenKey) pendingOpenForWc.set(contents, attachingOpenKey)
+  attachingOpenKey = undefined
+}
+
+function loadPendingOpen(contents: WebContents): void {
+  const key = pendingOpenForWc.get(contents)
+  if (!key) return
+  pendingOpenForWc.delete(contents)
+  const entry = pendingOpens.get(key)
+  pendingOpens.delete(key)
+  if (entry) clearTimeout(entry.timer)
+  if (!entry) {
+    void contents.loadURL('about:blank').catch(() => undefined)
+    return
+  }
+  const ref = effectiveReferrer(entry.url, entry.referrer)
+  const rawType = (entry.postBody.contentType || 'application/x-www-form-urlencoded').replace(/[\r\n]+/g, '')
+  const contentType =
+    entry.postBody.boundary && !/;\s*boundary=/i.test(rawType)
+      ? `${rawType}; boundary=${entry.postBody.boundary.replace(/[\r\n]+/g, '')}`
+      : rawType
+  void contents
+    .loadURL(entry.url, {
+      ...(ref ? { httpReferrer: { url: ref, policy: 'unsafe-url' as const } } : {}),
+      postData: entry.postBody.data,
+      extraHeaders: `Content-Type: ${contentType}`
+    })
+    .catch(() => undefined)
+}
 
 // Браузер раньше назывался Frost. Переносим его профиль (настройки, вкладки, входы на сайты)
 // в папку Masaki один раз, до того как Chromium откроет профиль.
@@ -747,32 +880,34 @@ function syncSessionWebRequest(ses: Electron.Session): void {
   const blocking = (): boolean => !!blocker?.isBlockingEnabled(ses)
   const uiId = (): number | undefined => (win && !win.isDestroyed() ? win.webContents.id : undefined)
 
-  // 1. onBeforeRequest: встроенный блокировщик + DNR/webRequest расширений.
+  // 1. onBeforeRequest: очистка пустого pageId на Google, встроенный блокировщик + DNR/webRequest расширений.
   const needBeforeReq = blocking() || extNet.hasAnyDnrRules() || extNet.hasListenersFor('onBeforeRequest')
-  if (needBeforeReq) {
-    ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
-      try {
-        if (blocking() && blocker) {
-          let handledByGhostery = false
-          blocker.onBeforeRequest(details, (res) => {
-            if (res && (res.cancel || res.redirectURL)) {
-              handledByGhostery = true
-              callback(res)
-            }
-          })
-          if (handledByGhostery) return
-        }
-        void extNet
-          .handleBeforeRequest(details, uiId())
-          .then((res) => callback(res ?? {}))
-          .catch(() => callback({}))
-      } catch {
-        callback({})
+  const beforeReqUrls = needBeforeReq ? ['<all_urls>'] : ['https://*.google.com/*']
+  ses.webRequest.onBeforeRequest({ urls: beforeReqUrls }, (details, callback) => {
+    try {
+      if (details.resourceType === 'mainFrame' && details.method === 'GET') {
+        const clean = stripEmptyGooglePageId(details.url)
+        if (clean) return callback({ redirectURL: clean })
       }
-    })
-  } else {
-    ses.webRequest.onBeforeRequest(null)
-  }
+      if (!needBeforeReq) return callback({})
+      if (blocking() && blocker) {
+        let handledByGhostery = false
+        blocker.onBeforeRequest(details, (res) => {
+          if (res && (res.cancel || res.redirectURL)) {
+            handledByGhostery = true
+            callback(res)
+          }
+        })
+        if (handledByGhostery) return
+      }
+      void extNet
+        .handleBeforeRequest(details, uiId())
+        .then((res) => callback(res ?? {}))
+        .catch(() => callback({}))
+    } catch {
+      callback({})
+    }
+  })
 
   // 2. onBeforeSendHeaders: вход Google (Firefox UA), YouCloud (ycr=), SoundCloud, плюс DNR modifyHeaders / webRequest.
   const needHeadersIn = extNet.hasAnyDnrHeaderRules() || extNet.hasListenersFor('onBeforeSendHeaders')
@@ -785,10 +920,18 @@ function syncSessionWebRequest(ses: Electron.Session): void {
       noteSoundCloudRequest(headers)
       noteSpotifyRequest(details)
       if (GOOGLE_LOGIN.test(details.url)) {
-        headers['User-Agent'] = FIREFOX_UA
-        for (const name of Object.keys(headers)) if (/^sec-ch-ua/i.test(name)) delete headers[name]
-        // Список аккаунтов Google отдаёт только запросу «со страницы google.com».
-        if (details.url.includes('/ListAccounts')) headers['Origin'] = 'https://www.google.com'
+        // Firefox ESR нужен только для верхнего документа accounts.google.com и его собственных запросов
+        // (согласовано с preload/popup.ts). Фоновые XHR/iframe со страниц Google (ogs.google.com, Gmail,
+        // Gemini) и наш ListAccounts с source=ChromiumBrowser остаются с Chrome UA и своим Origin.
+        if (isGoogleAccountTopLevel(details)) {
+          setHeader(headers, 'User-Agent', FIREFOX_UA)
+          for (const name of Object.keys(headers)) if (/^sec-ch-ua/i.test(name)) delete headers[name]
+        }
+        // Список аккаунтов Google отдаёт только запросу с Origin: ставим его лишь нашему main-запросу
+        // (без webContents и без собственного Origin), чтобы не ломать CORS виджету ogs.google.com.
+        if (details.url.includes('/ListAccounts') && details.webContentsId === undefined && !hasHeader(headers, 'origin')) {
+          setHeader(headers, 'Origin', 'https://www.google.com')
+        }
         callback({ requestHeaders: headers })
         return
       }
@@ -1073,10 +1216,14 @@ function prepareWebviewHost(ui: WebContents): void {
     if (testHeadless) prefs.backgroundThrottling = false
     params.partition = PARTITION
     prepareTabRestore(params)
+    preparePendingOpen(params)
   })
   // Даём Electron закончить attach: навигация прямо внутри этого события может заблокировать гостя.
   ui.on('did-attach-webview', (_event, contents) => setImmediate(() => {
-    if (!contents.isDestroyed()) restoreAttachedTab(contents)
+    if (!contents.isDestroyed()) {
+      restoreAttachedTab(contents)
+      loadPendingOpen(contents)
+    }
   }))
 }
 
@@ -1110,11 +1257,11 @@ function createAppWindow(url: string, name: string): BrowserWindow {
   return owner
 }
 
-function openBrowserTab(url: string): void {
+function openBrowserTab(url: string, opts?: { eager?: boolean; referrer?: string }): void {
   if (win) {
     if (win.isMinimized()) win.restore()
     if (!testHeadless && !process.env.MASAKI_TEST_INACTIVE) win.show()
-    send({ type: 'open-url', url })
+    send({ type: 'open-url', url, eager: opts?.eager, referrer: opts?.referrer })
   } else {
     launchUrl = url
     void windowFile.read().then((saved) => { if (!win) createWindow(saved) })
@@ -1332,6 +1479,7 @@ app.on('web-contents-created', (_e, contents) => {
   }
   if (contents.getType() !== 'webview') return
   noteTabCreation(contents)
+  notePendingOpen(contents)
   watchExternalProtocols(contents)
   watchUnload(contents)
   attachShortcuts(contents, true)
@@ -1359,7 +1507,7 @@ app.on('web-contents-created', (_e, contents) => {
   // Применяет интерфейс (как Ctrl+=, с запоминанием в tab.zoom) в той вкладке, над которой крутили.
   contents.on('zoom-changed', (_ev, dir) => send({ type: 'zoom', delta: dir === 'in' ? 1 : -1, wcId: contents.id }))
   contents.on('context-menu', (_ev, p) => sendPageMenu(contents, p))
-  contents.setWindowOpenHandler(({ url, disposition, features }) => {
+  contents.setWindowOpenHandler(({ url, disposition, features, referrer, postBody }) => {
     if (requestExternal(contents, url)) return { action: 'deny' }
     // Настоящие всплывающие окна (вход через Google, оплата) остаются окнами,
     // чтобы у них работал window.opener. Всё остальное открывается вкладкой.
@@ -1369,8 +1517,16 @@ app.on('web-contents-created', (_e, contents) => {
         overrideBrowserWindowOptions: { width: 520, height: 700, show: !testHeadless, autoHideMenuBar: true, backgroundColor: '#ffffff' }
       }
     }
-    if ([...appWindows].some((w) => w.webContents === contents.hostWebContents)) openBrowserTab(url)
-    else send({ type: 'open-url', url, background: disposition === 'background-tab' })
+    const isAppChild = [...appWindows].some((w) => w.webContents === contents.hostWebContents)
+    if (postBody && /^https?:/i.test(url)) {
+      const openUrl = OPEN_MARKER + queuePendingOpen(url, referrer, postBody)
+      if (isAppChild) openBrowserTab(openUrl, { eager: true })
+      else send({ type: 'open-url', url: openUrl, background: disposition === 'background-tab', eager: true })
+      return { action: 'deny' }
+    }
+    const ref = effectiveReferrer(url, referrer)
+    if (isAppChild) openBrowserTab(url, { referrer: ref })
+    else send({ type: 'open-url', url, background: disposition === 'background-tab', referrer: ref })
     return { action: 'deny' }
   })
 })
@@ -2123,8 +2279,15 @@ function iconHost(url: string): string | null {
 
 async function fetchAsDataUrl(url: string, maxBytes = 200_000): Promise<string | null> {
   try {
-    // Лимит: зависший сервер не должен держать значок вкладки (и обещание интерфейса) навсегда.
-    const res = await session.fromPartition(PARTITION).fetch(url, { signal: AbortSignal.timeout(20_000) })
+    // В Electron 44 загрузка расширений с правом webRequest ломает ses.fetch на этой сессии (net::ERR_FAILED),
+    // поэтому при сбое повторяем запрос через net.fetch в defaultSession без кук сессии.
+    let res: Awaited<ReturnType<typeof net.fetch>>
+    try {
+      // Лимит: зависший сервер не должен держать значок вкладки (и обещание интерфейса) навсегда.
+      res = await session.fromPartition(PARTITION).fetch(url, { signal: AbortSignal.timeout(20_000) })
+    } catch {
+      res = await net.fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(20_000) })
+    }
     if (!res.ok) return null
     const type = (res.headers.get('content-type') ?? 'image/png').split(';')[0]
     if (!type.startsWith('image/')) return null
@@ -2150,17 +2313,78 @@ function rememberFavicon(host: string, data: string): void {
 // ---------- Аккаунты Google ----------
 // Тот же адрес, которым Chrome узнаёт, кто вошёл: ответ зависит только от cookie сессии вкладок.
 
+const LIST_ACCOUNTS_MAX_BYTES = 2 * 1024 * 1024
+
+/** POST к ListAccounts: сначала через ses.fetch, а при сбое Electron 44 (webRequest-расширения) — через net.request. */
+async function fetchListAccountsText(ses: Electron.Session, url: string): Promise<string> {
+  try {
+    const res = await ses.fetch(url, {
+      method: 'POST',
+      body: '',
+      credentials: 'include',
+      signal: AbortSignal.timeout(15_000)
+    })
+    return await res.text()
+  } catch {
+    // Загрузка любого расширения с webRequest ломает ses.fetch у этой сессии (net::ERR_FAILED).
+    // Берём куки вручную и идём через defaultSession без его cookie-хранилища.
+    const cookies = await ses.cookies.get({ url })
+    const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+    return await new Promise<string>((resolve, reject) => {
+      let settled = false
+      const req = net.request({
+        method: 'POST',
+        url,
+        session: session.defaultSession,
+        useSessionCookies: false
+      })
+      const finish = (err?: Error, body?: string): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (err) reject(err)
+        else resolve(body ?? '')
+      }
+      const timer = setTimeout(() => {
+        finish(new Error('ListAccounts timeout'))
+        req.abort()
+      }, 15_000)
+      timer.unref()
+
+      req.setHeader('Origin', 'https://www.google.com')
+      if (cookieHeader) req.setHeader('Cookie', cookieHeader)
+      req.on('error', (err) => finish(err instanceof Error ? err : new Error(String(err))))
+      req.on('abort', () => finish(new Error('ListAccounts aborted')))
+      req.on('response', (res) => {
+        const chunks: Buffer[] = []
+        let total = 0
+        res.on('data', (chunk) => {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+          total += buf.length
+          if (total > LIST_ACCOUNTS_MAX_BYTES) {
+            finish(new Error('ListAccounts response too large'))
+            req.abort()
+            return
+          }
+          chunks.push(buf)
+        })
+        res.on('end', () => finish(undefined, Buffer.concat(chunks).toString('utf8')))
+        res.on('error', (err) => finish(err instanceof Error ? err : new Error(String(err))))
+        res.on('aborted', () => finish(new Error('ListAccounts response aborted')))
+      })
+      req.end('')
+    })
+  }
+}
+
 /** Аккаунты Google, в которые вошли во вкладках; null — Google не ответил (сеть), а не «никого нет». */
 async function fetchGoogleAccounts(): Promise<GoogleAccount[] | null> {
   try {
-    const res = await session
-      .fromPartition(PARTITION)
-      .fetch('https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard', {
-        method: 'POST',
-        body: '',
-        credentials: 'include'
-      })
-    const text = (await res.text()).replace(/^\)\]\}'\s*/, '')
+    const raw = await fetchListAccountsText(
+      session.fromPartition(PARTITION),
+      'https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard'
+    )
+    const text = raw.replace(/^\)\]\}'\s*/, '')
     const data = JSON.parse(text) as [string, unknown[][]]
     const list = Array.isArray(data[1]) ? data[1] : []
     return list

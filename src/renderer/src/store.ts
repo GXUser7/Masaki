@@ -49,6 +49,8 @@ export interface Tab {
   sleeping: boolean
   /** Ключ истории навигации, которая хранится только в памяти главного процесса. */
   resumeKey?: string
+  /** Referrer первого открытия вкладки (передаётся из setWindowOpenHandler). */
+  referrer?: string
   title: string
   favicon?: string
   loading: boolean
@@ -284,7 +286,7 @@ interface Store {
   setSettings(patch: Partial<Settings>): void
   active(): Tab
   updateTab(id: string, patch: Partial<Tab>): void
-  newTab(url?: string, opts?: { background?: boolean; eager?: boolean }): string
+  newTab(url?: string, opts?: { background?: boolean; eager?: boolean; referrer?: string }): string
   /** remember=false — не класть в «вернуть закрытую вкладку» (пустые служебные вкладки). */
   closeTab(id?: string, remember?: boolean): void
   reopenTab(): void
@@ -434,6 +436,7 @@ export const useStore = create<Store>((set, get) => ({
     const tab = tabFor(url)
     // chrome.tabs.create должен получить живой webContents для дальнейших команд расширения.
     if (opts.eager && tab.kind === 'web') { tab.sleeping = false; tab.loading = true }
+    if (opts.referrer && tab.kind === 'web') tab.referrer = opts.referrer
     // Уходим с вкладки — снимок для превью, пока она ещё видна.
     if (!opts.background && get().activeId) captureThumb(get().activeId)
     set((s) => {

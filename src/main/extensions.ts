@@ -121,11 +121,16 @@ export async function initExtensions(h: Hooks): Promise<void> {
   storeDir = path.join(app.getPath('userData'), 'Extensions')
   await extNet.initExtNet({
     onBadgeCount: (extId, tabId, text) => {
-      const ba = (crx as unknown as { api?: { browserAction?: { getAction: (id: string) => { tabs: Record<string, Record<string, unknown>> }; onUpdate: () => void } } })?.api?.browserAction
-      if (!ba) return
-      const action = ba.getAction(extId)
-      action.tabs[String(tabId)] = { ...(action.tabs[String(tabId)] ?? {}), text }
-      ba.onUpdate()
+      try {
+        const ba = (crx as unknown as { api?: { browserAction?: { getAction: (id: string) => { tabs?: Record<string, Record<string, unknown>> }; onUpdate: () => void } } })?.api?.browserAction
+        if (!ba) return
+        const action = ba.getAction(extId)
+        if (!action?.tabs) return
+        action.tabs[String(tabId)] = { ...(action.tabs[String(tabId)] ?? {}), text }
+        ba.onUpdate()
+      } catch {
+        // бадж расширения может быть неинициализирован или вкладка уже закрылась
+      }
     },
     onWebRequestEvent: (extId, listenerId, event, details, reqId) => {
       sendToExtension(extId, 'ext:wr-event', listenerId, event, details, reqId)
@@ -330,7 +335,24 @@ export async function initExtensions(h: Hooks): Promise<void> {
   for (const loaded of ext.getAllExtensions()) onExtensionLoaded(h.session, loaded)
 }
 
+function runningWorker(
+  ses: Session,
+  key: string,
+  info: Electron.ServiceWorkerInfo | undefined
+): Electron.ServiceWorkerMain | undefined {
+  // В Electron 44 getAllRunning() хранит versionId ключом объекта, а info.versionId в рантайме бывает undefined.
+  const versionId =
+    typeof info?.versionId === 'number' && Number.isFinite(info.versionId) ? info.versionId : Number(key)
+  if (!Number.isFinite(versionId)) return undefined
+  try {
+    return ses.serviceWorkers.getWorkerFromVersionID(versionId)
+  } catch {
+    return undefined
+  }
+}
+
 function sendToExtension(extId: string, channel: string, ...args: unknown[]): void {
+  if (!hooks?.session) return
   const ses = hooks.session
   const prefix = `chrome-extension://${extId}/`
   for (const wc of webContents.getAllWebContents()) {
@@ -342,15 +364,19 @@ function sendToExtension(extId: string, channel: string, ...args: unknown[]): vo
       }
     }
   }
-  const sws = ses.serviceWorkers.getAllRunning()
-  for (const info of Object.values(sws)) {
-    if (info.scope === prefix) {
-      const sw = ses.serviceWorkers.getWorkerFromVersionID(info.versionId)
-      try {
-        sw?.send(channel, ...args)
-      } catch {
-        // воркер остановлен
-      }
+  let sws: Record<string, Electron.ServiceWorkerInfo>
+  try {
+    sws = ses.serviceWorkers.getAllRunning()
+  } catch {
+    return
+  }
+  for (const [key, info] of Object.entries(sws)) {
+    if (info?.scope !== prefix) continue
+    const sw = runningWorker(ses, key, info)
+    try {
+      sw?.send(channel, ...args)
+    } catch {
+      // воркер остановлен
     }
   }
 }
@@ -717,12 +743,20 @@ function registerExtensionIpc(ses: Session): void {
     sw.ipc.on('ext:wr-answer', (e, reqId, res) => onWrAnswer(e, reqId, res))
     sw.ipc.handle('ext:api', (e, extId, method, ...args) => onExtApi(e, extId, method, ...args))
   }
-  for (const info of Object.values(ses.serviceWorkers.getAllRunning())) {
-    hookWorker(ses.serviceWorkers.getWorkerFromVersionID(info.versionId))
+  try {
+    for (const [key, info] of Object.entries(ses.serviceWorkers.getAllRunning())) {
+      hookWorker(runningWorker(ses, key, info))
+    }
+  } catch {
+    // воркеры могли остановиться во время обхода
   }
   ses.serviceWorkers.on('running-status-changed', ({ runningStatus, versionId }) => {
-    if (runningStatus === 'starting' || runningStatus === 'running') {
-      hookWorker(ses.serviceWorkers.getWorkerFromVersionID(versionId))
+    if ((runningStatus === 'starting' || runningStatus === 'running') && typeof versionId === 'number' && Number.isFinite(versionId)) {
+      try {
+        hookWorker(ses.serviceWorkers.getWorkerFromVersionID(versionId))
+      } catch {
+        // воркер уже остановлен
+      }
     }
   })
 }

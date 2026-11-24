@@ -626,7 +626,7 @@ export type Command =
   | { type: 'view-source' }
   | { type: 'print' }
   | { type: 'escape' }
-  | { type: 'open-url'; url: string; background?: boolean; eager?: boolean }
+  | { type: 'open-url'; url: string; background?: boolean; eager?: boolean; referrer?: string }
   | { type: 'search'; text: string; ai?: boolean }
   /** Закрыть вкладки, адрес которых начинается так (служебная страница входа в синхронизацию). */
   | { type: 'close-tabs'; prefix: string }

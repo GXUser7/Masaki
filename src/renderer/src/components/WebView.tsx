@@ -38,6 +38,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
   const id = tab.id
   const transparent = youcloudTransparent(tab.url)
   const resumeSrc = useRef(tab.resumeKey ? 'about:blank#masaki-resume=' + tab.resumeKey : null)
+  const initialReferrer = useRef(tab.resumeKey ? undefined : tab.referrer)
 
   useEffect(() => {
     const el = ref.current
@@ -163,7 +164,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
       [
         'did-navigate',
         (e: Electron.DidNavigateEvent) => {
-          if (e.url === 'about:blank' && tab.resumeKey) return
+          if (e.url === 'about:blank' && (tab.resumeKey || tab.initialUrl.startsWith('about:blank#masaki-'))) return
           geometry.current = null
           paintHostGlass(glassRef.current, null)
           const prev = store().tabs.find((x) => x.id === id)
@@ -259,6 +260,7 @@ export function WebView({ tab, active, pane, ratio = 0.5 }: { tab: Tab; active: 
     createElement('webview', {
     ref,
     src: resumeSrc.current ?? tab.initialUrl,
+    ...(initialReferrer.current ? { httpreferrer: initialReferrer.current } : {}),
     partition: 'persist:frost', // старое имя сессии: в ней куки и входы, не менять
     allowpopups: 'true',
     webpreferences: 'spellcheck=yes',

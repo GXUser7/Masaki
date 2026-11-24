@@ -874,6 +874,22 @@ function toWrHeaders(headers: Record<string, string> | Record<string, string[]>)
   return out
 }
 
+function safeEmitWebRequest(
+  extId: string,
+  listenerId: string,
+  event: WebRequestEventName,
+  details: unknown,
+  reqId?: string
+): boolean {
+  try {
+    emitWebRequestEvent?.(extId, listenerId, event, details, reqId)
+    return true
+  } catch {
+    // Сбой доставки события в расширение не должен ронять сетевой конвейер и главный процесс.
+    return false
+  }
+}
+
 async function runWrBlocking(l: WebRequestListener, details: unknown): Promise<Record<string, unknown> | null> {
   const reqId = `wr-${++webRequestCounter}`
   return new Promise((resolve) => {
@@ -882,7 +898,11 @@ async function runWrBlocking(l: WebRequestListener, details: unknown): Promise<R
       resolve(null)
     }, 1500)
     pendingWrBlocking.set(reqId, { resolve: (v) => resolve((v as Record<string, unknown>) ?? null), timer })
-    emitWebRequestEvent?.(l.extId, l.listenerId, l.event, details, reqId)
+    if (!safeEmitWebRequest(l.extId, l.listenerId, l.event, details, reqId)) {
+      clearTimeout(timer)
+      pendingWrBlocking.delete(reqId)
+      resolve(null)
+    }
   })
 }
 
@@ -982,7 +1002,7 @@ export async function handleBeforeRequest(
         if (res?.cancel) return { cancel: true }
         if (typeof res?.redirectUrl === 'string') return { redirectURL: res.redirectUrl }
       } else {
-        emitWebRequestEvent?.(l.extId, l.listenerId, 'onBeforeRequest', wrDetails)
+        safeEmitWebRequest(l.extId, l.listenerId, 'onBeforeRequest', wrDetails)
       }
     }
   }
@@ -1098,7 +1118,7 @@ export async function handleBeforeSendHeaders(
           mutated = true
         }
       } else {
-        emitWebRequestEvent?.(l.extId, l.listenerId, 'onBeforeSendHeaders', wrDetails)
+        safeEmitWebRequest(l.extId, l.listenerId, 'onBeforeSendHeaders', wrDetails)
       }
     }
   }
@@ -1163,7 +1183,7 @@ export async function handleHeadersReceived(
           mutated = true
         }
       } else {
-        emitWebRequestEvent?.(l.extId, l.listenerId, 'onHeadersReceived', wrDetails)
+        safeEmitWebRequest(l.extId, l.listenerId, 'onHeadersReceived', wrDetails)
       }
     }
   }
@@ -1180,27 +1200,31 @@ export function attachWebRequestObservers(ses: Session, uiWc: () => WebContents 
     event: WebRequestEventName,
     details: { id: number; url: string; method: string; resourceType?: string; webContentsId?: number; timestamp: number; statusCode?: number; statusLine?: string; redirectURL?: string; fromCache?: boolean; error?: string; responseHeaders?: Record<string, string[]>; requestHeaders?: Record<string, string> }
   ): void => {
-    if (typeof uiId() === 'number' && details.webContentsId === uiId()) return
-    const type = mapResourceType(details.resourceType)
-    const tabId = details.webContentsId ?? -1
-    for (const l of matchingWrListeners(event, details.url, type, tabId)) {
-      emitWebRequestEvent?.(l.extId, l.listenerId, event, {
-        requestId: String(details.id),
-        url: details.url,
-        method: details.method,
-        frameId: 0,
-        parentFrameId: -1,
-        tabId,
-        type,
-        timeStamp: details.timestamp,
-        statusCode: details.statusCode,
-        statusLine: details.statusLine,
-        redirectUrl: details.redirectURL,
-        fromCache: details.fromCache,
-        error: details.error,
-        responseHeaders: details.responseHeaders ? toWrHeaders(details.responseHeaders) : undefined,
-        requestHeaders: details.requestHeaders ? toWrHeaders(details.requestHeaders) : undefined
-      })
+    try {
+      if (typeof uiId() === 'number' && details.webContentsId === uiId()) return
+      const type = mapResourceType(details.resourceType)
+      const tabId = details.webContentsId ?? -1
+      for (const l of matchingWrListeners(event, details.url, type, tabId)) {
+        safeEmitWebRequest(l.extId, l.listenerId, event, {
+          requestId: String(details.id),
+          url: details.url,
+          method: details.method,
+          frameId: 0,
+          parentFrameId: -1,
+          tabId,
+          type,
+          timeStamp: details.timestamp,
+          statusCode: details.statusCode,
+          statusLine: details.statusLine,
+          redirectUrl: details.redirectURL,
+          fromCache: details.fromCache,
+          error: details.error,
+          responseHeaders: details.responseHeaders ? toWrHeaders(details.responseHeaders) : undefined,
+          requestHeaders: details.requestHeaders ? toWrHeaders(details.requestHeaders) : undefined
+        })
+      }
+    } catch {
+      // Сбой наблюдателя webRequest не должен ронять главный процесс.
     }
   }
 

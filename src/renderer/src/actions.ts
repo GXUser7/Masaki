@@ -273,7 +273,7 @@ export function handleCommand(c: Command): void {
       else findInPage(s.find.text, !c.back, true)
       break
     case 'open-url':
-      s.newTab(c.url, { background: c.background, eager: c.eager })
+      s.newTab(c.url, { background: c.background, eager: c.eager, referrer: c.referrer })
       break
     case 'search':
       s.newTab(c.ai ? aiModeUrl(c.text) : searchUrl(c.text))
