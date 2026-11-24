@@ -268,6 +268,15 @@ interface Found {
 // и сам пропускает без --live-from-start.
 const FILE_ARGS = ['-f', 'bestaudio[protocol=https]/bestaudio', '--extractor-args', 'youtube:skip=hls,dash']
 const LIVE_ARGS = ['-f', 'bestaudio[protocol^=m3u8]/234/233/93/worst[protocol^=m3u8]', '--extractor-args', 'youtube:skip=dash']
+const VIDEO_FILE_ARGS = [
+  '-f',
+  'bestvideo[height<=720][ext=mp4][vcodec^=avc1][protocol=https]/bestvideo[height<=720][ext=mp4][protocol=https]/bestvideo[height<=720][protocol=https]/best[height<=720][ext=mp4][protocol=https]/bestvideo[height<=720]/best[height<=720]',
+  '--extractor-args',
+  'youtube:skip=hls,dash'
+]
+const VIDEO_LIVE_ARGS = ['-f', 'best[height<=720][protocol^=m3u8]/95/94/93/best[protocol^=m3u8]', '--extractor-args', 'youtube:skip=dash']
+
+const cacheKey = (videoId: string, video: boolean): string => `${video ? 'v' : 'a'}:${videoId}`
 
 /** Трансляцию спросили как файл: её живые форматы yt-dlp пропускает, и не остаётся ни одного. */
 const NO_FORMATS = /no video formats found|requested format is not available/i
@@ -279,7 +288,8 @@ function expiryOf(link: string): number {
   return seconds > 0 ? seconds * 1000 : Date.now() + 3_600_000
 }
 
-function run(exe: string, videoId: string, proxy: string, cookies: string | null, live: boolean): Promise<Found> {
+function run(exe: string, videoId: string, proxy: string, cookies: string | null, live: boolean, video: boolean): Promise<Found> {
+  const formatArgs = video ? (live ? VIDEO_LIVE_ARGS : VIDEO_FILE_ARGS) : (live ? LIVE_ARGS : FILE_ARGS)
   const args = [
     '--ignore-config',
     '--no-playlist',
@@ -287,7 +297,7 @@ function run(exe: string, videoId: string, proxy: string, cookies: string | null
     '--no-warnings',
     '--socket-timeout',
     '15',
-    ...(live ? LIVE_ARGS : FILE_ARGS),
+    ...formatArgs,
     '--js-runtimes',
     `node:${process.execPath}`,
     '--cache-dir',
@@ -329,16 +339,16 @@ function run(exe: string, videoId: string, proxy: string, cookies: string | null
  * у которого не нашлось файла, — трансляция, о которой сайт не знал: её спрашивают ещё раз как трансляцию,
  * и дальше уже так.
  */
-async function runWith(exe: string, videoId: string, ses: Session, live: boolean): Promise<Found> {
+async function runWith(exe: string, videoId: string, ses: Session, live: boolean, video: boolean): Promise<Found> {
   const proxy = await relayFor(ses)
   const attempt = async (cookies: string | null): Promise<Found> => {
     try {
-      return await run(exe, videoId, proxy, cookies, live)
+      return await run(exe, videoId, proxy, cookies, live, video)
     } catch (e) {
       if (live || !NO_FORMATS.test((e as Error).message)) throw e
       live = true
       try {
-        return await run(exe, videoId, proxy, cookies, true)
+        return await run(exe, videoId, proxy, cookies, true, video)
       } catch (again) {
         if (!NO_FORMATS.test((again as Error).message)) throw again
         // И не трансляция: причину говорит первый отказ.
@@ -364,17 +374,18 @@ const found = new Map<string, Found>()
 const inflight = new Map<string, Promise<Found>>()
 let lastForcedUpdate = 0
 
-/** Ссылка на звук ролика: из запаса, пока не истекает, иначе свежая от yt-dlp. live — сайт знает, что это трансляция. */
-export function resolve(videoId: string, ses: Session, live = false): Promise<Found> {
+/** Ссылка на звук (или <= 720p видео при [video]) ролика: из запаса, пока не истекает, иначе свежая от yt-dlp. */
+export function resolve(videoId: string, ses: Session, live = false, video = false): Promise<Found> {
   if (!/^[\w-]{11}$/.test(videoId)) return Promise.reject(new Error('неверный id ролика'))
-  const kept = found.get(videoId)
+  const key = cacheKey(videoId, video)
+  const kept = found.get(key)
   if (kept && kept.expire - Date.now() > 10 * 60_000) return Promise.resolve(kept)
-  let p = inflight.get(videoId)
+  let p = inflight.get(key)
   if (!p) {
     p = (async () => {
       const exe = await ensure()
       try {
-        return await runWith(exe, videoId, ses, live)
+        return await runWith(exe, videoId, ses, live, video)
       } catch (e) {
         // YouTube мог измениться: yt-dlp обновляется и пробует ещё раз (не чаще раза в час).
         if (Date.now() - lastForcedUpdate < 60 * 60_000) throw e
@@ -382,20 +393,20 @@ export function resolve(videoId: string, ses: Session, live = false): Promise<Fo
         const before = readState()?.sha256
         await updateOnce().catch(() => undefined)
         if (readState()?.sha256 === before) throw e
-        return runWith(exe, videoId, ses, live)
+        return runWith(exe, videoId, ses, live, video)
       }
     })()
       .then((f) => {
-        found.set(videoId, f)
+        found.set(key, f)
         return f
       })
-      .finally(() => inflight.delete(videoId))
-    inflight.set(videoId, p)
+      .finally(() => inflight.delete(key))
+    inflight.set(key, p)
   }
   return p
 }
 
-/** Ссылку не стал играть <audio>: забыть её, следующий запрос спросит yt-dlp заново. */
-export function forget(videoId: string): void {
-  found.delete(videoId)
+/** Ссылку не стал играть плеер: забыть её, следующий запрос спросит yt-dlp заново. */
+export function forget(videoId: string, video = false): void {
+  found.delete(cacheKey(videoId, video))
 }

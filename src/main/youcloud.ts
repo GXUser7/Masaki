@@ -20,9 +20,9 @@ export const YOUCLOUD_URL = 'https://youcloud.inkerror67.workers.dev/'
 export const YOUCLOUD_ORIGINS = ['https://youcloud.inkerror67.workers.dev', 'http://localhost:5190']
 /** Какой версии расширения YouCloud равен мост (сайт сверяет, что он умеет): 0.7 — звук YouTube от yt-dlp,
  *  0.8 — и прямых трансляций (их плейлист HLS), 0.9 — продлевает истёкшую сессию SoundCloud,
- *  0.10 — чтение звука YouTube, 0.11 — лайки и проверка SoundCloud, 0.12 — Spotify. */
-const BRIDGE_VERSION = '0.12.0'
-const BRIDGE_CAPABILITIES = ['sc-page-writes', 'sp-login']
+ *  0.10 — чтение звука YouTube, 0.11 — лайки и проверка SoundCloud, 0.12 — Spotify, 0.13 — видео YouTube через yt-dlp. */
+const BRIDGE_VERSION = '0.13.0'
+const BRIDGE_CAPABILITIES = ['sc-page-writes', 'sp-login', 'yt-video']
 let soundCloudPages: SoundCloudPageWrites
 
 type Ops = Record<string, string | null>
@@ -596,13 +596,13 @@ export function initYouCloud(partitionName: string, h: Host): void {
     ytdlp.prepare()
     return { version: BRIDGE_VERSION, capabilities: BRIDGE_CAPABILITIES, tokens: waitingTokens.splice(0) }
   })
-  // Звук YouTube: ссылку находит yt-dlp, с IP и входом этого браузера. fresh — прежняя не заиграла;
-  // live — сайт знает, что это прямая трансляция.
-  ipcMain.handle('yc:yt-stream', async (e, videoId: string, fresh?: boolean, live?: boolean) => {
+  // Звук или видео (video=true) YouTube: ссылку находит yt-dlp, с IP и входом этого браузера.
+  // fresh — прежняя не заиграла; live — сайт знает, что это прямая трансляция.
+  ipcMain.handle('yc:yt-stream', async (e, videoId: string, fresh?: boolean, live?: boolean, video?: boolean) => {
     if (!fromYouCloud(e)) return { error: 'not allowed' }
-    if (fresh) ytdlp.forget(String(videoId))
+    if (fresh) ytdlp.forget(String(videoId), !!video)
     try {
-      return { value: await ytdlp.resolve(String(videoId), ses(), !!live) }
+      return { value: await ytdlp.resolve(String(videoId), ses(), !!live, !!video) }
     } catch (err) {
       return { error: String((err as Error)?.message ?? err) }
     }
